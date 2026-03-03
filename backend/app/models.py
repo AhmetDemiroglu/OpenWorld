@@ -21,11 +21,19 @@ class ChatRequest(BaseModel):
     source: Literal["web", "telegram"] = "web"
 
 
+class MediaAttachment(BaseModel):
+    type: Literal["image", "audio", "video", "document"]
+    url: str
+    filename: str
+    caption: str = ""
+
+
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
     steps: int
     used_tools: List[str]
+    media: List[MediaAttachment] = []
 
 
 class ToolCall(BaseModel):

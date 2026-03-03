@@ -34,7 +34,7 @@
 
 OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajan'dır**. Sadece finansal işlemler (ödeme, kart, transfer) engellenmiştir - gerisi tamamen sizin kontrolünüzdedir!
 
-### 🚀 70+ Yerleşik Araç
+### 🚀 87+ Yerleşik Araç
 
 | Kategori | Araç Sayısı | Örnekler |
 |----------|-------------|----------|
@@ -58,8 +58,19 @@ OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajan'dır**. Sadec
 | **Görev/Takvim** | 5 | Planlama araçları |
 | **E-posta** | 2 | Gmail/Outlook okuma |
 | **Web** | 3 | Haber, web sayfası çekme, araştırma |
+| **Telegram** ⭐ | 3 | Mesaj, fotoğraf, dosya gönderme |
 
-**Toplam: 70+ Araç!**
+**Toplam: 87+ Araç!**
+
+### 📸 Medya Otomatik Gösterimi
+
+Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **frontend'de otomatik olarak görüntülenir**:
+- 🖼️ Görüntüler: Chat'te direkt preview + indirme linki
+- 🎵 Ses dosyaları: Oynatma kontrolü + indirme
+- 🎥 Videolar: Player embed + indirme
+- 📄 Belgeler: İndirme linki
+
+Ayrıca **Telegram entegrasyonu** ile medyalar anında telefonunuza gönderilebilir!
 
 ---
 
@@ -605,6 +616,36 @@ Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
 
 ---
 
+### ✈️ 19. TELEGRAM ENTEGRASYONU ⭐
+
+**Özellik:** Medya ve dosyaları Telegram üzerinden anında telefonunuza gönderin!
+
+**Mesaj Gönderme:**
+```
+"Telegram'dan şu mesajı gönder: 'İşlem tamamlandı'"
+```
+
+**Fotoğraf Gönderme:**
+```
+"GitHub'ın ekran görüntüsünü al ve Telegram'dan gönder"
+"Webcam'den fotoğraf çek ve Telegram'a yolla"
+```
+
+**Dosya Gönderme:**
+```
+"Proje raporunu PDF olarak Telegram'dan gönder"
+"Şu ZIP dosyasını Telegram'a yükle"
+```
+
+**Araçlar:**
+- `telegram_send_message` - Metin mesajı gönder
+- `telegram_send_photo` - 📸 Fotoğraf/görüntü gönder (ekran görüntüleri için ideal!)
+- `telegram_send_document` - 📄 Her türlü dosya gönder (PDF, ZIP, vb.)
+
+**Kullanım:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` ayarlanmalı
+
+---
+
 ## 💡 Kullanım Örnekleri
 
 ### Karmaşık Görevler
@@ -641,6 +682,20 @@ Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
  2. 'Merhaba Dünya' yaz
  3. Ctrl+S ile kaydet
  4. Dosyayı kapat"
+```
+
+**Örnek 5: Ekran Görüntüsü + Telegram** ⭐
+```
+"GitHub'ın ekran görüntüsünü al ve Telegram'dan bana gönder"
+"Webcam'den fotoğraf çek, Telegram'a yolla"
+"Ses kaydı yap ve Telegram'dan gönder"
+```
+
+**Örnek 6: Medya Yönetimi**
+```
+"1. Webcam'den fotoğraf çek
+ 2. Fotoğrafı Telegram'dan gönder
+ 3. Aynı fotoğrafı desktop'a kaydet"
 ```
 
 ---
@@ -690,7 +745,7 @@ pipwin install pyaudio
 │     ▼                   ▼                   ▼              │
 │  ┌───────┐        ┌──────────┐       ┌──────────┐        │
 │  │  LLM  │        │  Memory  │       │  Tools   │        │
-│  │Ollama │        │(Session) │       │ (70+ Adt)│        │
+│  │Ollama │        │(Session) │       │ (87+ Adt)│        │
 │  └───────┘        └──────────┘       └──────────┘        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -725,9 +780,12 @@ pipwin install pyaudio
 
 ---
 
-## 📦 Yeni Paketler (70+ Araç İçin)
+## 📦 Yeni Paketler (87+ Araç İçin)
 
 ```txt
+# HTTP/Network (Telegram API, Web)
+httpx, aiohttp
+
 # Ekran/Otomasyon
 pillow, selenium, webdriver-manager, playwright, pyautogui
 

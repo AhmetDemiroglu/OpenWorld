@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     workspace_root: str = "../data"
     sessions_dir: str = "../data/sessions"
+    data_dir: str = "../data"
 
     enable_shell_tool: bool = True
     shell_allowed_prefixes: str = "*"
