@@ -713,7 +713,6 @@ pipwin install pyaudio
 
 **Serbest:**
 - ✅ Dosya silme/formatlama
-- ✅ Sistem dosyalarını düzenleme
 - ✅ Kayıt defteri değişikliği
 - ✅ Uygulama kapatma
 - ✅ Bilgisayarı kapatma/yeniden başlatma

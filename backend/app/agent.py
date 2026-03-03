@@ -7,7 +7,13 @@ from .config import settings
 from .llm import LLMClient, parse_tool_calls
 from .memory import SessionStore
 from .models import ChatMessage
-from .policy import contains_forbidden_financial_intent, is_forbidden_tool_payload
+from .policy import (
+    contains_forbidden_financial_intent,
+    is_forbidden_tool_payload,
+    is_high_impact_tool,
+    is_untrusted_content_tool,
+    user_explicitly_authorized_tool,
+)
 from .system_prompt import build_system_prompt
 from .tools.registry import execute_tool, get_tool_specs, serialize_tool_result
 
@@ -36,6 +42,7 @@ class AgentService:
 
         used_tools: List[str] = []
         steps = 0
+        untrusted_content_seen = False
 
         while steps < settings.ollama_max_steps:
             steps += 1
@@ -64,8 +71,22 @@ class AgentService:
                 try:
                     if is_forbidden_tool_payload({"name": call.name, "arguments": args}):
                         raise ValueError("Financial operation policy blocked this action.")
+                    # Prompt-injection enforcement:
+                    # If untrusted web content has been consumed in this run,
+                    # block high-impact tools unless user explicitly requested them.
+                    if (
+                        untrusted_content_seen
+                        and is_high_impact_tool(call.name)
+                        and not user_explicitly_authorized_tool(user_message, call.name)
+                    ):
+                        raise ValueError(
+                            f"Prompt-injection guard blocked tool '{call.name}'. "
+                            "Bu arac icin kullanici mesajinda acik niyet bulunmuyor."
+                        )
                     result = execute_tool(call.name, args)
                     used_tools.append(call.name)
+                    if is_untrusted_content_tool(call.name):
+                        untrusted_content_seen = True
                     tool_text = serialize_tool_result(result)
                 except Exception as exc:  # noqa: BLE001
                     tool_text = json.dumps({"error": str(exc)}, ensure_ascii=False)

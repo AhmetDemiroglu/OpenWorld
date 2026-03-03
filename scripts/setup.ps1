@@ -18,7 +18,7 @@ function Assert-Command($name) {
 Write-Status "1/7 - Python ve npm kontrol ediliyor..."
 Assert-Command python
 Assert-Command npm
-Write-Status "   ✓ Python ve npm bulundu"
+Write-Status "   OK - Python ve npm bulundu"
 
 $runtimeRoot = "C:\OpenWorldRuntime"
 $runtimeVenv = Join-Path $runtimeRoot "venv"
@@ -28,14 +28,14 @@ $backendCfg = ".\backend\.venv\pyvenv.cfg"
 
 Write-Status "2/7 - Sanal ortam kontrol ediliyor..."
 if (-not (Test-Path $runtimePython)) {
-  Write-Status "   C:\OpenWorldRuntime\venv oluşturuluyor..."
+  Write-Status "   C:\OpenWorldRuntime\venv olusturuluyor..."
   if (-not (Test-Path $runtimeRoot)) {
     New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
   }
   py -3.13 -m venv $runtimeVenv
-  Write-Status "   ✓ Sanal ortam oluşturuldu"
+  Write-Status "   OK - Sanal ortam olusturuldu"
 } else {
-  Write-Status "   ✓ Sanal ortam zaten var"
+  Write-Status "   OK - Sanal ortam zaten var"
 }
 
 $pythonExe = $runtimePython
@@ -43,17 +43,17 @@ if ((Test-Path $backendPython) -and (Test-Path $backendCfg)) {
   $pythonExe = $backendPython
 }
 
-Write-Status "3/7 - Python paketleri yükleniyor..."
-Write-Status "   - pip güncelleniyor..."
+Write-Status "3/7 - Python paketleri yukleniyor..."
+Write-Status "   - pip guncelleniyor..."
 & $pythonExe -m pip install --upgrade pip --quiet
-Write-Status "   - requirements.txt yükleniyor (bu biraz zaman alabilir)..."
+Write-Status "   - requirements.txt yukleniyor (bu biraz zaman alabilir)..."
 & $pythonExe -m pip install -r .\backend\requirements.txt
-Write-Status "   ✓ Python paketleri yüklendi"
+Write-Status "   OK - Python paketleri yuklendi"
 
-Write-Status "4/7 - Ortam değişkenleri ayarlanıyor..."
+Write-Status "4/7 - Ortam degiskenleri ayarlaniyor..."
 if (-not (Test-Path ".\backend\.env")) {
   Copy-Item .\backend\.env.example .\backend\.env
-  Write-Status "   ✓ .env dosyası oluşturuldu"
+  Write-Status "   OK - .env dosyasi olusturuldu"
 }
 
 function Ensure-EnvKey($key, $defaultValue) {
@@ -79,21 +79,21 @@ Ensure-EnvKey "OUTLOOK_REFRESH_TOKEN" ""
 Ensure-EnvKey "OUTLOOK_REFRESH_TOKEN_ENC" ""
 Ensure-EnvKey "OUTLOOK_CLIENT_ID" ""
 Ensure-EnvKey "OUTLOOK_TENANT_ID" "common"
-Write-Status "   ✓ Ortam değişkenleri ayarlandı"
+Write-Status "   OK - Ortam degiskenleri ayarlandi"
 
-Write-Status "5/7 - Frontend bağımlılıkları yükleniyor..."
+Write-Status "5/7 - Frontend bagimliliklari yukleniyor..."
 Push-Location .\frontend
 npm install
 Pop-Location
-Write-Status "   ✓ Frontend bağımlılıkları yüklendi"
+Write-Status "   OK - Frontend bagimliliklari yuklendi"
 
 Write-Status "6/7 - Frontend build ediliyor..."
 Push-Location .\frontend
 npm run build
 Pop-Location
-Write-Status "   ✓ Frontend build edildi"
+Write-Status "   OK - Frontend build edildi"
 
-Write-Status "7/7 - Veri klasörleri oluşturuluyor..."
+Write-Status "7/7 - Veri klasorleri olusturuluyor..."
 New-Item -ItemType Directory -Force -Path ".\data\sessions" | Out-Null
 New-Item -ItemType Directory -Force -Path ".\data\logs" | Out-Null
 New-Item -ItemType Directory -Force -Path ".\data\planner" | Out-Null
@@ -102,14 +102,14 @@ New-Item -ItemType Directory -Force -Path ".\data\reports" | Out-Null
 New-Item -ItemType Directory -Force -Path ".\data\screenshots" | Out-Null
 New-Item -ItemType Directory -Force -Path ".\data\audio" | Out-Null
 New-Item -ItemType Directory -Force -Path ".\data\webcam" | Out-Null
-Write-Status "   ✓ Klasörler oluşturuldu"
+Write-Status "   OK - Klasorler olusturuldu"
 
 Write-Status ""
 Write-Status "========================================"
-Write-Status "Kurulum başarıyla tamamlandı!"
+Write-Status "Kurulum basariyla tamamlandi!"
 Write-Status "========================================"
 Write-Status ""
-Write-Status "Şimdi yapmanız gerekenler:"
-Write-Status "1. [Kaydet] butonuna tıklayın"
-Write-Status "2. Model indirin: [Qwen3.5] veya [Model Çek]"
-Write-Status "3. [Başlat] butonuna tıklayın"
+Write-Status "Simdi yapmaniz gerekenler:"
+Write-Status "1. [Kaydet] butonuna tiklayin"
+Write-Status "2. Model indirin: [Qwen3.5] veya [Model Cek]"
+Write-Status "3. [Baslat] butonuna tiklayin"

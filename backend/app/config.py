@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import List
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b-q4_K_M"
-    ollama_max_steps: int = 8  # Artırıldı - daha fazla araç kullanımı için
+    ollama_max_steps: int = 8
     llm_backend: str = "ollama"
     llama_model_path: str = "../models/Qwen3.5-9B-Q4_K_M.gguf"
     llama_n_ctx: int = 8192
@@ -26,16 +26,15 @@ class Settings(BaseSettings):
     workspace_root: str = "../data"
     sessions_dir: str = "../data/sessions"
 
-    # Gelişmiş sistem erişimi - varsayılan olarak AÇIK
     enable_shell_tool: bool = True
-    shell_allowed_prefixes: str = "*"  # Tüm komutlara izin (finansal hariç)
-    shell_timeout_sec: int = 120  # Artırıldı - uzun işlemler için
-    
-    # Web erişimi - varsayılan olarak daha açık
+    shell_allowed_prefixes: str = "*"
+    shell_timeout_sec: int = 120
+    allow_full_disk_access: bool = False
+    fs_allowed_roots: str = ""
+
     web_allowed_domains: str = ""
-    web_block_private_hosts: bool = False  # Yerel ağ erişimine izin ver
-    
-    # Güvenlik - sadece finansal işlemleri engelle
+    web_block_private_hosts: bool = False
+
     block_financial_operations: bool = True
 
     telegram_bot_token: str = ""
@@ -71,6 +70,16 @@ class Settings(BaseSettings):
     @property
     def web_allowed_domains_list(self) -> List[str]:
         return [x.strip().lower() for x in self.web_allowed_domains.split(",") if x.strip()]
+
+    @property
+    def fs_allowed_roots_list(self) -> List[Path]:
+        roots: List[Path] = []
+        for item in [x.strip() for x in self.fs_allowed_roots.split(",") if x.strip()]:
+            try:
+                roots.append(Path(item).expanduser().resolve())
+            except Exception:
+                continue
+        return roots
 
     @property
     def workspace_path(self) -> Path:

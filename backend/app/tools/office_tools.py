@@ -14,7 +14,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .registry import _resolve_path
+from ..config import settings
+
+
+def _resolve_path(path: str) -> Path:
+    if not path or path == ".":
+        return settings.workspace_path.resolve()
+    p = Path(path).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    return (settings.workspace_path / p).resolve()
+
+
+def _assert_within(base: Path, target: Path) -> None:
+    base_resolved = base.resolve()
+    target_resolved = target.resolve()
+    if target_resolved != base_resolved and base_resolved not in target_resolved.parents:
+        raise ValueError("Arsiv ici yol traversal denemesi engellendi.")
 
 
 # =============================================================================
@@ -70,12 +86,16 @@ def tool_extract_zip(zip_path: str, output_dir: str = "", password: str = "") ->
         target_dir.mkdir(parents=True, exist_ok=True)
         
         with zipfile.ZipFile(zip_file, 'r') as zipf:
-            if password:
-                zipf.extractall(target_dir, pwd=password.encode())
-            else:
-                zipf.extractall(target_dir)
-            
             file_list = zipf.namelist()
+            for info in zipf.infolist():
+                member_path = (target_dir / info.filename).resolve()
+                _assert_within(target_dir, member_path)
+                if info.is_dir():
+                    member_path.mkdir(parents=True, exist_ok=True)
+                    continue
+                member_path.parent.mkdir(parents=True, exist_ok=True)
+                with zipf.open(info, pwd=password.encode() if password else None) as src, open(member_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
         
         return {
             "success": True,
@@ -157,8 +177,11 @@ def tool_extract_tar(tar_path: str, output_dir: str = "") -> Dict[str, Any]:
         target_dir.mkdir(parents=True, exist_ok=True)
         
         with tarfile.open(tar_file, 'r:*') as tar:
-            tar.extractall(target_dir)
             members = tar.getmembers()
+            for member in members:
+                member_path = (target_dir / member.name).resolve()
+                _assert_within(target_dir, member_path)
+            tar.extractall(target_dir)
         
         return {
             "success": True,
@@ -563,7 +586,7 @@ def tool_open_in_vscode(path: str, wait: bool = False) -> Dict[str, Any]:
         if wait:
             cmd.append("--wait")
         
-        subprocess.Popen(cmd, shell=True)
+        subprocess.Popen(cmd, shell=False)
         
         return {
             "success": True,
@@ -583,7 +606,7 @@ def tool_open_folder(folder_path: str) -> Dict[str, Any]:
             return {"error": "Klasör bulunamadı", "path": str(target)}
         
         if os.name == 'nt':  # Windows
-            subprocess.Popen(f'explorer "{target}"')
+            subprocess.Popen(["explorer", str(target)], shell=False)
         else:  # Linux/Mac
             subprocess.Popen(['xdg-open', str(target)])
         

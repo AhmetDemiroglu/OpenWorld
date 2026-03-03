@@ -781,30 +781,11 @@ class LauncherApp:
         def _job() -> None:
             self._append_status("Kurulum ba\u015fl\u0131yor...")
             ps = ROOT / "scripts" / "setup.ps1"
-            
-            # Canl\u0131 \u00e7\u0131kt\u0131 i\u00e7in Popen kullan
-            proc = subprocess.Popen(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)],
-                cwd=str(ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # \u00c7\u0131kt\u0131lar\u0131 anl\u0131k oku
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    self._append_status(line)
-            
-            proc.wait()
-            
+            proc = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)], cwd=str(ROOT))
             if proc.returncode == 0:
-                self._append_status("Kurulum tamamland\u0131!")
+                self._append_status("Kurulum tamamland\u0131.")
             else:
-                self._append_status("Kurulum hatas\u0131! Loglar\u0131 kontrol edin.")
+                self._append_status("Kurulum hatas\u0131. Loglar\u0131 kontrol edin.")
 
         self._run_bg(_job)
 

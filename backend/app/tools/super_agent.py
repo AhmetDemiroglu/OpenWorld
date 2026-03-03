@@ -12,11 +12,14 @@ import platform
 import subprocess
 import tempfile
 import time
+import socket
+import ipaddress
 import usb.core
 import usb.util
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -26,6 +29,37 @@ import scipy.io.wavfile as wav
 from PIL import Image, ImageGrab
 
 from ..config import settings
+
+def _host_resolves_to_private(hostname: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return True
+    for info in infos:
+        ip = info[4][0]
+        try:
+            obj = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+        if obj.is_private or obj.is_loopback or obj.is_link_local or obj.is_reserved or obj.is_multicast:
+            return True
+    return False
+
+
+def _validate_web_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http/https URLs are allowed.")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ValueError("Invalid URL host.")
+    if settings.web_allowed_domains_list:
+        allowed = settings.web_allowed_domains_list
+        if not any(host == d or host.endswith("." + d) for d in allowed):
+            raise ValueError("Host not in WEB_ALLOWED_DOMAINS policy.")
+    if settings.web_block_private_hosts and _host_resolves_to_private(host):
+        raise ValueError("Private/local network hosts are blocked.")
+
 
 # =============================================================================
 # SCREENSHOT ARAÇLARI
@@ -64,6 +98,7 @@ def tool_screenshot_desktop(output_path: str = "", region: List[int] = None) -> 
 def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3) -> Dict[str, Any]:
     """Web sayfası ekran görüntüsü al."""
     try:
+        _validate_web_url(url)
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
@@ -84,7 +119,7 @@ def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3)
         
         try:
             driver.get(url)
-            time.sleep(wait_time)  # Sayfanın yüklenmesini bekle
+            time.sleep(max(1, min(wait_time, 20)))  # Sayfanın yüklenmesini bekle
             
             if not output_path:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
