@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b-q4_K_M"
-    ollama_max_steps: int = 4
+    ollama_max_steps: int = 8  # Artırıldı - daha fazla araç kullanımı için
     llm_backend: str = "ollama"
     llama_model_path: str = "../models/Qwen3.5-9B-Q4_K_M.gguf"
     llama_n_ctx: int = 8192
@@ -26,11 +26,17 @@ class Settings(BaseSettings):
     workspace_root: str = "../data"
     sessions_dir: str = "../data/sessions"
 
-    enable_shell_tool: bool = False
-    shell_allowed_prefixes: str = "Get-ChildItem,dir,echo,type"
-    shell_timeout_sec: int = 20
+    # Gelişmiş sistem erişimi - varsayılan olarak AÇIK
+    enable_shell_tool: bool = True
+    shell_allowed_prefixes: str = "*"  # Tüm komutlara izin (finansal hariç)
+    shell_timeout_sec: int = 120  # Artırıldı - uzun işlemler için
+    
+    # Web erişimi - varsayılan olarak daha açık
     web_allowed_domains: str = ""
-    web_block_private_hosts: bool = True
+    web_block_private_hosts: bool = False  # Yerel ağ erişimine izin ver
+    
+    # Güvenlik - sadece finansal işlemleri engelle
+    block_financial_operations: bool = True
 
     telegram_bot_token: str = ""
     telegram_bot_token_enc: str = ""
@@ -58,6 +64,8 @@ class Settings(BaseSettings):
 
     @property
     def shell_allowed_prefixes_list(self) -> List[str]:
+        if self.shell_allowed_prefixes == "*":
+            return ["*"]
         return [x.strip() for x in self.shell_allowed_prefixes.split(",") if x.strip()]
 
     @property

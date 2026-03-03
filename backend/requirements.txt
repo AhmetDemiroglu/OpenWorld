@@ -1,8 +1,71 @@
-fastapi==0.115.6
-uvicorn==0.32.1
-pydantic==2.10.3
-pydantic-settings==2.6.1
-python-dotenv==1.0.1
-httpx==0.28.1
-python-telegram-bot==21.7
-llama-cpp-python==0.3.16
+# Web Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# LLM
+ollama>=0.1.7
+llama-cpp-python>=0.2.38
+
+# Telegram
+python-telegram-bot>=20.8
+
+# HTTP
+httpx>=0.26.0
+
+# Environment
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Security
+cryptography>=42.0.0
+
+# Sistem araçları
+psutil>=5.9.0
+
+# ==========================================
+# SÜPER AJAN ARAÇLARI
+# ==========================================
+
+# Ekran ve Otomasyon
+pillow>=10.0.0              # Görüntü işleme
+selenium>=4.15.0            # Web screenshot
+webdriver-manager>=4.0.0    # Chrome driver
+playwright>=1.40.0          # Alternatif web otomasyon
+pyautogui>=0.9.54           # Masaüstü otomasyonu
+
+# Ses  
+pyaudio>=0.2.11             # Ses kayıt
+sounddevice>=0.4.6          # Alternatif ses
+scipy>=1.11.0               # WAV dosyaları
+numpy>=1.24.0               # Sayısal işlemler
+
+# Webcam
+opencv-python>=4.8.0        # Kamera erişimi
+
+# USB
+pyusb>=1.2.1                # USB cihazlar
+
+# OCR (Optik Karakter Tanıma)
+pytesseract>=0.3.10         # Metin tanıma
+
+# ==========================================
+# OFİS ve ARŞİV ARAÇLARI
+# ==========================================
+
+# PDF
+PyPDF2>=3.0.0               # PDF okuma
+reportlab>=4.0.0            # PDF oluşturma
+
+# Word
+python-docx>=1.1.0          # Word belgeleri
+
+# Excel
+openpyxl>=3.1.0             # Excel dosyaları
+
+# RAR (opsiyonel)
+# rarfile>=4.0.0            # RAR desteği için
+
+# Utilities
+diskcache>=5.6.0

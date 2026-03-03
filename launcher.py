@@ -126,7 +126,13 @@ def _post_form(url: str, payload: dict[str, str]) -> dict:
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
 
-def _run_loopback_oauth(auth_url: str, expected_state: str, timeout_sec: int = 180) -> tuple[str, str]:
+def _run_loopback_oauth(
+    auth_url: str,
+    expected_state: str,
+    timeout_sec: int = 180,
+    redirect_host: str = "127.0.0.1",
+    redirect_path: str = "/callback",
+) -> tuple[str, str]:
     result: dict[str, str] = {}
 
     class CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -161,7 +167,8 @@ def _run_loopback_oauth(auth_url: str, expected_state: str, timeout_sec: int = 1
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), CallbackHandler)
     server.timeout = 1
-    redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
+    path = redirect_path if redirect_path.startswith("/") else f"/{redirect_path}"
+    redirect_uri = f"http://{redirect_host}:{server.server_port}{path}"
     webbrowser.open(auth_url.replace("__REDIRECT_URI__", urllib.parse.quote(redirect_uri, safe="")))
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
@@ -212,7 +219,8 @@ class LauncherApp:
         self.owner_name_var = tk.StringVar(value="Ahmet")
         self.owner_profile_var = tk.StringVar(value="Teknoloji, otomasyon, urun gelistirme")
         self.web_domains_var = tk.StringVar(value="")
-        self.web_block_private_var = tk.BooleanVar(value=True)
+        self.web_block_private_var = tk.BooleanVar(value=False)  # Yerel ağ erişimine izin ver
+        self.enable_shell_var = tk.BooleanVar(value=True)  # Shell tool varsayılan açık
 
         self._load_env()
         self._build_ui()
@@ -328,6 +336,13 @@ class LauncherApp:
         self._btn(quick, "\u2699 Kurulum", self.setup_all, bg="#64748b").pack(side="left", padx=(0, 4))
         self._btn(quick, "Kaydet", self.save_env, bg="#7c3aed").pack(side="right")
 
+        # ═══ DURUM (Loglar en üste taşındı) ═══
+        status_frame = tk.Frame(sf, bg=BG)
+        status_frame.pack(fill="x", padx=14, pady=(6, 10))
+        tk.Label(status_frame, textvariable=self.status_var, fg="#93c5fd", bg=CARD_BG,
+                 font=("Consolas", 9), anchor="w", padx=10, pady=8).pack(fill="x")
+        self._update_connection_badges()
+
         # â•â•â• KULLANICI PROFÄ°LÄ° (aÃ§Ä±k) â•â•â•
         prof = _collapsible(sf, "Kullan\u0131c\u0131 Profili", expanded=True)
         _field(prof, 0, "Ad\u0131n\u0131z", self.owner_name_var)
@@ -380,6 +395,25 @@ class LauncherApp:
         self.outlook_conn_label = tk.Label(ol, textvariable=self.outlook_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
         self.outlook_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
+        # â•â•â• GMAIL (varsayÄ±lan kapalÄ±) â•â•â•
+        gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
+        _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
+        _field(gm, 1, "Client Secret", self.gmail_client_secret_var, show="*")
+        _field(gm, 2, "Access Token", self.gmail_token_var, show="*")
+        _field(gm, 3, "Refresh Token", self.gmail_refresh_var, show="*")
+        gm_btns = tk.Frame(gm, bg=CARD_BG)
+        gm_btns.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._btn(gm_btns, "OAuth Ba\u011flan", self.connect_gmail_oauth, bg="#2563eb").pack(side="left", padx=(0, 4))
+        self._btn(gm_btns, "Client ID Nereden?", self.open_google_console_help, bg="#475569").pack(side="left")
+        self.gmail_conn_label = tk.Label(gm, textvariable=self.gmail_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
+        self.gmail_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+
+        ol_btns.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._btn(ol_btns, "OAuth Ba\u011flan", self.connect_outlook_oauth, bg="#2563eb").pack(side="left", padx=(0, 4))
+        self._btn(ol_btns, "Client ID Nereden?", self.open_azure_help, bg="#475569").pack(side="left")
+        self.outlook_conn_label = tk.Label(ol, textvariable=self.outlook_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
+        self.outlook_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+
         # â•â•â• WEB GÃœVENLÄ°ÄÄ° (varsayÄ±lan kapalÄ±) â•â•â•
         sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=False)
         _field(sec, 0, "Domainler", self.web_domains_var)
@@ -391,6 +425,15 @@ class LauncherApp:
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9),
         ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        tk.Checkbutton(
+            sec,
+            text="Shell/Komut arac\u0131n\u0131 etkinle\u015ftir (Geli\u015fmi\u015f eri\u015fim i\u00e7in)",
+            variable=self.enable_shell_var,
+            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
+            activebackground=CARD_BG, activeforeground=TEXT_FG,
+            font=("Segoe UI", 9),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
 
         # â•â•â• DURUM â•â•â•
         status_frame = tk.Frame(sf, bg=BG)
@@ -502,7 +545,8 @@ class LauncherApp:
         self.model_var.set(env_map.get("OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"))
         self.gguf_var.set(env_map.get("LLAMA_MODEL_PATH", "../models/Qwen3.5-9B-Q4_K_M.gguf"))
         self.web_domains_var.set(env_map.get("WEB_ALLOWED_DOMAINS", ""))
-        self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "true").strip().lower() == "true")
+        self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "false").strip().lower() == "true")
+        self.enable_shell_var.set(env_map.get("ENABLE_SHELL_TOOL", "true").strip().lower() == "true")
         self.owner_name_var.set(env_map.get("OWNER_NAME", "Ahmet"))
         self.owner_profile_var.set(env_map.get("OWNER_PROFILE", "Teknoloji, otomasyon, urun gelistirme"))
         self._update_connection_badges()
@@ -550,6 +594,7 @@ class LauncherApp:
             "LLAMA_MODEL_PATH": self.gguf_var.get().strip() or "../models/Qwen3.5-9B-Q4_K_M.gguf",
             "WEB_ALLOWED_DOMAINS": self.web_domains_var.get().strip(),
             "WEB_BLOCK_PRIVATE_HOSTS": "true" if self.web_block_private_var.get() else "false",
+            "ENABLE_SHELL_TOOL": "true" if self.enable_shell_var.get() else "false",
             "OWNER_NAME": self.owner_name_var.get().strip() or "Ahmet",
             "OWNER_PROFILE": self.owner_profile_var.get().strip() or "Teknoloji, otomasyon, urun gelistirme",
         }
@@ -691,7 +736,13 @@ class LauncherApp:
                     "code_challenge_method": "S256",
                 }
                 auth_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?" + urllib.parse.urlencode(params)
-                code, redirect_uri = _run_loopback_oauth(auth_url=auth_url, expected_state=state, timeout_sec=240)
+                code, redirect_uri = _run_loopback_oauth(
+                    auth_url=auth_url,
+                    expected_state=state,
+                    timeout_sec=240,
+                    redirect_host="localhost",
+                    redirect_path="/",
+                )
                 token_payload = {
                     "client_id": client_id,
                     "code": code,

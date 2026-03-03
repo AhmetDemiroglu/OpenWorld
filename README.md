@@ -2,7 +2,7 @@
 
 # 🌍 OpenWorld Local Agent
 
-**Kişisel, Gizlilik Odaklı, Yerel Çalışan Yapay Zeka Asistanı**
+**Gerçek Bir Süper Ajan - Yerel Yapay Zeka Asistanı**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Modern%20Web%20Framework-green.svg)](https://fastapi.tiangolo.com)
@@ -10,697 +10,758 @@
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+*Sadece finansal işlemler hariç - HER ŞEY serbest!*
+
 </div>
-
----
-
-## ⚠️ ÖNEMLİ: Önce Sistem Gereksinimlerini Kurun!
-
-Bu repository **kaynak kodları** içerir. Klonladıktan sonra kurulum yapmanız gerekir. Önce Python, Node.js ve Ollama kurulumu zorunludur.
-
-> **Sıralama:** Önce Python/Node.js kur → Sonra repoyu klonla → Sonra launcher'ı çalıştır → [Kurulum] butonuna bas
 
 ---
 
 ## 📋 İçindekiler
 
-- [Sistem Gereksinimleri](#-sistem-gereksinimleri)
-- [Ön Kurulum (Zorunlu)](#-ön-kurulum-zorunlu)
-- [Uygulama Kurulumu](#-uygulama-kurulumu)
-- [Mimari Yapı](#-mimari-yapı)
-- [Sorun Giderme](#-sorun-giderme)
-- [Özellikler](#-özellikler)
+1. [Özellikler Özeti](#-özellikler-özeti)
+2. [Sistem Gereksinimleri](#-sistem-gereksinimleri)
+3. [Ön Kurulum](#-ön-kurulum)
+4. [Kurulum Adımları](#-kurulum-adımları)
+5. [Süper Ajan Yetenekleri](#-süper-ajan-yetenekleri)
+6. [Kullanım Örnekleri](#-kullanım-örnekleri)
+7. [Sorun Giderme](#-sorun-giderme)
+8. [Mimari](#-mimari)
+9. [Güvenlik](#-güvenlik)
+
+---
+
+## ✨ Özellikler Özeti
+
+OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajan'dır**. Sadece finansal işlemler (ödeme, kart, transfer) engellenmiştir - gerisi tamamen sizin kontrolünüzdedir!
+
+### 🚀 70+ Yerleşik Araç
+
+| Kategori | Araç Sayısı | Örnekler |
+|----------|-------------|----------|
+| **Ekran Kontrolü** | 12 | Screenshot, tıklama, yazı yazma, sürükle-bırak |
+| **Ses** | 4 | Kayıt, çalma, metin-ses |
+| **Webcam** | 3 | Fotoğraf, video kaydı |
+| **Dosya Sistemi** | 7 | Tüm disk erişimi, silme, taşıma, arama |
+| **ZIP/Arşiv** | 5 | ZIP/TAR oluşturma/çıkarma |
+| **PDF** | 4 | Okuma, oluşturma, birleştirme, bölme |
+| **Word** | 3 | DOCX oluşturma/okuma/düzenleme |
+| **Excel** | 3 | XLSX oluşturma/okuma/düzenleme |
+| **Kod Analiz** | 3 | Proje analizi, pattern arama |
+| **VS Code** | 1 | Dosya/klasör açma |
+| **Sistem** | 6 | CPU/RAM bilgisi, process kontrolü |
+| **USB** | 2 | Cihaz listeleme, güvenli çıkarma |
+| **Ağ** | 3 | Ping, network bilgisi |
+| **OCR** | 2 | Ekran/görüntüden metin okuma |
+| **Windows** | 5 | Pencere yönetimi, kilit, kapatma |
+| **Shell** | 1 | Tam PowerShell/Bash erişimi |
+| **Diyalog** | 3 | Uyarı, onay, giriş pencereleri |
+| **Görev/Takvim** | 5 | Planlama araçları |
+| **E-posta** | 2 | Gmail/Outlook okuma |
+| **Web** | 3 | Haber, web sayfası çekme, araştırma |
+
+**Toplam: 70+ Araç!**
 
 ---
 
 ## 💻 Sistem Gereksinimleri
 
-### Donanım
+### Minimum
+- Windows 10/11 (64-bit)
+- 8 GB RAM
+- 10 GB boş disk alanı
+- Python 3.11+
+- Node.js 20+
 
-| Bileşen | Minimum | Önerilen |
-|---------|---------|----------|
-| RAM | 8 GB | 16 GB+ |
-| Disk (boş alan) | 10 GB | 20 GB+ |
-| GPU | Gerekmez | 8 GB VRAM (opsiyonel) |
-| İnternet | İlk kurulum için gerekli | Model indirme için |
-
-### İşletim Sistemi
-
-- Windows 10 veya Windows 11 (64-bit)
-- Windows PowerShell veya CMD
+### Önerilen
+- Windows 11
+- 16 GB+ RAM
+- 20 GB+ boş disk (modeller için)
+- GPU (CUDA destekli - opsiyonel ama önerilir)
+- Mikrofon ve Webcam (ses/görüntü özellikleri için)
 
 ---
 
-## ✅ Ön Kurulum (Zorunlu)
-
-Uygulamayı çalıştırmadan önce aşağıdaki 3 programı kurmanız zorunludur.
+## ✅ Ön Kurulum
 
 ### Adım 1: Python 3.11+ Kurulumu
 
-**1.1. İndirme**
-
-https://python.org/downloads adresine gidin.
-
-**1.2. Kurulum**
-
-İndirilen `.exe` dosyasını çalıştırın ve aşağıdaki adımları takip edin:
+**İndir:** https://python.org/downloads
 
 ```
-☑️ Add python.exe to PATH (ALTI ÇİZİLİ - MUTLAKA İŞARETLEYİN)
-☑️ Use admin privileges when installing py.exe
-☑️ Add Python to environment variables
-
-[Customize installation] → 
-  ☑️ Documentation
-  ☑️ pip
-  ☑️ tcl/tk and IDLE
-  ☑️ Python test suite
-  ☑️ py launcher
-  ☑️ for all users
+☑️ Add Python to PATH (MUTLAKA işaretleyin!)
+☑️ tcl/tk and IDLE
 ```
 
-**1.3. Kurulum Doğrulama**
-
-Yeni bir PowerShell veya CMD penceresi açın (eski pencereler kapanmadan yeni değişiklikleri göremez):
-
+**Doğrulama:**
 ```powershell
 python --version
+# Python 3.11.x veya üstü
 ```
-
-Beklenen çıktı:
-```
-Python 3.11.x
-```
-
-veya daha yüksek bir sürüm.
-
-**Hata alırsanız:**
-- Python'u kaldırın
-- Bilgisayarı yeniden başlatın
-- Python'u yeniden kurun (PATH seçeneğini işaretleyerek)
-
----
 
 ### Adım 2: Node.js 20+ Kurulumu
 
-**2.1. İndirme**
+**İndir:** https://nodejs.org (LTS sürümü)
 
-https://nodejs.org adresine gidin. **LTS** (Long Term Support) sürümünü indirin.
-
-**2.2. Kurulum**
-
-İndirilen `.msi` dosyasını çalıştırın:
-
-```
-[Next] → [I accept the terms...] → [Next] → [Next] → [Next] → [Install] → [Finish]
-```
-
-Varsayılan ayarlar yeterlidir, değiştirmenize gerek yok.
-
-**2.3. Kurulum Doğrulama**
-
-Yeni bir terminal penceresi açın:
-
+**Doğrulama:**
 ```powershell
 node --version
+# v20.x.x
 ```
-
-Beklenen çıktı:
-```
-v20.x.x
-```
-
-veya daha yüksek bir sürüm.
-
----
 
 ### Adım 3: Ollama Kurulumu
 
-**3.1. İndirme**
+**İndir:** https://ollama.com/download
 
-https://ollama.com/download adresinden Windows sürümünü indirin.
-
-**3.2. Kurulum**
-
-İndirilen `OllamaSetup.exe` dosyasını çalıştırın. Kurulum otomatik tamamlanır.
-
-**3.3. Kurulum Doğrulama**
-
-Bilgisayarı yeniden başlatın (veya en azından terminali kapatıp yeniden açın):
-
+**Doğrulama:**
 ```powershell
 ollama --version
 ```
 
-Beklenen çıktı:
-```
-ollama version x.x.x
-```
+### Adım 4: Tesseract OCR Kurulumu (Opsiyonel ama Önerilir)
+
+OCR (ekrandan metin okuma) için gerekli:
+
+**İndir:** https://github.com/UB-Mannheim/tesseract/wiki
+
+Kurulum sırasında "Add to PATH" seçeneğini işaretleyin.
 
 ---
 
-### Adım 4: Tüm Kurulumları Tekrar Doğrulama
+## 🚀 Kurulum Adımları
 
-Her üç programın da doğru kurulduğundan emin olun:
-
-```powershell
-python --version    # Python 3.11.x
-node --version      # v20.x.x
-ollama --version    # ollama version x.x.x
-```
-
-**Bu komutların hepsi çalışmadan sonraki adımlara geçmeyin!**
-
----
-
-## 🚀 Uygulama Kurulumu
-
-Ön kurulum tamamlandıktan sonra uygulamayı kurabilirsiniz.
-
-### Adım 5: Repository'yi İndirme
-
-**Seçenek A: Git ile (Önerilen)**
-
-Git kurulu değilse önce https://git-scm.com/download/win adresinden indirin.
+### 5. Repository'yi İndir
 
 ```powershell
-# İndirilecek klasöre gidin (örneğin Masaüstü)
-cd C:\Users\KullaniciAdi\Desktop
-
-# Repository'yi klonlayın
 git clone https://github.com/AhmetDemiroglu/OpenWorld.git
-
-# Klasöre girin
 cd OpenWorld
 ```
 
-**Seçenek B: ZIP olarak indirme**
-
-1. GitHub sayfasına gidin
-2. Code → Download ZIP
-3. ZIP dosyasını çıkarın
-4. CMD/PowerShell ile çıkarılan klasöre gidin
-
----
-
-### Adım 6: Launcher'ı İlk Kez Çalıştırma
-
-Repository klasöründeyken:
+### 6. Launcher'ı Çalıştır
 
 ```powershell
 python launcher.py
 ```
 
-**Beklenen davranış:**
-- OpenWorld Launcher penceresi açılır
-- Koyu tema, yan yana input alanları görürsünüz
-- Altta durum çubuğu "Hazır" yazar
-
-**Karşılaşabileceğiniz hatalar:**
-- `'python' is not recognized` → Adım 1'i tekrarlayın
-- `ModuleNotFoundError: No module named 'tkinter'` → Python'u kaldırıp tcl/tk seçeneğiyle yeniden kurun
-
----
-
-### Adım 7: Uygulama Bağımlılıklarının Kurulumu
-
-Launcher açıkken:
-
-**7.1. [⚙ Kurulum] Butonuna Tıklayın**
+### 7. Kurulum Butonuna Bas
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  [▶ Başlat] [■ Durdur] [Arayüz] [⚙ Kurulum] [Kaydet]       │
-└─────────────────────────────────────────────────────────────┘
-                              ↑
-                           Buna tıklayın
+[⚙ Kurulum] → 5-10 dakika bekleyin
 ```
 
-**7.2. Ne Olacak?**
+Bu işlem şunları kurar:
+- Python sanal ortamı (`.venv/`)
+- 30+ Python paketi
+- Node.js bağımlılıkları
+- Frontend build
 
-Bu işlem 5-10 dakika sürecektir. Durum çubuğunda şunları göreceksiniz:
+### 8. Model İndir
 
-```
-14:32:15 - Kurulum başlıyor...
-14:32:20 - Python sanal ortamı oluşturuluyor...
-14:34:30 - Python paketleri yükleniyor...
-14:36:45 - Node.js paketleri yükleniyor...
-14:38:10 - Frontend build ediliyor...
-14:39:25 - Kurulum tamamlandı.
-```
-
-**Bu işlem şunları yapar:**
-1. `backend/.venv/` klasörünü oluşturur (Python sanal ortamı)
-2. `pip install` ile Python bağımlılıklarını yükler
-3. `npm install` ile React bağımlılıklarını yükler (`frontend/node_modules/`)
-4. `npm run build` ile web arayüzünü derler (`frontend/dist/`)
-5. `backend/.env` dosyasını oluşturur
-
-**Hata alırsanız:**
-- PowerShell yönetici olarak çalıştırılmamış olmalı (normal kullanıcı yetkisi yeterli)
-- İnternet bağlantınızı kontrol edin
-- Antivirüs yazılımı engelliyor olabilir, geçici olarak devre dışı bırakın
-
----
-
-### Adım 8: AI Modelinin İndirilmesi
-
-**Seçenek A: Terminal'den (Önerilen - En Hızlı)**
-
-Yeni bir terminal penceresi açın (Launcher'ı kapatmayın):
-
+Terminal'de:
 ```powershell
 ollama pull qwen3.5:9b-q4_K_M
 ```
 
-İndirme süresi: İnternet hızınıza bağlı olarak 10-30 dakika (yaklaşık 5 GB)
+Veya Launcher'dan: **[Model Çek]** butonu
 
-İndirme tamamlandığında:
+### 9. Başlat
+
 ```
-success 
+[Kaydet] → [Başlat] → [Arayüz]
 ```
-mesajı görürsünüz.
 
-**Seçenek B: Launcher'dan**
-
-Launcher'da:
-1. "Yapay Zekâ Modeli" bölümünü genişletin
-2. Model Adı alanına yazın: `qwen3.5:9b-q4_K_M`
-3. [Model Çek] butonuna tıklayın
-
-**Seçenek C: [Qwen3.5] Butonu ile (GGUF)**
-
-Bu buton HuggingFace'den GGUF formatında model indirir (Ollama kullanmadan).
-
-1. [Qwen3.5] butonuna tıklayın
-2. İndirme başlayacaktır (5 GB)
-3. İndirilen dosya `models/Qwen3.5-9B-Q4_K_M.gguf` olacaktır
-
-**Not:** GGUF kullanmak için Launcher'da Motor olarak `llama_cpp` seçmeniz gerekir.
+**Web Arayüzü:** http://127.0.0.1:8000
 
 ---
 
-### Adım 9: Ayarların Kaydedilmesi
+## 🤖 Süper Ajan Yetenekleri
 
-Launcher'da:
+### 🖥️ 1. EKRAN KONTROLÜ (Gör ve Etkile)
 
-1. **[Kaydet]** butonuna tıklayın
-2. Durum çubuğunda "Ayarlar kaydedildi" mesajını görmelisiniz
+Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
-Bu işlem `backend/.env` dosyasına ayarlarınızı yazar.
+**Screenshot (Ekran Görüntüsü):**
+```
+"Masaüstümün ekran görüntüsünü al"
+"Şu web sayfasının görüntüsünü al: https://github.com"
+"Ekranın sol üst köşesini (0,0,500,500) görüntüle"
+```
+
+**Görüntü Tanıma ve Tıklama:**
+```
+"Ekranda Chrome ikonunu bul"
+"Şu koordinata (100, 200) tıkla"
+"Notepad'i aç"
+```
+
+**Otomasyon:**
+```
+"Şunu yaz: Merhaba Dünya"
+"Enter'a bas"
+"Ctrl+S kısayolunu çalıştır"
+"Fareyi (500, 300) konumuna götür ve sürükle"
+"Sayfayı aşağı kaydır"
+```
+
+**Araçlar:**
+- `screenshot_desktop` - Masaüstü görüntüsü
+- `screenshot_webpage` - Web sayfası görüntüsü  
+- `find_image_on_screen` - Görüntü ara
+- `click_on_screen` - Tıklama
+- `type_text` - Yazı yazma
+- `press_key` - Tuşa basma
+- `mouse_move` - Fare hareketi
+- `drag_to` - Sürükle-bırak
+- `scroll` - Kaydırma
+- `hotkey` - Kısayol (ctrl+c, alt+tab, win+r)
 
 ---
 
-### Adım 10: Servislerin Başlatılması
+### 🎤 2. SES KONTROLÜ (Dinle ve Konuş)
 
-**10.1. [▶ Başlat] Butonuna Tıklayın**
-
-Bu işlem şunları başlatır:
-- Backend API sunucusu (http://127.0.0.1:8000)
-- Telegram botu (eğer token ayarlandıysa)
-
-**10.2. Başarılı Başlatma Kontrolü**
-
-Durum çubuğunda şunu görmelisiniz:
+**Ses Kaydı:**
 ```
-Servisler başlatıldı. UI: http://127.0.0.1:8000
+"10 saniye ses kaydet"
+"Mikrofonu aç ve kayda başla"
+"Kaydı durdur ve kaydet"
 ```
 
-Pencere başlığında:
+**Metin-Ses (TTS):**
 ```
-OpenWorld Launcher │ Ollama: ✅ Aktif │ Backend: ✅ Aktif
+"Merhaba, ben OpenWorld Assistant'ı sesli söyle"
+"Bu metni sesli oku"
 ```
 
-**Hata alırsanız:**
-- `data/logs/backend.err.log` dosyasını kontrol edin
-- Ollama çalışıyor mu kontrol edin: `ollama list`
+**Ses Çalma:**
+```
+"Şu ses dosyasını çal"
+```
+
+**Araçlar:**
+- `start_audio_recording` - Kayda başla
+- `stop_audio_recording` - Kaydet
+- `play_audio` - Ses çal
+- `text_to_speech` - Metni sese çevir
 
 ---
 
-### Adım 11: Web Arayüzünün Açılması
+### 📷 3. WEBCAM KONTROLÜ
 
-**11.1. [Arayüz] Butonuna Tıklayın**
-
-Varsayılan tarayıcınızda http://127.0.0.1:8000 adresi açılır.
-
-**11.2. Veya Manuel Açın**
-
-Tarayıcınıza şunu yazın:
+**Fotoğraf:**
 ```
-http://127.0.0.1:8000
+"Webcam'den fotoğrafımı çek"
+"Bir selfie çek ve kaydet"
 ```
 
-**11.3. Karşılama Ekranı**
+**Video:**
+```
+"5 saniyelik video kaydet"
+"Webcam'den 30 saniyelik video çek"
+```
 
-Web arayüzünde sohbet penceresi görürsünüz. Mesaj yazıp gönderebilirsiniz.
+**Araçlar:**
+- `list_cameras` - Kameraları listele
+- `webcam_capture` - Fotoğraf çek
+- `webcam_record_video` - Video kaydet
 
 ---
 
-## 🔄 Özet Akış
+### 📁 4. DOSYA SİSTEMİ (Tam Erişim)
+
+Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
+
+**Dosya İşlemleri:**
+```
+"C:\Users'deki tüm PDF'leri listele"
+"Masaüstüne yeni bir klasör oluştur"
+"C:\Temp klasörünü sil"
+"Dosyayı şuradan şuraya taşı"
+"Tüm diskte 'password' geçen dosyaları ara"
+```
+
+**Dosya Okuma/Yazma:**
+```
+"C:\log.txt dosyasını oku"
+"Masaüstüne notlar.txt oluştur, içine şunu yaz..."
+"Dosyanın sonuna şunu ekle..."
+```
+
+**Araçlar:**
+- `list_directory` - Dizin listele (recursive)
+- `read_file` - Dosya oku
+- `write_file` - Dosya yaz
+- `delete_file` - Sil (confirm ile)
+- `copy_file` - Kopyala
+- `move_file` - Taşı
+- `search_files` - Ara
+
+---
+
+### 📦 5. ZIP / ARŞİV
+
+**ZIP Oluşturma:**
+```
+"Belgeler klasörünü yedekle.zip yap"
+"Şu dosyayı şifreli zip olarak kaydet"
+```
+
+**ZIP Çıkarma:**
+```
+"Yedekle.zip'i çıkar"
+"Şifreli arşivi aç (şifre: 1234)"
+```
+
+**TAR:**
+```
+"Linux formatında .tar.gz oluştur"
+```
+
+**Araçlar:**
+- `create_zip` - ZIP oluştur
+- `extract_zip` - ZIP çıkar
+- `list_zip_contents` - İçeriği listele
+- `create_tar` - TAR oluştur
+- `extract_tar` - TAR çıkar
+
+---
+
+### 📄 6. PDF YÖNETİMİ
+
+**PDF Okuma:**
+```
+"Şu PDF'in içeriğini oku"
+"Sadece 1-5 sayfalarını göster"
+```
+
+**PDF Oluşturma:**
+```
+"Bu raporu PDF olarak kaydet"
+```
+
+**PDF Birleştirme/Bölme:**
+```
+"3 PDF'i tek dosyada birleştir"
+"PDF'i her 10 sayfada bir böl"
+```
+
+**Araçlar:**
+- `read_pdf` - PDF oku
+- `create_pdf` - PDF oluştur
+- `merge_pdfs` - Birleştir
+- `split_pdf` - Böl
+
+---
+
+### 📝 7. WORD (DOCX)
+
+**Word Oluşturma:**
+```
+"Rapor.docx oluştur, başlık: 'Yıllık Rapor', 
+ içindekiler: Giriş, Sonuç"
+"Tablo içeren Word belgesi oluştur"
+```
+
+**Word Okuma:**
+```
+"Şu Word dosyasını oku"
+"Belgelerim.docx içeriğini göster"
+```
+
+**Word Düzenleme:**
+```
+"Mevcut Word dosyasına yeni bölüm ekle"
+```
+
+**Araçlar:**
+- `create_docx` - Word oluştur
+- `read_docx` - Word oku
+- `add_to_docx` - Ekleme yap
+
+---
+
+### 📊 8. EXCEL (XLSX)
+
+**Excel Oluşturma:**
+```
+"Veriler.xlsx oluştur, sütunlar: Ad, Soyad, Yaş
+ satırlar: [...]"
+```
+
+**Excel Okuma:**
+```
+"Şu Excel dosyasını oku"
+"İlk 100 satırı göster"
+```
+
+**Excel Düzenleme:**
+```
+"Excel'e yeni satırlar ekle"
+"Yeni sayfa oluştur"
+```
+
+**Araçlar:**
+- `create_excel` - Excel oluştur
+- `read_excel` - Excel oku
+- `add_to_excel` - Veri ekle
+
+---
+
+### 💻 9. KOD ve PROJE ANALİZİ
+
+**Kod Analizi:**
+```
+"main.py dosyasını analiz et (satır sayısı, fonksiyonlar)"
+"Projemde 'TODO' yazan yerleri bul"
+"Tüm Python dosyalarını analiz et ve raporla"
+```
+
+**Proje Analizi:**
+```
+"Projemin kod yapısını analiz et ve markdown raporu oluştur"
+"Hangi dilde kaç satır kod var?"
+```
+
+**VS Code Açma:**
+```
+"Bu projeyi VS Code'da aç"
+"Şu dosyayı VS Code'da aç"
+"Bu klasörü VS Code'da aç"
+```
+
+**Araçlar:**
+- `analyze_code` - Kod analizi
+- `find_code_patterns` - Pattern arama
+- `analyze_project_code` - Proje analizi
+- `open_in_vscode` - VS Code'da aç
+- `open_folder` - Klasör aç
+- `create_folder` - Klasör oluştur
+
+---
+
+### 🖥️ 10. SİSTEM YÖNETİMİ
+
+**Sistem Bilgisi:**
+```
+"CPU ve RAM kullanımını göster"
+"Disk doluluk oranını kontrol et"
+"Sistem bilgilerini getir"
+```
+
+**Process Yönetimi:**
+```
+"Çalışan uygulamaları listele"
+"Chrome process'lerini sonlandır"
+"PID 1234 olan uygulamayı kapat"
+```
+
+**Güç Yönetimi:**
+```
+"Bilgisayarı 1 saat sonra kapat"
+"Yeniden başlat"
+"Ekranı kilitle"
+```
+
+**Araçlar:**
+- `get_system_info` - Sistem bilgisi
+- `list_processes` - Process listele
+- `kill_process` - Process sonlandır
+- `shutdown_system` - Kapat/yeniden başlat
+- `lock_workstation` - Ekran kilidi
+
+---
+
+### 🪟 11. PENCERE YÖNETİMİ (Windows)
+
+**Pencere Kontrolü:**
+```
+"Açık pencereleri listele"
+"Chrome penceresini öne getir"
+"Tüm pencereleri simge durumuna küçült"
+"Notepad penceresini aktif et"
+```
+
+**Araçlar:**
+- `get_window_list` - Pencereleri listele
+- `activate_window` - Öne getir
+- `minimize_all_windows` - Hepsini küçült
+
+---
+
+### 🔌 12. USB YÖNETİMİ
+
+**USB Kontrolü:**
+```
+"Bağlı USB cihazlarını listele"
+"E: sürücüsünü güvenli çıkar"
+```
+
+**Araçlar:**
+- `list_usb_devices` - Listele
+- `eject_usb_drive` - Güvenli çıkar
+
+---
+
+### 👁️ 13. OCR (METİN TANIMA)
+
+**Ekrandan Metin Okuma:**
+```
+"Ekrandaki şu bölgedeki metni oku"
+"Şu görüntüdeki yazıyı çıkar"
+"Ekran görüntüsündeki metni kopyala"
+```
+
+**Araçlar:**
+- `ocr_screenshot` - Ekrandan oku
+- `ocr_image` - Görüntüden oku
+
+---
+
+### 💬 14. DİYALOG PENCERELERİ
+
+**Kullanıcı Etkileşimi:**
+```
+"Kullanıcıya uyarı göster: 'İşlem tamamlandı'"
+"Onay iste: 'Silmek istiyor musunuz?'"
+"Giriş iste: 'Adınız nedir?'"
+```
+
+**Araçlar:**
+- `alert` - Uyarı göster
+- `confirm` - Onay al (Evet/Hayır)
+- `prompt` - Girdi al
+
+---
+
+### 🐚 15. TAM SHELL ERİŞİMİ
+
+**PowerShell/Bash:**
+```
+"ipconfig komutunu çalıştır"
+"Get-Process | Select-Object -First 10"
+"format D: /FS:NTFS /Q"
+"regedit /s ayarlar.reg"
+"Tüm PowerShell komutları serbest!"
+```
+
+**Not:** Sadece finansal komutlar engellenir. Gerisi serbest!
+
+**Araçlar:**
+- `execute_command` - Komut çalıştır
+- `run_shell` - Alternatif
+
+---
+
+### 📅 16. GÖREV ve TAKVİM
+
+**Görev Yönetimi:**
+```
+"Yeni görev ekle: Yarın saat 14:00'te toplantı"
+"Tüm görevleri listele"
+"Görev #123'i tamamlandı olarak işaretle"
+```
+
+**Takvim:**
+```
+"15 Mart için doğum günü etkinliği ekle"
+"Yaklaşan etkinlikleri göster"
+```
+
+**Araçlar:**
+- `add_task` - Görev ekle
+- `list_tasks` - Listele
+- `complete_task` - Tamamla
+- `add_calendar_event` - Etkinlik ekle
+- `list_calendar_events` - Göster
+
+---
+
+### 📧 17. E-POSTA
+
+**Gmail/Outlook:**
+```
+"Gmail'deki son 5 okunmamış maili özetle"
+"Outlook gelen kutusunu kontrol et"
+```
+
+**Araçlar:**
+- `check_gmail_messages` - Gmail oku
+- `check_outlook_messages` - Outlook oku
+
+---
+
+### 🌐 18. WEB ve ARAŞTIRMA
+
+**Web:**
+```
+"Bugünün haberlerini getir"
+"Şu web sayfasının içeriğini çek"
+"Yapay zeka trendleri hakkında araştırma yap ve rapor yaz"
+```
+
+**Araçlar:**
+- `search_news` - Haber ara
+- `fetch_web_page` - Sayfa çek
+- `research_and_report` - Araştırma
+- `create_email_draft` - E-posta taslağı
+
+---
+
+## 💡 Kullanım Örnekleri
+
+### Karmaşık Görevler
+
+**Örnek 1: Otomatik Rapor Hazırlama**
+```
+"1. Ekran görüntüsü al
+ 2. Webcam'den fotoğraf çek
+ 3. Sistem bilgilerini topla
+ 4. Tüm bunları Word belgesinde birleştir
+ 5. Word'ü PDF'e çevir
+ 6. PDF'i zip'le ve masaüstüne kaydet"
+```
+
+**Örnek 2: Proje Analizi**
+```
+"1. C:\Projem klasörünü analiz et
+ 2. Hangi dilde kaç satır kod var bul
+ 3. Sonuçları Excel'e yaz
+ 4. Excel'i aç"
+```
+
+**Örnek 3: Dosya Yönetimi**
+```
+"1. Masaüstündeki tüm PDF'leri bul
+ 2. Hepsini birleştir
+ 3. Birleşik dosyayı zip'le
+ 4. ZIP'i şifrele"
+```
+
+**Örnek 4: Otomasyon**
+```
+"1. Notepad aç
+ 2. 'Merhaba Dünya' yaz
+ 3. Ctrl+S ile kaydet
+ 4. Dosyayı kapat"
+```
+
+---
+
+## 🔧 Sorun Giderme
+
+### "Python bulunamadı"
+Python kurulumunda "Add to PATH" işaretlememişsiniz. Yeniden kurun.
+
+### "Tesseract not found"
+OCR kullanmak için Tesseract kurulu olmalı: https://github.com/UB-Mannheim/tesseract/wiki
+
+### "ChromeDriver hatası"
+Web screenshot için Chrome tarayıcısı kurulu olmalı.
+
+### "Mikrofon/Webcam erişim yok"
+Windows Gizlilik ayarlarından mikrofon ve kamera izinlerini verin.
+
+### "DLL Load Failed" (PyAudio)
+Windows'ta PyAudio kurulumu sorunlu olabilir:
+```powershell
+pip install pipwin
+pipwin install pyaudio
+```
+
+---
+
+## 🏗️ Mimari
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  1. Python 3.11+ Kur  (python.org)                          │
-│     └─> "Add to PATH" işaretle!                            │
+│                    OpenWorld Super Agent                    │
 ├─────────────────────────────────────────────────────────────┤
-│  2. Node.js 20+ Kur  (nodejs.org)                           │
-├─────────────────────────────────────────────────────────────┤
-│  3. Ollama Kur  (ollama.com/download)                       │
-│     └─> Terminali yeniden başlat!                          │
-├─────────────────────────────────────────────────────────────┤
-│  4. Hepsini kontrol et:                                     │
-│     python --version                                        │
-│     node --version                                          │
-│     ollama --version                                        │
-├─────────────────────────────────────────────────────────────┤
-│  5. Repoyu indir:                                           │
-│     git clone https://github.com/.../OpenWorld.git          │
-├─────────────────────────────────────────────────────────────┤
-│  6. Launcher'ı çalıştır:                                    │
-│     python launcher.py                                      │
-├─────────────────────────────────────────────────────────────┤
-│  7. Launcher'da [Kurulum] butonuna tıkla (5-10 dk)         │
-├─────────────────────────────────────────────────────────────┤
-│  8. Model indir:                                            │
-│     ollama pull qwen3.5:9b-q4_K_M  (5-10 dk)               │
-├─────────────────────────────────────────────────────────────┤
-│  9. Launcher'da: [Kaydet] → [Başlat] → [Arayüz]            │
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   Web UI     │    │  Telegram    │    │   REST API   │  │
+│  │   (React)    │◄──►│    Bot       │◄──►│  (FastAPI)   │  │
+│  └──────────────┘    └──────────────┘    └──────┬───────┘  │
+│                                                 │           │
+│                         ┌───────────────────────┘           │
+│                         ▼                                   │
+│                ┌──────────────────┐                        │
+│                │   Agent Core     │                        │
+│                └────────┬─────────┘                        │
+│                         │                                   │
+│     ┌───────────────────┼───────────────────┐              │
+│     ▼                   ▼                   ▼              │
+│  ┌───────┐        ┌──────────┐       ┌──────────┐        │
+│  │  LLM  │        │  Memory  │       │  Tools   │        │
+│  │Ollama │        │(Session) │       │ (70+ Adt)│        │
+│  └───────┘        └──────────┘       └──────────┘        │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🏗️ Mimari Yapı
+## 🔒 Güvenlik
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        OpenWorld Agent                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │   Web UI     │    │  Telegram    │    │   REST API   │      │
-│  │   (React)    │◄──►│    Bot       │◄──►│  (FastAPI)   │      │
-│  └──────────────┘    └──────────────┘    └──────┬───────┘      │
-│                                                 │               │
-│                              ┌──────────────────┘               │
-│                              ▼                                  │
-│                    ┌──────────────────┐                        │
-│                    │   Agent Service  │                        │
-│                    └────────┬─────────┘                        │
-│                             │                                   │
-│           ┌─────────────────┼─────────────────┐                │
-│           ▼                 ▼                 ▼                │
-│    ┌────────────┐   ┌────────────┐   ┌────────────┐           │
-│    │    LLM     │   │  Memory    │   │   Tools    │           │
-│    │  (Ollama)  │   │ (Session)  │   │ (Registry) │           │
-│    └────────────┘   └────────────┘   └────────────┘           │
-│                                                 │               │
-│                              ┌──────────────────┘               │
-│                              ▼                                  │
-│                    ┌──────────────────┐                        │
-│                    │  External APIs   │                        │
-│                    │ Gmail/Outlook/Web│                        │
-│                    └──────────────────┘                        │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Tek Yasak: Finansal İşlemler
 
-### Teknoloji Stack
+**Engellenen:**
+- ❌ Kredi kartı işlemleri
+- ❌ Para transferi (havale, EFT, wire)
+- ❌ Ödeme yapma/alma
+- ❌ Satın alma (online checkout)
+- ❌ Bitcoin/kripto transferi
 
-| Katman | Teknoloji |
-|--------|-----------|
-| **Backend** | Python 3.11+, FastAPI, Uvicorn |
-| **Frontend** | React 18+, Vite |
-| **AI/ML** | Ollama, llama-cpp-python |
-| **Mesajlaşma** | python-telegram-bot |
-| **E-posta** | Google Gmail API, Microsoft Graph API |
-| **Veri** | JSON-based local storage |
-| **Güvenlik** | Windows DPAPI şifreleme |
+### Serbest Bölge (TAMAMEN AÇIK)
 
-### Proje Yapısı
+**Serbest:**
+- ✅ Dosya silme/formatlama
+- ✅ Sistem dosyalarını düzenleme
+- ✅ Kayıt defteri değişikliği
+- ✅ Uygulama kapatma
+- ✅ Bilgisayarı kapatma/yeniden başlatma
+- ✅ Tüm PowerShell/Bash komutları
+- ✅ Ekran/webcam erişimi
+- ✅ Ses kaydı
+- ✅ USB yönetimi
 
-```
-OpenWorld/
-├── backend/              # FastAPI Backend
-│   ├── app/             # API ve Agent kodları
-│   │   ├── agent.py     # Agent servisi
-│   │   ├── main.py      # FastAPI uygulaması
-│   │   ├── telegram_bridge.py  # Telegram bot
-│   │   └── tools/       # Araç kayıtları
-│   ├── .venv/           # Python sanal ortam (kurulumda oluşur)
-│   ├── .env             # Ayarlar (kurulumda oluşur)
-│   └── requirements.txt # Python bağımlılıkları
-├── frontend/            # React Frontend
-│   ├── src/             # React kaynak kodları
-│   │   ├── App.jsx      # Ana uygulama
-│   │   └── components/  # React bileşenler
-│   ├── dist/            # Build edilmiş UI (kurulumda oluşur)
-│   ├── node_modules/    # NPM paketler (kurulumda oluşur)
-│   └── package.json     # Node.js bağımlılıkları
-├── data/                # Kullanıcı verileri
-│   ├── sessions/        # Sohbet geçmişi
-│   ├── logs/            # Uygulama logları
-│   ├── planner/         # Görev ve takvim
-│   └── mail/            # E-posta taslakları
-├── models/              # İndirilen AI modelleri
-├── scripts/             # Kurulum scriptleri
-│   ├── setup.ps1        # Ana kurulum scripti
-│   └── install-qwen35-9b.ps1  # Model kurulumu
-├── launcher.py          # Tkinter GUI
-└── README.md            # Bu dosya
-```
+**Prensip:** Kullanıcı kendi bilgisayarında ne isterse yapabilir. Ajan sorgusuz sualsiz yerine getirir.
 
 ---
 
-## 🐛 Sorun Giderme
+## 📦 Yeni Paketler (70+ Araç İçin)
 
-### Hata: 'python' is not recognized
+```txt
+# Ekran/Otomasyon
+pillow, selenium, webdriver-manager, playwright, pyautogui
 
-**Nedeni:** Python PATH'e eklenmemiş.
+# Ses
+pyaudio, sounddevice, scipy
 
-**Çözüm 1 (Önerilen):**
-Python'u kaldırıp yeniden kurun, kurulumda "Add to PATH" seçeneğini işaretleyin.
+# Webcam
+opencv-python
 
-**Çözüm 2 (Geçici):**
-Python'un tam yolunu kullanın:
-```powershell
-C:\Users\Kullanici\AppData\Local\Programs\Python\Python311\python.exe launcher.py
+# USB
+pyusb
+
+# OCR
+pytesseract
+
+# PDF
+PyPDF2, reportlab
+
+# Word/Excel
+python-docx, openpyxl
+
+# Sistem
+psutil, numpy
 ```
-
----
-
-### Hata: ModuleNotFoundError: No module named 'tkinter'
-
-**Nedeni:** Python kurulumunda tkinter paketi eksik.
-
-**Çözüm:**
-1. Python'u kaldırın (Add/Remove Programs)
-2. Bilgisayarı yeniden başlatın
-3. Python'u yeniden kurun
-4. Kurulumda "tcl/tk and IDLE" seçeneğini işaretleyin
-
----
-
-### Hata: 'node' is not recognized
-
-**Nedeni:** Node.js PATH'e eklenmemiş.
-
-**Çözüm:**
-Node.js'i yeniden kurun. Kurulum otomatik olarak PATH'e ekler.
-
----
-
-### Hata: 'ollama' is not recognized
-
-**Nedeni:** Ollama PATH'e eklenmemiş veya kurulum tamamlanmamış.
-
-**Çözüm 1:**
-Bilgisayarı yeniden başlatın.
-
-**Çözüm 2:**
-Ollama'yı yeniden kurun.
-
----
-
-### Hata: Kurulum scripti çalışmıyor
-
-**Nedeni:** PowerShell Execution Policy kısıtlaması.
-
-**Çözüm:**
-```powershell
-# PowerShell'de (Yönetici olarak değil, normal olarak):
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-**Veya Manuel Kurulum:**
-```powershell
-# 1. Python sanal ortam
-cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-cd ..
-
-# 2. Frontend
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
----
-
-### Hata: Port 8000 kullanımda
-
-**Nedeni:** Başka bir program 8000 portunu kullanıyor.
-
-**Çözüm 1:**
-Portu kullanan programı bulup kapatın:
-```powershell
-netstat -ano | findstr :8000
-taskkill /PID <PID_NUMARASI> /F
-```
-
-**Çözüm 2:**
-Farklı port kullanın (kod değişikliği gerekir).
-
----
-
-### Hata: Backend başlamıyor
-
-**Nedeni 1:** `.venv` klasörü eksik
-
-**Kontrol:**
-```powershell
-dir backend\.venv
-```
-
-**Çözüm:**
-[⚙ Kurulum] butonuna tekrar tıklayın.
-
----
-
-**Nedeni 2:** Ollama çalışmıyor
-
-**Kontrol:**
-```powershell
-ollama list
-```
-
-**Çözüm:**
-```powershell
-ollama serve
-```
-
-veya Ollama'yı Windows servisi olarak başlatın.
-
----
-
-**Nedeni 3:** Loglara bakın
-
-```powershell
-type data\logs\backend.err.log
-```
-
----
-
-### Hata: Model indirme çok yavaş
-
-**Nedeni:** İnternet bağlantısı yavaş veya sunucu yoğunluğu.
-
-**Çözüm 1:**
-Terminal'den deneyin (daha hızlı olabilir):
-```powershell
-ollama pull qwen3.5:9b-q4_K_M
-```
-
-**Çözüm 2:**
-Daha küçük model kullanın:
-```powershell
-ollama pull qwen3.5:7b-q4_K_M
-```
-
-**Çözüm 3:**
-VPN kullanın (bazı bölgelerde daha hızlı olabilir).
-
----
-
-### Hata: Web arayüzü açılmıyor
-
-**Nedeni:** Frontend build edilmemiş.
-
-**Kontrol:**
-```powershell
-dir frontend\dist
-```
-
-İçinde `index.html` olmalı.
-
-**Çözüm:**
-```powershell
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
----
-
-### Hata: Telegram bot çalışmıyor
-
-**Kontrol listesi:**
-1. Token doğru mu? (@BotFather'dan alınan)
-2. User ID doğru mu? (@userinfobot'dan alınan)
-3. [Kaydet] butonuna bastınız mı?
-4. Backend loglarında hata var mı?
-
-```powershell
-type data\logs\telegram.err.log
-```
-
----
-
-## ✨ Özellikler
-
-### 🤖 Yapay Zeka Sohbeti
-- **Ollama Entegrasyonu**: `qwen`, `llama`, `mistral`, `deepseek` ve daha fazlası
-- **GGUF Desteği**: Kendi modelinizi kullanın
-- **Oturum Belleği**: Konuşmaları hatırlar
-
-### 📱 Telegram Botu
-- Sadece izin verilen kullanıcıdan komut alma
-- Markdown destekli zengin mesajlar
-
-### 📧 E-posta Entegrasyonu
-- **Gmail**: OAuth2 ile güvenli bağlantı
-- **Outlook**: Microsoft Graph API entegrasyonu
-
-### 🛠️ Araçlar ve Yetenekler
-
-| Araç | Açıklama |
-|------|----------|
-| `list_dir` | Dizin içeriğini listeleme |
-| `read_text_file` | Metin dosyası okuma |
-| `write_text_file` | Dosya oluşturma/düzenleme |
-| `add_task` | Görev ekleme |
-| `list_tasks` | Görevleri listeleme |
-| `complete_task` | Görev tamamlama |
-| `add_calendar_event` | Takvim etkinliği ekleme |
-| `list_calendar_events` | Etkinlikleri görüntüleme |
-| `create_email_draft` | E-posta taslağı oluşturma |
-| `search_news` | Google News RSS ile haber arama |
-| `fetch_web_page` | Web sayfası içeriği çekme |
-| `check_gmail_messages` | Gmail mesajlarını okuma |
-| `check_outlook_messages` | Outlook mesajlarını okuma |
 
 ---
 
 ## 🤝 Katkıda Bulunma
 
 1. Fork yapın
-2. Feature branch oluşturun (`git checkout -b feature/yeni-ozellik`)
-3. Commit edin (`git commit -m 'Yeni özellik eklendi'`)
-4. Push edin (`git push origin feature/yeni-ozellik`)
+2. Feature branch oluşturun
+3. Değişikliklerinizi commit edin
+4. Push edin
 5. Pull Request açın
 
 ---
