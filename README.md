@@ -1,28 +1,39 @@
-# OpenWorld Local Agent
+<div align="center">
 
-Kişisel, gizlilik odaklı, yerel çalışan yapay zeka asistanı.
+# 🌍 OpenWorld Local Agent
 
----
+**Kişisel, Gizlilik Odaklı, Yerel Çalışan Yapay Zeka Asistanı**
 
-## Önemli Uyarı
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-Modern%20Web%20Framework-green.svg)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-Frontend-61DAFB.svg)](https://react.dev)
+[![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Bu repository kaynak kodları içerir. Klonladıktan sonra kurulum yapmanız gerekir. Önce Python, Node.js ve Ollama kurulumu zorunludur.
-
----
-
-## İçindekiler
-
-1. [Sistem Gereksinimleri](#sistem-gereksinimleri)
-2. [Ön Kurulum (Zorunlu)](#ön-kurulum-zorunlu)
-3. [Uygulama Kurulumu](#uygulama-kurulumu)
-4. [Kullanım](#kullanım)
-5. [Sorun Giderme](#sorun-giderme)
-6. [Özellikler](#özellikler)
-7. [Proje Yapısı](#proje-yapısı)
+</div>
 
 ---
 
-## Sistem Gereksinimleri
+## ⚠️ ÖNEMLİ: Önce Sistem Gereksinimlerini Kurun!
+
+Bu repository **kaynak kodları** içerir. Klonladıktan sonra kurulum yapmanız gerekir. Önce Python, Node.js ve Ollama kurulumu zorunludur.
+
+> **Sıralama:** Önce Python/Node.js kur → Sonra repoyu klonla → Sonra launcher'ı çalıştır → [Kurulum] butonuna bas
+
+---
+
+## 📋 İçindekiler
+
+- [Sistem Gereksinimleri](#-sistem-gereksinimleri)
+- [Ön Kurulum (Zorunlu)](#-ön-kurulum-zorunlu)
+- [Uygulama Kurulumu](#-uygulama-kurulumu)
+- [Mimari Yapı](#-mimari-yapı)
+- [Sorun Giderme](#-sorun-giderme)
+- [Özellikler](#-özellikler)
+
+---
+
+## 💻 Sistem Gereksinimleri
 
 ### Donanım
 
@@ -40,7 +51,7 @@ Bu repository kaynak kodları içerir. Klonladıktan sonra kurulum yapmanız ger
 
 ---
 
-## Ön Kurulum (Zorunlu)
+## ✅ Ön Kurulum (Zorunlu)
 
 Uygulamayı çalıştırmadan önce aşağıdaki 3 programı kurmanız zorunludur.
 
@@ -162,7 +173,7 @@ ollama --version    # ollama version x.x.x
 
 ---
 
-## Uygulama Kurulumu
+## 🚀 Uygulama Kurulumu
 
 Ön kurulum tamamlandıktan sonra uygulamayı kurabilirsiniz.
 
@@ -300,8 +311,6 @@ Bu işlem `backend/.env` dosyasına ayarlarınızı yazar.
 
 ---
 
-## Kullanım
-
 ### Adım 10: Servislerin Başlatılması
 
 **10.1. [▶ Başlat] Butonuna Tıklayın**
@@ -347,7 +356,123 @@ Web arayüzünde sohbet penceresi görürsünüz. Mesaj yazıp gönderebilirsini
 
 ---
 
-## Sorun Giderme
+## 🔄 Özet Akış
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Python 3.11+ Kur  (python.org)                          │
+│     └─> "Add to PATH" işaretle!                            │
+├─────────────────────────────────────────────────────────────┤
+│  2. Node.js 20+ Kur  (nodejs.org)                           │
+├─────────────────────────────────────────────────────────────┤
+│  3. Ollama Kur  (ollama.com/download)                       │
+│     └─> Terminali yeniden başlat!                          │
+├─────────────────────────────────────────────────────────────┤
+│  4. Hepsini kontrol et:                                     │
+│     python --version                                        │
+│     node --version                                          │
+│     ollama --version                                        │
+├─────────────────────────────────────────────────────────────┤
+│  5. Repoyu indir:                                           │
+│     git clone https://github.com/.../OpenWorld.git          │
+├─────────────────────────────────────────────────────────────┤
+│  6. Launcher'ı çalıştır:                                    │
+│     python launcher.py                                      │
+├─────────────────────────────────────────────────────────────┤
+│  7. Launcher'da [Kurulum] butonuna tıkla (5-10 dk)         │
+├─────────────────────────────────────────────────────────────┤
+│  8. Model indir:                                            │
+│     ollama pull qwen3.5:9b-q4_K_M  (5-10 dk)               │
+├─────────────────────────────────────────────────────────────┤
+│  9. Launcher'da: [Kaydet] → [Başlat] → [Arayüz]            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🏗️ Mimari Yapı
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        OpenWorld Agent                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
+│  │   Web UI     │    │  Telegram    │    │   REST API   │      │
+│  │   (React)    │◄──►│    Bot       │◄──►│  (FastAPI)   │      │
+│  └──────────────┘    └──────────────┘    └──────┬───────┘      │
+│                                                 │               │
+│                              ┌──────────────────┘               │
+│                              ▼                                  │
+│                    ┌──────────────────┐                        │
+│                    │   Agent Service  │                        │
+│                    └────────┬─────────┘                        │
+│                             │                                   │
+│           ┌─────────────────┼─────────────────┐                │
+│           ▼                 ▼                 ▼                │
+│    ┌────────────┐   ┌────────────┐   ┌────────────┐           │
+│    │    LLM     │   │  Memory    │   │   Tools    │           │
+│    │  (Ollama)  │   │ (Session)  │   │ (Registry) │           │
+│    └────────────┘   └────────────┘   └────────────┘           │
+│                                                 │               │
+│                              ┌──────────────────┘               │
+│                              ▼                                  │
+│                    ┌──────────────────┐                        │
+│                    │  External APIs   │                        │
+│                    │ Gmail/Outlook/Web│                        │
+│                    └──────────────────┘                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Teknoloji Stack
+
+| Katman | Teknoloji |
+|--------|-----------|
+| **Backend** | Python 3.11+, FastAPI, Uvicorn |
+| **Frontend** | React 18+, Vite |
+| **AI/ML** | Ollama, llama-cpp-python |
+| **Mesajlaşma** | python-telegram-bot |
+| **E-posta** | Google Gmail API, Microsoft Graph API |
+| **Veri** | JSON-based local storage |
+| **Güvenlik** | Windows DPAPI şifreleme |
+
+### Proje Yapısı
+
+```
+OpenWorld/
+├── backend/              # FastAPI Backend
+│   ├── app/             # API ve Agent kodları
+│   │   ├── agent.py     # Agent servisi
+│   │   ├── main.py      # FastAPI uygulaması
+│   │   ├── telegram_bridge.py  # Telegram bot
+│   │   └── tools/       # Araç kayıtları
+│   ├── .venv/           # Python sanal ortam (kurulumda oluşur)
+│   ├── .env             # Ayarlar (kurulumda oluşur)
+│   └── requirements.txt # Python bağımlılıkları
+├── frontend/            # React Frontend
+│   ├── src/             # React kaynak kodları
+│   │   ├── App.jsx      # Ana uygulama
+│   │   └── components/  # React bileşenler
+│   ├── dist/            # Build edilmiş UI (kurulumda oluşur)
+│   ├── node_modules/    # NPM paketler (kurulumda oluşur)
+│   └── package.json     # Node.js bağımlılıkları
+├── data/                # Kullanıcı verileri
+│   ├── sessions/        # Sohbet geçmişi
+│   ├── logs/            # Uygulama logları
+│   ├── planner/         # Görev ve takvim
+│   └── mail/            # E-posta taslakları
+├── models/              # İndirilen AI modelleri
+├── scripts/             # Kurulum scriptleri
+│   ├── setup.ps1        # Ana kurulum scripti
+│   └── install-qwen35-9b.ps1  # Model kurulumu
+├── launcher.py          # Tkinter GUI
+└── README.md            # Bu dosya
+```
+
+---
+
+## 🐛 Sorun Giderme
 
 ### Hata: 'python' is not recognized
 
@@ -535,59 +660,42 @@ type data\logs\telegram.err.log
 
 ---
 
-## Özellikler
+## ✨ Özellikler
 
-### Yapay Zeka Sohbeti
-- Ollama entegrasyonu (qwen, llama, mistral vb.)
-- GGUF model desteği (llama_cpp)
-- Oturum belleği
+### 🤖 Yapay Zeka Sohbeti
+- **Ollama Entegrasyonu**: `qwen`, `llama`, `mistral`, `deepseek` ve daha fazlası
+- **GGUF Desteği**: Kendi modelinizi kullanın
+- **Oturum Belleği**: Konuşmaları hatırlar
 
-### Telegram Botu
+### 📱 Telegram Botu
 - Sadece izin verilen kullanıcıdan komut alma
-- Markdown desteği
+- Markdown destekli zengin mesajlar
 
-### E-posta Entegrasyonu
-- Gmail (OAuth2, read-only)
-- Outlook (Microsoft Graph API, read-only)
+### 📧 E-posta Entegrasyonu
+- **Gmail**: OAuth2 ile güvenli bağlantı
+- **Outlook**: Microsoft Graph API entegrasyonu
 
-### Araçlar
-- Dosya listeleme/okuma/yazma
-- Görev yönetimi (add/list/complete)
-- Takvim etkinlikleri
-- Haber arama
-- Web sayfası çekme
-- E-posta taslak oluşturma
+### 🛠️ Araçlar ve Yetenekler
 
----
-
-## Proje Yapısı
-
-```
-OpenWorld/
-├── backend/              # FastAPI Backend
-│   ├── app/             # API ve Agent kodları
-│   ├── .venv/           # Python sanal ortam (kurulumda oluşur)
-│   ├── .env             # Ayarlar (kurulumda oluşur)
-│   └── requirements.txt # Python bağımlılıkları
-├── frontend/            # React Frontend
-│   ├── src/             # React kaynak kodları
-│   ├── dist/            # Build edilmiş UI (kurulumda oluşur)
-│   ├── node_modules/    # NPM paketler (kurulumda oluşur)
-│   └── package.json     # Node.js bağımlılıkları
-├── data/                # Kullanıcı verileri
-│   ├── sessions/        # Sohbet geçmişi
-│   ├── logs/            # Uygulama logları
-│   ├── planner/         # Görev ve takvim
-│   └── mail/            # E-posta taslakları
-├── models/              # İndirilen AI modelleri
-├── scripts/             # Kurulum scriptleri
-├── launcher.py          # Tkinter GUI
-└── README.md            # Bu dosya
-```
+| Araç | Açıklama |
+|------|----------|
+| `list_dir` | Dizin içeriğini listeleme |
+| `read_text_file` | Metin dosyası okuma |
+| `write_text_file` | Dosya oluşturma/düzenleme |
+| `add_task` | Görev ekleme |
+| `list_tasks` | Görevleri listeleme |
+| `complete_task` | Görev tamamlama |
+| `add_calendar_event` | Takvim etkinliği ekleme |
+| `list_calendar_events` | Etkinlikleri görüntüleme |
+| `create_email_draft` | E-posta taslağı oluşturma |
+| `search_news` | Google News RSS ile haber arama |
+| `fetch_web_page` | Web sayfası içeriği çekme |
+| `check_gmail_messages` | Gmail mesajlarını okuma |
+| `check_outlook_messages` | Outlook mesajlarını okuma |
 
 ---
 
-## Katkıda Bulunma
+## 🤝 Katkıda Bulunma
 
 1. Fork yapın
 2. Feature branch oluşturun (`git checkout -b feature/yeni-ozellik`)
@@ -597,6 +705,6 @@ OpenWorld/
 
 ---
 
-## Lisans
+## 📜 Lisans
 
 MIT License
