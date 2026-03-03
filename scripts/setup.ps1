@@ -11,14 +11,28 @@ function Assert-Command($name) {
 Assert-Command python
 Assert-Command npm
 
-if (-not (Test-Path ".\backend\.venv")) {
-  Write-Host "Creating Python virtual environment..."
-  python -m venv .\backend\.venv
+$runtimeRoot = "C:\OpenWorldRuntime"
+$runtimeVenv = Join-Path $runtimeRoot "venv"
+$runtimePython = Join-Path $runtimeVenv "Scripts\python.exe"
+$backendPython = ".\backend\.venv\Scripts\python.exe"
+$backendCfg = ".\backend\.venv\pyvenv.cfg"
+
+if (-not (Test-Path $runtimePython)) {
+  Write-Host "Creating runtime virtual environment at C:\OpenWorldRuntime\venv ..."
+  if (-not (Test-Path $runtimeRoot)) {
+    New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
+  }
+  py -3.13 -m venv $runtimeVenv
+}
+
+$pythonExe = $runtimePython
+if ((Test-Path $backendPython) -and (Test-Path $backendCfg)) {
+  $pythonExe = $backendPython
 }
 
 Write-Host "Installing backend dependencies..."
-.\backend\.venv\Scripts\python -m pip install --upgrade pip
-.\backend\.venv\Scripts\python -m pip install -r .\backend\requirements.txt
+& $pythonExe -m pip install --upgrade pip
+& $pythonExe -m pip install -r .\backend\requirements.txt
 
 if (-not (Test-Path ".\backend\.env")) {
   Copy-Item .\backend\.env.example .\backend\.env

@@ -23,7 +23,12 @@ from tkinter import messagebox
 
 ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
-VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
+BROKEN_VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
+RUNTIME_PYTHON = Path(r"C:\OpenWorldRuntime\venv\Scripts\python.exe")
+if RUNTIME_PYTHON.exists():
+    VENV_PYTHON = RUNTIME_PYTHON
+else:
+    VENV_PYTHON = BROKEN_VENV_PYTHON
 ENV_PATH = BACKEND_DIR / ".env"
 QWEN_INSTALL_SCRIPT = ROOT / "scripts" / "install-qwen35-9b.ps1"
 LOG_DIR = ROOT / "data" / "logs"
