@@ -783,9 +783,6 @@ def _validate_web_url(url: str) -> None:
 
 
 # Eski fonksiyonlar (alias)
-tool_list_dir = tool_list_directory
-tool_read_text_file = tool_read_file
-tool_write_text_file = tool_write_file
 
 
 def tool_add_task(title: str, due_date: str = "", notes: str = "") -> Dict[str, Any]:
@@ -1027,9 +1024,6 @@ def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "
     return {"path": str(target), "sources": entries}
 
 
-def tool_run_shell(command: str) -> Dict[str, Any]:
-    """Eski shell tool - yeni tool_execute_command kullanın."""
-    return tool_execute_command(command)
 
 
 # =============================================================================
@@ -1350,40 +1344,6 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
         }
     ),
     
-    # Eski araçlar (geriye uyumluluk)
-    "list_dir": (
-        tool_list_dir,
-        {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": "Dizin listele (eski - list_directory kullanın)",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
-            }
-        }
-    ),
-    "read_text_file": (
-        tool_read_text_file,
-        {
-            "type": "function",
-            "function": {
-                "name": "read_text_file",
-                "description": "Dosya oku (eski - read_file kullanın)",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
-            }
-        }
-    ),
-    "write_text_file": (
-        tool_write_text_file,
-        {
-            "type": "function",
-            "function": {
-                "name": "write_text_file",
-                "description": "Dosya yaz (eski - write_file kullanın)",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}
-            }
-        }
-    ),
     "add_task": (
         tool_add_task,
         {
@@ -1527,17 +1487,6 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "name": "research_and_report",
                 "description": "Araştırma yap ve rapor oluştur.",
                 "parameters": {"type": "object", "properties": {"topic": {"type": "string"}, "max_sources": {"type": "integer"}, "out_path": {"type": "string"}}}
-            }
-        }
-    ),
-    "run_shell": (
-        tool_run_shell,
-        {
-            "type": "function",
-            "function": {
-                "name": "run_shell",
-                "description": "Shell komutu çalıştır (eski - execute_command kullanın).",
-                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}
             }
         }
     ),
@@ -2429,7 +2378,203 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
 }
 
 
+# =============================================================================
+# TOOL KATEGORİLEME SİSTEMİ
+# =============================================================================
+
+TOOL_CATEGORIES: Dict[str, List[str]] = {
+    "core": [
+        "execute_command", "read_file", "write_file",
+        "list_directory", "get_system_info", "alert",
+    ],
+    "file": [
+        "list_directory", "read_file", "write_file", "delete_file",
+        "copy_file", "move_file", "search_files", "create_folder", "open_folder",
+    ],
+    "screen": [
+        "screenshot_desktop", "screenshot_webpage", "find_image_on_screen",
+        "click_on_screen", "type_text", "press_key", "mouse_position",
+        "mouse_move", "drag_to", "scroll", "hotkey",
+    ],
+    "audio": [
+        "start_audio_recording", "stop_audio_recording",
+        "play_audio", "text_to_speech",
+    ],
+    "webcam": [
+        "list_cameras", "webcam_capture", "webcam_record_video",
+    ],
+    "web": [
+        "fetch_web_page", "search_news", "screenshot_webpage",
+        "research_and_report",
+    ],
+    "email": [
+        "check_gmail_messages", "check_outlook_messages", "create_email_draft",
+    ],
+    "system": [
+        "get_system_info", "list_processes", "kill_process",
+        "execute_command", "network_info", "ping_host",
+        "shutdown_system", "lock_workstation",
+    ],
+    "window": [
+        "get_window_list", "activate_window",
+        "minimize_all_windows", "lock_workstation",
+    ],
+    "office": [
+        "create_word_document", "create_markdown_report",
+        "create_docx", "read_docx", "add_to_docx",
+        "create_excel", "read_excel", "add_to_excel",
+        "read_pdf", "create_pdf", "merge_pdfs", "split_pdf",
+    ],
+    "archive": [
+        "create_zip", "extract_zip", "list_zip_contents",
+        "create_tar", "extract_tar",
+    ],
+    "code": [
+        "analyze_code", "find_code_patterns",
+        "analyze_project_code", "open_in_vscode",
+    ],
+    "planner": [
+        "add_task", "list_tasks", "complete_task",
+        "add_calendar_event", "list_calendar_events",
+    ],
+    "usb": [
+        "list_usb_devices", "eject_usb_drive",
+    ],
+    "ocr": [
+        "ocr_screenshot", "ocr_image",
+    ],
+    "dialog": [
+        "alert", "confirm", "prompt",
+    ],
+}
+
+CATEGORY_KEYWORDS: Dict[str, set] = {
+    "file": {
+        "dosya", "dosyala", "klasor", "klasör", "dizin", "directory", "folder",
+        "file", "sil", "silmek", "kopyala", "tasi", "taşı", "delete", "copy",
+        "move", "rename", "kaydet", "save", "oluştur", "olustur", "create",
+        "ara", "search", "bul", "find", "listele", "list",
+    },
+    "screen": {
+        "ekran", "screen", "screenshot", "goruntu", "görüntü", "tikla", "tıkla",
+        "click", "klavye", "keyboard", "fare", "mouse", "surukle",
+        "sürükle", "drag", "kaydir", "kaydır", "scroll", "kisayol", "kısayol",
+        "hotkey", "shortcut", "ctrl", "alt", "tus", "tuş", "key",
+        "masaustu", "masaüstü", "desktop",
+    },
+    "audio": {
+        "ses", "audio", "sound", "mikrofon", "microphone", "dinle", "listen",
+        "cal", "çal", "play", "muzik", "müzik", "music", "konuş", "konus",
+        "speak", "tts", "seslendir",
+    },
+    "webcam": {
+        "kamera", "camera", "webcam", "fotograf", "fotoğraf", "photo",
+        "video", "goruntule", "görüntüle",
+    },
+    "web": {
+        "web", "site", "sayfa", "page", "url", "http", "https", "link",
+        "internet", "haber", "news", "arastir", "araştır", "research",
+        "google", "fetch", "indir", "download", "browse", "github",
+    },
+    "email": {
+        "email", "e-posta", "eposta", "mail", "gmail", "outlook",
+        "mesaj", "message", "inbox", "gelen", "gonder", "gönder",
+        "taslak", "draft",
+    },
+    "system": {
+        "sistem", "system", "cpu", "ram", "bellek", "memory", "disk",
+        "process", "islem", "işlem", "sonlandir", "sonlandır", "kill",
+        "terminate", "bilgisayar", "computer", "kapat", "shutdown",
+        "restart", "yeniden", "ag", "ağ", "network", "ping", "ip",
+        "komut", "command", "powershell", "cmd", "terminal", "shell",
+        "calistir", "çalıştır", "run",
+    },
+    "window": {
+        "pencere", "window", "uygulama", "application", "minimize",
+        "küçült", "kucult", "one getir", "öne getir", "activate",
+        "kilit", "kilitle", "lock",
+    },
+    "office": {
+        "word", "docx", "belge", "document", "excel", "xlsx", "tablo",
+        "table", "spreadsheet", "pdf", "rapor", "report", "markdown",
+    },
+    "archive": {
+        "zip", "tar", "arsiv", "arşiv", "archive", "sikistir", "sıkıştır",
+        "compress", "cikar", "çıkar", "extract", "unzip",
+    },
+    "code": {
+        "kod", "code", "analiz", "analyze", "analysis", "pattern",
+        "fonksiyon", "function", "class", "sinif", "sınıf", "import",
+        "proje", "project", "vscode", "debug",
+    },
+    "planner": {
+        "gorev", "görev", "task", "takvim", "calendar", "etkinlik",
+        "event", "plan", "hatirla", "hatırla", "remind", "ajanda",
+        "todo", "yapilacak", "yapılacak",
+    },
+    "usb": {
+        "usb", "flash", "surucu", "sürücü", "eject",
+    },
+    "ocr": {
+        "ocr", "metin tani", "metin tanı", "recognize",
+        "goruntuden", "görüntüden",
+    },
+    "dialog": {
+        "uyar", "uyarı", "onay", "confirm", "popup", "dialog",
+    },
+}
+
+MAX_TOOLS_PER_REQUEST = 20
+
+
+def get_relevant_tools(user_message: str) -> List[Dict[str, Any]]:
+    """Kullanıcı mesajına göre sadece ilgili tool spec'lerini döndür."""
+    if not user_message:
+        return get_tool_specs()
+
+    msg_lower = user_message.lower()
+
+    matched_categories: set = set()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in msg_lower:
+                matched_categories.add(category)
+                break
+
+    # Her zaman core dahil
+    matched_categories.add("core")
+
+    # Hiçbir ek kategori eşleşmediyse → fallback tüm tool'lar
+    if len(matched_categories) == 1:
+        return get_tool_specs()
+
+    # Unique tool isimlerini topla
+    tool_names: List[str] = []
+    seen: set = set()
+
+    # Önce core
+    for name in TOOL_CATEGORIES["core"]:
+        if name in TOOLS and name not in seen:
+            tool_names.append(name)
+            seen.add(name)
+
+    # Sonra eşleşen kategoriler
+    for cat in matched_categories:
+        if cat == "core":
+            continue
+        for name in TOOL_CATEGORIES.get(cat, []):
+            if name in TOOLS and name not in seen:
+                tool_names.append(name)
+                seen.add(name)
+
+    # Sınırla
+    tool_names = tool_names[:MAX_TOOLS_PER_REQUEST]
+
+    return [TOOLS[name][1] for name in tool_names]
+
+
 def get_tool_specs() -> List[Dict[str, Any]]:
+    """Tüm tool spec'lerini döndür (fallback)."""
     return [TOOLS[name][1] for name in TOOLS]
 
 

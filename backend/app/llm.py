@@ -19,7 +19,7 @@ class OllamaClient:
             "messages": messages,
             "stream": False,
         }
-        if self.tools_supported:
+        if self.tools_supported and tools:
             payload["tools"] = tools
         async with httpx.AsyncClient(timeout=90) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)

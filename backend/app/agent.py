@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List, Tuple
 
 from .config import settings
@@ -15,7 +16,7 @@ from .policy import (
     user_explicitly_authorized_tool,
 )
 from .system_prompt import build_system_prompt
-from .tools.registry import execute_tool, get_tool_specs, serialize_tool_result
+from .tools.registry import execute_tool, get_tool_specs, get_relevant_tools, serialize_tool_result
 
 
 class AgentService:
@@ -40,6 +41,9 @@ class AgentService:
 
         messages.append(ChatMessage(role="user", content=user_message))
 
+        # Kullanıcı mesajına göre sadece ilgili tool'ları seç
+        relevant_tools = get_relevant_tools(user_message)
+
         used_tools: List[str] = []
         steps = 0
         untrusted_content_seen = False
@@ -47,16 +51,29 @@ class AgentService:
         while steps < settings.ollama_max_steps:
             steps += 1
             payload_messages = [m.model_dump(exclude_none=True) for m in messages]
-            raw = await self.llm.chat(payload_messages, get_tool_specs())
+            raw = await self.llm.chat(payload_messages, relevant_tools)
             raw_message: Dict = raw.get("message", {})
             assistant_text = raw_message.get("content", "") or ""
             tool_calls = parse_tool_calls(raw_message)
             if not tool_calls:
-                parsed_text_tool = self._parse_text_tool_call(assistant_text)
-                if parsed_text_tool is not None:
-                    tool_calls = [parsed_text_tool]
+                parsed_text_tools = self._parse_text_tool_calls(assistant_text)
+                if parsed_text_tools:
+                    tool_calls = parsed_text_tools
 
-            messages.append(ChatMessage(role="assistant", content=assistant_text))
+            # Tool call JSON'larını assistant metninden temizle
+            clean_text = assistant_text
+            if tool_calls and assistant_text:
+                clean_text = self._TOOL_CALL_RE.sub("", clean_text)
+                clean_text = re.sub(r'</tool_call>', '', clean_text)
+                # Serbest JSON bloklarını da temizle (sadece tool call parse edildiyse)
+                for call in tool_calls:
+                    clean_text = clean_text.replace(
+                        f'"name": "{call.name}"', ''
+                    )
+                clean_text = re.sub(r'\{[^{}]*"arguments"[^{}]*\{[^{}]*\}[^{}]*\}', '', clean_text)
+                clean_text = clean_text.strip()
+
+            messages.append(ChatMessage(role="assistant", content=clean_text or ""))
             if not tool_calls:
                 self.store.save(session_id, messages)
                 return assistant_text.strip() or "(no content)", steps, used_tools
@@ -104,20 +121,90 @@ class AgentService:
         self.store.save(session_id, messages)
         return fallback, steps, used_tools
 
-    def _parse_text_tool_call(self, content: str):
+    # Hermes <tool_call> tag'lerini yakala
+    _TOOL_CALL_RE = re.compile(
+        r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
+        re.DOTALL,
+    )
+
+    def _parse_text_tool_calls(self, content: str) -> list:
+        """Model'in text içinde döndürdüğü tool call'ları parse et.
+
+        Desteklenen formatlar:
+        1. Hermes: <tool_call>{"name": ..., "arguments": ...}</tool_call>
+        2. Serbest JSON: {"name": ..., "arguments": ...}
+        3. Eski format: {"tool": ..., "arguments": ...}
+        """
         text = (content or "").strip()
         if not text:
-            return None
-        if not (text.startswith("{") and text.endswith("}")):
-            return None
+            return []
+
+        results = []
+
+        # 1) Hermes <tool_call> tag'lerini ara
+        matches = self._TOOL_CALL_RE.findall(text)
+        if matches:
+            for raw_json in matches:
+                parsed = self._try_parse_single_call(raw_json)
+                if parsed is not None:
+                    results.append(parsed)
+            return results
+
+        # 2) </tool_call> tag'i var ama <tool_call> yok (model bazen atlar)
+        if "</tool_call>" in text:
+            chunks = text.split("</tool_call>")
+            for chunk in chunks:
+                chunk = chunk.strip()
+                # JSON bloğunu bul
+                brace_start = chunk.find("{")
+                if brace_start == -1:
+                    continue
+                raw_json = chunk[brace_start:]
+                parsed = self._try_parse_single_call(raw_json)
+                if parsed is not None:
+                    results.append(parsed)
+            return results
+
+        # 3) Düz JSON (tek tool call)
+        if text.startswith("{") and text.endswith("}"):
+            parsed = self._try_parse_single_call(text)
+            if parsed is not None:
+                return [parsed]
+
+        # 4) Metin içinde gömülü JSON blokları
+        for m in re.finditer(r'\{[^{}]*"(?:name|tool)"[^{}]*"arguments"[^{}]*\{[^{}]*\}[^{}]*\}', text):
+            parsed = self._try_parse_single_call(m.group())
+            if parsed is not None:
+                results.append(parsed)
+
+        return results
+
+    @staticmethod
+    def _try_parse_single_call(raw_json: str):
+        """Tek bir JSON tool call'ı parse et."""
+        raw_json = raw_json.strip()
         try:
-            data = json.loads(text)
+            data = json.loads(raw_json)
         except json.JSONDecodeError:
             return None
         if not isinstance(data, dict):
             return None
-        name = data.get("tool")
-        arguments = data.get("arguments", {})
-        if not isinstance(name, str) or not isinstance(arguments, dict):
+
+        # "name" veya "tool" key'ini kabul et
+        name = data.get("name") or data.get("tool")
+        arguments = data.get("arguments") or data.get("parameters") or {}
+
+        if not isinstance(name, str) or not name:
             return None
-        return type("TextToolCall", (), {"id": "text_tool_call", "name": name, "arguments": arguments})()
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict):
+            return None
+
+        call_id = f"text_tc_{hash(name) & 0xFFFF:04x}"
+        return type("TextToolCall", (), {
+            "id": call_id, "name": name, "arguments": arguments,
+        })()

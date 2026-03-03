@@ -52,7 +52,6 @@ UNTRUSTED_CONTENT_TOOLS: Set[str] = {
 
 HIGH_IMPACT_TOOLS: Set[str] = {
     "execute_command",
-    "run_shell",
     "write_file",
     "delete_file",
     "move_file",
@@ -75,7 +74,6 @@ HIGH_IMPACT_TOOLS: Set[str] = {
 
 TOOL_INTENT_KEYWORDS: Dict[str, Set[str]] = {
     "execute_command": {"komut", "powershell", "cmd", "calistir", "run", "terminal", "shell"},
-    "run_shell": {"komut", "shell", "powershell", "terminal", "run"},
     "write_file": {"yaz", "olustur", "kaydet", "duzenle", "write", "create", "edit"},
     "delete_file": {"sil", "kaldir", "delete", "remove"},
     "move_file": {"tas", "taşı", "move"},
