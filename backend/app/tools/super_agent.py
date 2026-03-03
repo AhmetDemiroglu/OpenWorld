@@ -79,7 +79,7 @@ def tool_screenshot_desktop(output_path: str = "", region: List[int] = None) -> 
         # Kaydet
         if not output_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"data/screenshots/desktop_{timestamp}.png"
+            output_path = f"data/media/desktop_{timestamp}.png"
         
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -124,7 +124,7 @@ def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3)
             if not output_path:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 domain = url.replace("https://", "").replace("http://", "").replace("/", "_")[:30]
-                output_path = f"data/screenshots/web_{domain}_{timestamp}.png"
+                output_path = f"data/media/web_{domain}_{timestamp}.png"
             
             target = Path(output_path)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -261,7 +261,7 @@ def tool_stop_audio_recording(output_path: str = "") -> Dict[str, Any]:
         
         if not output_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"data/audio/recording_{timestamp}.wav"
+            output_path = f"data/media/recording_{timestamp}.wav"
         
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -356,7 +356,7 @@ def tool_webcam_capture(output_path: str = "", camera_index: int = 0) -> Dict[st
         
         if not output_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"data/webcam/capture_{timestamp}.jpg"
+            output_path = f"data/media/capture_{timestamp}.jpg"
         
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -389,7 +389,7 @@ def tool_webcam_record_video(duration: int = 10, output_path: str = "", camera_i
         
         if not output_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = f"data/webcam/video_{timestamp}.avi"
+            output_path = f"data/media/video_{timestamp}.avi"
         
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)

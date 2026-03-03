@@ -1525,11 +1525,10 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "screenshot_desktop",
-                "description": "Masaüstü ekran görüntüsü al. Belirli bölge veya tam ekran.",
+                "description": "Masaüstü ekran görüntüsü al. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu (boşsa otomatik)"},
                         "region": {"type": "array", "description": "Bölge [x, y, width, height]", "items": {"type": "integer"}}
                     }
                 }
@@ -1542,12 +1541,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "screenshot_webpage",
-                "description": "Web sayfası ekran görüntüsü al.",
+                "description": "Web sayfası ekran görüntüsü al. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "url": {"type": "string", "description": "Web sayfası URL"},
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
                         "wait_time": {"type": "integer", "description": "Sayfanın yüklenme süresi (saniye)"}
                     },
                     "required": ["url"]
@@ -1736,12 +1734,10 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "stop_audio_recording",
-                "description": "Ses kaydını durdur ve kaydet.",
+                "description": "Ses kaydını durdur ve kaydet. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu"}
-                    }
+                    "properties": {}
                 }
             }
         }
@@ -1774,7 +1770,6 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                     "type": "object",
                     "properties": {
                         "text": {"type": "string", "description": "Konuşulacak metin"},
-                        "output_path": {"type": "string", "description": "Kayıt yolu (boşsa doğrudan konuş)"},
                         "lang": {"type": "string", "description": "Dil kodu (tr, en)"}
                     },
                     "required": ["text"]
@@ -1803,11 +1798,10 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "webcam_capture",
-                "description": "Webcam'den fotoğraf çek.",
+                "description": "Webcam'den fotoğraf çek. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
                         "camera_index": {"type": "integer", "description": "Kamera indeksi"}
                     }
                 }
@@ -1820,12 +1814,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "webcam_record_video",
-                "description": "Webcam'den video kaydet.",
+                "description": "Webcam'den video kaydet. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "duration": {"type": "integer", "description": "Kayıt süresi (saniye)"},
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
                         "camera_index": {"type": "integer", "description": "Kamera indeksi"}
                     }
                 }

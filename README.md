@@ -10,7 +10,7 @@
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-*Sadece finansal işlemler hariç - HER ŞEY serbest!*
+*Yerel yapay zeka asistanınız - 4 katmanlı güvenlik ile*
 
 </div>
 
@@ -27,50 +27,56 @@
 7. [Sorun Giderme](#-sorun-giderme)
 8. [Mimari](#-mimari)
 9. [Güvenlik](#-güvenlik)
+10. [Paketler](#-yeni-paketler-77-araç-i̇çin)
 
 ---
 
 ## ✨ Özellikler Özeti
 
-OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajan'dır**. Sadece finansal işlemler (ödeme, kart, transfer) engellenmiştir - gerisi tamamen sizin kontrolünüzdedir!
+OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajandır**. 4 katmanlı güvenlik sistemi ile tehlikeli işlemler kontrol altında, günlük görevleriniz tamamen serbesttir.
 
-### 🚀 87+ Yerleşik Araç
+### 🚀 77 Yerleşik Araç + Akıllı Tool Seçimi
 
 | Kategori | Araç Sayısı | Örnekler |
 |----------|-------------|----------|
 | **Ekran Kontrolü** | 12 | Screenshot, tıklama, yazı yazma, sürükle-bırak |
 | **Ses** | 4 | Kayıt, çalma, metin-ses |
 | **Webcam** | 3 | Fotoğraf, video kaydı |
-| **Dosya Sistemi** | 7 | Tüm disk erişimi, silme, taşıma, arama |
+| **Dosya Sistemi** | 9 | Okuma, yazma, silme, taşıma, arama, klasör |
 | **ZIP/Arşiv** | 5 | ZIP/TAR oluşturma/çıkarma |
 | **PDF** | 4 | Okuma, oluşturma, birleştirme, bölme |
 | **Word** | 3 | DOCX oluşturma/okuma/düzenleme |
 | **Excel** | 3 | XLSX oluşturma/okuma/düzenleme |
-| **Kod Analiz** | 3 | Proje analizi, pattern arama |
-| **VS Code** | 1 | Dosya/klasör açma |
+| **Kod Analiz** | 4 | Proje analizi, pattern arama, VS Code |
 | **Sistem** | 6 | CPU/RAM bilgisi, process kontrolü |
 | **USB** | 2 | Cihaz listeleme, güvenli çıkarma |
-| **Ağ** | 3 | Ping, network bilgisi |
+| **Ağ** | 2 | Ping, network bilgisi |
 | **OCR** | 2 | Ekran/görüntüden metin okuma |
-| **Windows** | 5 | Pencere yönetimi, kilit, kapatma |
-| **Shell** | 1 | Tam PowerShell/Bash erişimi |
+| **Pencere** | 4 | Pencere yönetimi, kilit, kapatma |
+| **Shell** | 1 | PowerShell/Bash komut çalıştırma |
 | **Diyalog** | 3 | Uyarı, onay, giriş pencereleri |
 | **Görev/Takvim** | 5 | Planlama araçları |
-| **E-posta** | 2 | Gmail/Outlook okuma |
-| **Web** | 3 | Haber, web sayfası çekme, araştırma |
-| **Telegram** ⭐ | 3 | Mesaj, fotoğraf, dosya gönderme |
+| **E-posta** | 3 | Gmail/Outlook okuma, taslak oluşturma |
+| **Web** | 4 | Haber, web sayfası çekme, screenshot, araştırma |
 
-**Toplam: 87+ Araç!**
+**Toplam: 77 Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
 
-### 📸 Medya Otomatik Gösterimi
+### 📸 Medya Otomatik Teslimi
 
-Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **frontend'de otomatik olarak görüntülenir**:
-- 🖼️ Görüntüler: Chat'te direkt preview + indirme linki
-- 🎵 Ses dosyaları: Oynatma kontrolü + indirme
-- 🎥 Videolar: Player embed + indirme
-- 📄 Belgeler: İndirme linki
+Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **otomatik olarak teslim edilir**:
 
-Ayrıca **Telegram entegrasyonu** ile medyalar anında telefonunuza gönderilebilir!
+- Web arayüzünde: Chat'te direkt preview + indirme linki
+- Telegram'da: Medya dosyaları otomatik olarak gönderilir
+- Tüm medya `data/media/` klasöründe tek yerde saklanır
+
+### 🧠 Akıllı Tool Seçimi
+
+77 aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajındaki anahtar kelimeler analiz edilerek **en fazla 20 ilgili araç** seçilir:
+
+- "ekran görüntüsü al" → core + screen kategorisi (~17 araç)
+- "PDF oku" → core + file + office kategorisi
+- "haber ara" → core + web kategorisi
+- Eşleşme yoksa → tüm araçlar (fallback)
 
 ---
 
@@ -276,9 +282,9 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
 ---
 
-### 📁 4. DOSYA SİSTEMİ (Tam Erişim)
+### 📁 4. DOSYA SİSTEMİ
 
-Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
+Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 **Dosya İşlemleri:**
 ```
@@ -542,22 +548,20 @@ Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
 
 ---
 
-### 🐚 15. TAM SHELL ERİŞİMİ
+### 🐚 15. SHELL ERİŞİMİ
 
 **PowerShell/Bash:**
 ```
 "ipconfig komutunu çalıştır"
 "Get-Process | Select-Object -First 10"
-"format D: /FS:NTFS /Q"
-"regedit /s ayarlar.reg"
-"Tüm PowerShell komutları serbest!"
+"pip install paket_adi"
+"dir C:\Users"
 ```
 
-**Not:** Sadece finansal komutlar engellenir. Gerisi serbest!
+**Not:** Tehlikeli komutlar (format, diskpart, registry) güvenlik katmanı tarafından onay gerektirir.
 
 **Araçlar:**
 - `execute_command` - Komut çalıştır
-- `run_shell` - Alternatif
 
 ---
 
@@ -616,33 +620,24 @@ Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
 
 ---
 
-### ✈️ 19. TELEGRAM ENTEGRASYONU ⭐
+### ✈️ 19. TELEGRAM ENTEGRASYONU
 
-**Özellik:** Medya ve dosyaları Telegram üzerinden anında telefonunuza gönderin!
+Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüleri, ses, video) otomatik olarak Telegram'a gönderilir.
 
-**Mesaj Gönderme:**
-```
-"Telegram'dan şu mesajı gönder: 'İşlem tamamlandı'"
-```
+**Nasıl Çalışır:**
 
-**Fotoğraf Gönderme:**
-```
-"GitHub'ın ekran görüntüsünü al ve Telegram'dan gönder"
-"Webcam'den fotoğraf çek ve Telegram'a yolla"
-```
+- Telegram bot'a mesaj yazarsınız, ajan cevap verir
+- Ajan bir ekran görüntüsü veya ses kaydı ürettiğinde, otomatik olarak Telegram'a iletilir
+- Ayrı bir tool yoktur — medya pipeline'ı otomatiktir
 
-**Dosya Gönderme:**
+**Kullanım Örnekleri (Telegram'dan yazın):**
 ```
-"Proje raporunu PDF olarak Telegram'dan gönder"
-"Şu ZIP dosyasını Telegram'a yükle"
+"Masaüstümün ekran görüntüsünü al"
+"GitHub'ın screenshot'ını al"
+"5 saniyelik ses kaydı yap"
 ```
 
-**Araçlar:**
-- `telegram_send_message` - Metin mesajı gönder
-- `telegram_send_photo` - 📸 Fotoğraf/görüntü gönder (ekran görüntüleri için ideal!)
-- `telegram_send_document` - 📄 Her türlü dosya gönder (PDF, ZIP, vb.)
-
-**Kullanım:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` ayarlanmalı
+**Kurulum:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_ALLOWED_USER_ID` ayarlanmalı
 
 ---
 
@@ -684,19 +679,13 @@ Tüm diske erişim! Sadece kritik Windows dosyaları korunur.
  4. Dosyayı kapat"
 ```
 
-**Örnek 5: Ekran Görüntüsü + Telegram** ⭐
+**Örnek 5: Medya (Otomatik Teslim)**
 ```
-"GitHub'ın ekran görüntüsünü al ve Telegram'dan bana gönder"
-"Webcam'den fotoğraf çek, Telegram'a yolla"
-"Ses kaydı yap ve Telegram'dan gönder"
+"Masaüstümün ekran görüntüsünü al"
+"Webcam'den fotoğraf çek"
+"10 saniyelik ses kaydı yap"
 ```
-
-**Örnek 6: Medya Yönetimi**
-```
-"1. Webcam'den fotoğraf çek
- 2. Fotoğrafı Telegram'dan gönder
- 3. Aynı fotoğrafı desktop'a kaydet"
-```
+Medya dosyaları otomatik olarak hem web arayüzünde hem de Telegram'da görüntülenir.
 
 ---
 
@@ -745,7 +734,7 @@ pipwin install pyaudio
 │     ▼                   ▼                   ▼              │
 │  ┌───────┐        ┌──────────┐       ┌──────────┐        │
 │  │  LLM  │        │  Memory  │       │  Tools   │        │
-│  │Ollama │        │(Session) │       │ (87+ Adt)│        │
+│  │Ollama │        │(Session) │       │ (77 Adt) │        │
 │  └───────┘        └──────────┘       └──────────┘        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -755,32 +744,24 @@ pipwin install pyaudio
 
 ## 🔒 Güvenlik
 
-### Tek Yasak: Finansal İşlemler
+### 4 Katmanlı Güvenlik Modeli
 
-**Engellenen:**
-- ❌ Kredi kartı işlemleri
-- ❌ Para transferi (havale, EFT, wire)
-- ❌ Ödeme yapma/alma
-- ❌ Satın alma (online checkout)
-- ❌ Bitcoin/kripto transferi
+| Katman | Davranış | Örnekler |
+| ------ | -------- | -------- |
+| **ENGELLENEN** | Her zaman reddedilir | Finansal işlemler (ödeme, transfer, kripto), prompt injection |
+| **TEHLİKELİ** | Kullanıcıdan onay ister | Dosya/dizin silme, process sonlandırma, bilgisayarı kapatma, format/diskpart |
+| **NORMAL** | Loglanır, çalıştırılır | Dosya yazma, shell komutları, otomasyon, yazılım kurma |
+| **GÜVENLİ** | Hemen çalıştırılır | Dosya okuma, sistem bilgisi, screenshot, OCR, web içeriği, ofis belgeleri |
 
-### Serbest Bölge (TAMAMEN AÇIK)
+### Prompt Injection Koruması
 
-**Serbest:**
-- ✅ Dosya silme/formatlama
-- ✅ Kayıt defteri değişikliği
-- ✅ Uygulama kapatma
-- ✅ Bilgisayarı kapatma/yeniden başlatma
-- ✅ Tüm PowerShell/Bash komutları
-- ✅ Ekran/webcam erişimi
-- ✅ Ses kaydı
-- ✅ USB yönetimi
-
-**Prensip:** Kullanıcı kendi bilgisayarında ne isterse yapabilir. Ajan sorgusuz sualsiz yerine getirir.
+- Harici içerikten (web sayfaları, e-postalar, belgeler) gelen talimatlar reddedilir
+- Web içeriği okunduktan sonra yüksek etkili araçlar otomatik engellenir (kullanıcı açıkça istemedikçe)
+- System prompt değiştirilemez header ile korunur
 
 ---
 
-## 📦 Yeni Paketler (87+ Araç İçin)
+## 📦 Yeni Paketler (77 Araç İçin)
 
 ```txt
 # HTTP/Network (Telegram API, Web)
