@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .config import settings
 from .llm import LLMClient, parse_tool_calls
 from .memory import SessionStore
 from .models import ChatMessage
+
+# Media dosya uzantıları
+_MEDIA_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",  # image
+    ".wav", ".mp3", ".ogg", ".m4a", ".flac",           # audio
+    ".mp4", ".avi", ".mkv", ".mov", ".webm",           # video
+}
 from .policy import (
     contains_forbidden_financial_intent,
     is_forbidden_tool_payload,
@@ -24,7 +32,13 @@ class AgentService:
         self.store = store
         self.llm = LLMClient()
 
-    async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str]]:
+    async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
+        """Agent döngüsünü çalıştır.
+
+        Returns:
+            (reply, steps, used_tools, media_files)
+            media_files: Tool'lar tarafından üretilen medya dosyalarının tam yolları.
+        """
         messages = self.store.load(session_id)
         if not messages:
             messages.append(ChatMessage(role="system", content=build_system_prompt()))
@@ -37,7 +51,7 @@ class AgentService:
             messages.append(ChatMessage(role="user", content=user_message))
             messages.append(ChatMessage(role="assistant", content=refusal))
             self.store.save(session_id, messages)
-            return refusal, 0, []
+            return refusal, 0, [], []
 
         messages.append(ChatMessage(role="user", content=user_message))
 
@@ -45,6 +59,7 @@ class AgentService:
         relevant_tools = get_relevant_tools(user_message)
 
         used_tools: List[str] = []
+        media_files: List[str] = []
         steps = 0
         untrusted_content_seen = False
 
@@ -76,7 +91,7 @@ class AgentService:
             messages.append(ChatMessage(role="assistant", content=clean_text or ""))
             if not tool_calls:
                 self.store.save(session_id, messages)
-                return assistant_text.strip() or "(no content)", steps, used_tools
+                return assistant_text.strip() or "(no content)", steps, used_tools, media_files
 
             for call in tool_calls:
                 args = call.arguments
@@ -104,6 +119,8 @@ class AgentService:
                     used_tools.append(call.name)
                     if is_untrusted_content_tool(call.name):
                         untrusted_content_seen = True
+                    # Tool result'ından media dosyalarını topla
+                    self._collect_media(result, media_files)
                     tool_text = serialize_tool_result(result)
                 except Exception as exc:  # noqa: BLE001
                     tool_text = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -119,7 +136,22 @@ class AgentService:
         fallback = "Maksimum adim sinirina ulastim. Gorevi daha kucuk parcalara bolebiliriz."
         messages.append(ChatMessage(role="assistant", content=fallback))
         self.store.save(session_id, messages)
-        return fallback, steps, used_tools
+        return fallback, steps, used_tools, media_files
+
+    @staticmethod
+    def _collect_media(result: Dict, media_files: List[str]) -> None:
+        """Tool result'ından media dosya yollarını topla."""
+        if not isinstance(result, dict) or "error" in result:
+            return
+        # "path" key'inde dosya yolu varsa kontrol et
+        file_path = result.get("path", "")
+        if not file_path:
+            return
+        p = Path(file_path)
+        if p.exists() and p.is_file() and p.suffix.lower() in _MEDIA_EXTENSIONS:
+            abs_path = str(p.resolve())
+            if abs_path not in media_files:
+                media_files.append(abs_path)
 
     # Hermes <tool_call> tag'lerini yakala
     _TOOL_CALL_RE = re.compile(

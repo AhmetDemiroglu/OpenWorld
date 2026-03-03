@@ -96,17 +96,42 @@ from .office_tools import (
 # GELİŞMİŞ DOSYA SİSTEMİ ARAÇLARI - TÜM DİSK ERİŞİMİ
 # =============================================================================
 
+_HOME_DIR = Path.home()
+
+# Kısa yol kısaltmaları → home altındaki gerçek dizinler
+_PATH_SHORTCUTS = {
+    "desktop": _HOME_DIR / "Desktop",
+    "masaustu": _HOME_DIR / "Desktop",
+    "masaüstü": _HOME_DIR / "Desktop",
+    "belgeler": _HOME_DIR / "Documents",
+    "documents": _HOME_DIR / "Documents",
+    "indirilenler": _HOME_DIR / "Downloads",
+    "downloads": _HOME_DIR / "Downloads",
+}
+
+
 def _resolve_path(path: str) -> Path:
     """Genişletilmiş path çözümleyici - tüm diske erişim."""
     if not path or path == ".":
-        return Path.home()
-    
+        return _HOME_DIR
+
+    stripped = path.strip().strip('"').strip("'")
+
+    # Kısa yol kontrolü (ör. "Desktop", "Masaüstü")
+    shortcut = _PATH_SHORTCUTS.get(stripped.lower())
+    if shortcut is not None:
+        return shortcut
+
+    # /tmp/ → C:\tmp (Linux path düzeltme)
+    if stripped.startswith("/tmp"):
+        stripped = "C:\\tmp" + stripped[4:]
+
     # Absolute path kontrolü
-    if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
-        return Path(path).resolve()
-    
+    if stripped.startswith("/") or (len(stripped) > 1 and stripped[1] == ":"):
+        return Path(stripped).resolve()
+
     # Relative path - home directory'den çöz
-    return Path(path).expanduser().resolve()
+    return Path(stripped).expanduser().resolve()
 
 
 def _is_safe_path(path: Path) -> bool:
@@ -2580,7 +2605,13 @@ def get_tool_specs() -> List[Dict[str, Any]]:
 
 def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     if name not in TOOLS:
-        raise ValueError(f"Unknown tool: {name}")
+        # Model'e hangi tool'ların mevcut olduğunu hatırlat
+        available = ", ".join(sorted(TOOLS.keys()))
+        raise ValueError(
+            f"'{name}' adında bir araç mevcut değil. "
+            f"Bu araç kayıtlı değil. Sadece mevcut araçları kullan. "
+            f"Mevcut araçlar: {available}"
+        )
     fn, _ = TOOLS[name]
     return fn(**arguments)
 

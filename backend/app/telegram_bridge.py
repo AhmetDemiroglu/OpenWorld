@@ -73,7 +73,8 @@ def markdown_to_telegram_html(text: str) -> str:
     return text.strip()
 
 
-async def call_agent(session_id: str, text: str) -> str:
+async def call_agent(session_id: str, text: str) -> dict:
+    """Agent API'yi çağır, tam response dict döndür (reply + media)."""
     url = f"http://{settings.host}:{settings.port}/chat"
     payload = {"session_id": session_id, "message": text, "source": "telegram"}
     async with httpx.AsyncClient(timeout=120) as client:
@@ -86,8 +87,7 @@ async def call_agent(session_id: str, text: str) -> str:
             except Exception:  # noqa: BLE001
                 detail = resp.text[:500]
             raise RuntimeError(detail or f"HTTP {resp.status_code}")
-        data = resp.json()
-    return data.get("reply", "")
+        return resp.json()
 
 
 def _is_allowed(update: Update) -> bool:
@@ -113,9 +113,66 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     session_id = f"telegram_{update.effective_user.id}"
     try:
-        reply = await call_agent(session_id, update.message.text)
+        data = await call_agent(session_id, update.message.text)
+        reply = data.get("reply", "")
+        media_list = data.get("media") or []
     except Exception as exc:  # noqa: BLE001
         reply = f"Hata: {exc}"
+        media_list = []
+
+    # Önce medya dosyalarını gönder
+    base_url = f"http://{settings.host}:{settings.port}"
+    for m in media_list:
+        media_url = m.get("url", "")
+        media_type = m.get("type", "")
+        caption = m.get("caption", m.get("filename", ""))
+        try:
+            # Dosyayı API'den indir
+            async with httpx.AsyncClient(timeout=30) as client:
+                file_resp = await client.get(f"{base_url}{media_url}")
+                if file_resp.status_code != 200:
+                    continue
+                file_bytes = file_resp.content
+
+            filename = m.get("filename", "file")
+
+            if media_type == "image":
+                await update.message.reply_photo(
+                    photo=file_bytes,
+                    caption=caption[:1024],
+                    filename=filename,
+                )
+            elif media_type == "audio":
+                await update.message.reply_audio(
+                    audio=file_bytes,
+                    caption=caption[:1024],
+                    filename=filename,
+                )
+            elif media_type == "video":
+                await update.message.reply_video(
+                    video=file_bytes,
+                    caption=caption[:1024],
+                    filename=filename,
+                )
+            else:
+                await update.message.reply_document(
+                    document=file_bytes,
+                    caption=caption[:1024],
+                    filename=filename,
+                )
+        except Exception:  # noqa: BLE001
+            pass  # Medya gönderilemezse text devam etsin
+
+    # Medya linklerini reply'dan temizle (Telegram'da zaten gönderildi)
+    if media_list:
+        # "---\n**Medya Dosyaları:**" ve sonrasını kes
+        separator_idx = reply.find("\n\n---\n**Medya Dosyaları:**")
+        if separator_idx != -1:
+            reply = reply[:separator_idx].strip()
+
+    if not reply.strip():
+        return  # Sadece medya varsa text gönderme
+
     formatted = markdown_to_telegram_html(reply)
     if len(formatted) > 4000:
         formatted = formatted[:4000] + "..."
