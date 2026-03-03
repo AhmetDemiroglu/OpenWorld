@@ -75,7 +75,7 @@ Artık gerçek bir SUPER AGENT'sin. Sadece finansal işlemler yasak - GERİSİ S
 - search_files: Tüm diskte ara
 
 ÖRNEK:
-- "C:\Users'deki tüm PDF'leri listele"
+- "C:\\Users'deki tüm PDF'leri listele"
 - "Masaüstüne rapor.txt oluştur"
 - "Eski dosyaları temizle"
 

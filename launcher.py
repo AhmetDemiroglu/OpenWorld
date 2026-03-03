@@ -369,6 +369,27 @@ class LauncherApp:
         _field(tg, 0, "Bot Token", self.token_var, show="*")
         _field(tg, 1, "Kullan\u0131c\u0131 ID", self.user_id_var)
 
+        # â•â•â• WEB GÃœVENLÄ°ÄÄ° (Gmail'in Ã¼zerine taÅŸÄ±ndÄ±) â•â•â•
+        sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=False)
+        _field(sec, 0, "Domainler", self.web_domains_var)
+        tk.Checkbutton(
+            sec,
+            text="Yerel a\u011f adreslerini engelle",
+            variable=self.web_block_private_var,
+            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
+            activebackground=CARD_BG, activeforeground=TEXT_FG,
+            font=("Segoe UI", 9),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        tk.Checkbutton(
+            sec,
+            text="Shell/Komut arac\u0131n\u0131 etkinle\u015ftir (Geli\u015fmi\u015f eri\u015fim i\u00e7in)",
+            variable=self.enable_shell_var,
+            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
+            activebackground=CARD_BG, activeforeground=TEXT_FG,
+            font=("Segoe UI", 9),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+
         # â•â•â• GMAIL (varsayÄ±lan kapalÄ±) â•â•â•
         gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
@@ -394,53 +415,6 @@ class LauncherApp:
         self._btn(ol_btns, "Client ID Nereden?", self.open_azure_help, bg="#475569").pack(side="left")
         self.outlook_conn_label = tk.Label(ol, textvariable=self.outlook_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
         self.outlook_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-
-        # â•â•â• GMAIL (varsayÄ±lan kapalÄ±) â•â•â•
-        gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
-        _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
-        _field(gm, 1, "Client Secret", self.gmail_client_secret_var, show="*")
-        _field(gm, 2, "Access Token", self.gmail_token_var, show="*")
-        _field(gm, 3, "Refresh Token", self.gmail_refresh_var, show="*")
-        gm_btns = tk.Frame(gm, bg=CARD_BG)
-        gm_btns.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._btn(gm_btns, "OAuth Ba\u011flan", self.connect_gmail_oauth, bg="#2563eb").pack(side="left", padx=(0, 4))
-        self._btn(gm_btns, "Client ID Nereden?", self.open_google_console_help, bg="#475569").pack(side="left")
-        self.gmail_conn_label = tk.Label(gm, textvariable=self.gmail_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
-        self.gmail_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-
-        ol_btns.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._btn(ol_btns, "OAuth Ba\u011flan", self.connect_outlook_oauth, bg="#2563eb").pack(side="left", padx=(0, 4))
-        self._btn(ol_btns, "Client ID Nereden?", self.open_azure_help, bg="#475569").pack(side="left")
-        self.outlook_conn_label = tk.Label(ol, textvariable=self.outlook_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
-        self.outlook_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-
-        # â•â•â• WEB GÃœVENLÄ°ÄÄ° (varsayÄ±lan kapalÄ±) â•â•â•
-        sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=False)
-        _field(sec, 0, "Domainler", self.web_domains_var)
-        tk.Checkbutton(
-            sec,
-            text="Yerel a\u011f adreslerini engelle",
-            variable=self.web_block_private_var,
-            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
-            activebackground=CARD_BG, activeforeground=TEXT_FG,
-            font=("Segoe UI", 9),
-        ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
-
-        tk.Checkbutton(
-            sec,
-            text="Shell/Komut arac\u0131n\u0131 etkinle\u015ftir (Geli\u015fmi\u015f eri\u015fim i\u00e7in)",
-            variable=self.enable_shell_var,
-            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
-            activebackground=CARD_BG, activeforeground=TEXT_FG,
-            font=("Segoe UI", 9),
-        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
-
-        # â•â•â• DURUM â•â•â•
-        status_frame = tk.Frame(sf, bg=BG)
-        status_frame.pack(fill="x", padx=14, pady=(6, 10))
-        tk.Label(status_frame, textvariable=self.status_var, fg="#93c5fd", bg=CARD_BG,
-                 font=("Consolas", 9), anchor="w", padx=10, pady=8).pack(fill="x")
-        self._update_connection_badges()
 
     def _btn(self, parent: tk.Widget, text: str, command, bg: str = "#2563eb") -> tk.Button:
         return tk.Button(parent, text=text, command=command, bg=bg, fg="white", bd=0, padx=10, pady=6,
@@ -807,11 +781,30 @@ class LauncherApp:
         def _job() -> None:
             self._append_status("Kurulum ba\u015fl\u0131yor...")
             ps = ROOT / "scripts" / "setup.ps1"
-            proc = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)], cwd=str(ROOT), text=True)
+            
+            # Canl\u0131 \u00e7\u0131kt\u0131 i\u00e7in Popen kullan
+            proc = subprocess.Popen(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # \u00c7\u0131kt\u0131lar\u0131 anl\u0131k oku
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    self._append_status(line)
+            
+            proc.wait()
+            
             if proc.returncode == 0:
-                self._append_status("Kurulum tamamland\u0131.")
+                self._append_status("Kurulum tamamland\u0131!")
             else:
-                self._append_status("Kurulum hatas\u0131. Loglar\u0131 kontrol edin.")
+                self._append_status("Kurulum hatas\u0131! Loglar\u0131 kontrol edin.")
 
         self._run_bg(_job)
 
@@ -898,7 +891,8 @@ print("ok")
         def _job() -> None:
             self.save_env()
             if not VENV_PYTHON.exists():
-                self._append_status("\u00d6nce Kurulum \u00e7al\u0131\u015ft\u0131r\u0131n")
+                self._append_status("HATA: Python sanal ortam bulunamad\u0131!")
+                self._append_status("L\u00fctfen [Kurulum] butonuna t\u0131klay\u0131n")
                 return
 
             LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -907,8 +901,9 @@ print("ok")
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-            backend_out = open(LOG_DIR / "backend.out.log", "a", encoding="utf-8")
-            backend_err = open(LOG_DIR / "backend.err.log", "a", encoding="utf-8")
+            self._append_status("Backend ba\u015flat\u0131l\u0131yor...")
+            backend_out = open(LOG_DIR / "backend.out.log", "w", encoding="utf-8")
+            backend_err = open(LOG_DIR / "backend.err.log", "w", encoding="utf-8")
             self.backend_proc = subprocess.Popen(
                 [str(VENV_PYTHON), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=str(BACKEND_DIR),
@@ -931,11 +926,29 @@ print("ok")
             )
             telegram_out.close()
             telegram_err.close()
-            time.sleep(2)
+            time.sleep(3)
             if self._is_port_open(8000):
                 self._append_status("Servisler ba\u015flat\u0131ld\u0131. UI: http://127.0.0.1:8000")
             else:
-                self._append_status("Backend a\u00e7\u0131lamad\u0131. data/logs/backend.err.log dosyas\u0131n\u0131 kontrol edin.")
+                self._append_status("HATA: Backend ba\u015flat\u0131lamad\u0131!")
+                # Log dosyas\u0131n\u0131 oku ve g\u00f6ster
+                try:
+                    err_log = LOG_DIR / "backend.err.log"
+                    if err_log.exists():
+                        log_content = err_log.read_text(encoding="utf-8", errors="ignore")
+                        if log_content:
+                            # Son 500 karakteri g\u00f6ster
+                            last_error = log_content[-500:]
+                            self._append_status("Son hata:")
+                            for line in last_error.split("\n"):
+                                if line.strip():
+                                    self._append_status("  > " + line.strip()[:100])
+                        else:
+                            self._append_status("Log dosyas\u0131 bo\u015f. Python hatas\u0131 olabilir.")
+                    else:
+                        self._append_status("Log dosyas\u0131 bulunamad\u0131.")
+                except Exception as e:
+                    self._append_status(f"Log okuma hatas\u0131: {e}")
 
         self._run_bg(_job)
 
