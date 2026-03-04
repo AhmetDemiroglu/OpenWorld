@@ -219,6 +219,7 @@ class LauncherApp:
         self.owner_name_var = tk.StringVar(value="Ahmet")
         self.owner_profile_var = tk.StringVar(value="Teknoloji, otomasyon, urun gelistirme")
         self.web_domains_var = tk.StringVar(value="")
+        self.web_allow_internet_var = tk.BooleanVar(value=True)  # Internet baglantisi acik/kapali
         self.web_block_private_var = tk.BooleanVar(value=False)  # Yerel ağ erişimine izin ver
         self.enable_shell_var = tk.BooleanVar(value=True)  # Shell tool varsayılan açık
 
@@ -371,19 +372,28 @@ class LauncherApp:
 
         # â•â•â• WEB GÃœVENLÄ°ÄÄ° (Gmail'in Ã¼zerine taÅŸÄ±ndÄ±) â•â•â•
         sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=False)
-        _field(sec, 0, "Domainler", self.web_domains_var)
+        _field(sec, 0, "\u0130zin Verilen Domainler", self.web_domains_var, hint="Bo\u015f b\u0131rak\u0131rsan\u0131z t\u00fcm internete ula\u015fabilir (Örn: github.com)")
         tk.Checkbutton(
             sec,
-            text="Yerel a\u011f adreslerini engelle",
-            variable=self.web_block_private_var,
+            text="\u0130nternete Ba\u011flan (\u0130\u015faretli de\u011filse ajan tamamen \u00c7evrimd\u0131\u015f\u0131/Offline \u00e7al\u0131\u015f\u0131r, hi\u00e7bir a\u011f \u00e7a\u011fr\u0131s\u0131 yapamaz)",
+            variable=self.web_allow_internet_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 9, "bold"),
         ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
 
         tk.Checkbutton(
             sec,
-            text="Shell/Komut arac\u0131n\u0131 etkinle\u015ftir (Geli\u015fmi\u015f eri\u015fim i\u00e7in)",
+            text="Yerel A\u011f / Modem Korumas\u0131 (Ajan\u0131n modem aray\u00fcz\u00fcne veya yerel a\u011f cihazlar\u0131na eri\u015fmesini engeller)",
+            variable=self.web_block_private_var,
+            fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
+            activebackground=CARD_BG, activeforeground=TEXT_FG,
+            font=("Segoe UI", 9),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+
+        tk.Checkbutton(
+            sec,
+            text="Shell/Terminal Komut Arac\u0131 (\u0130\u015faretli de\u011filse ajan bilgisayar\u0131nda powershell/cmd komutlar\u0131 \u00e7al\u0131\u015ft\u0131ramaz)",
             variable=self.enable_shell_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
@@ -440,6 +450,18 @@ class LauncherApp:
 
     def _run_bg(self, fn) -> None:
         threading.Thread(target=fn, daemon=True).start()
+
+    def _build_runtime_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        data_root = (ROOT / "data").resolve()
+        sessions_root = (data_root / "sessions").resolve()
+        env["WORKSPACE_ROOT"] = str(data_root)
+        env["SESSIONS_DIR"] = str(sessions_root)
+        env["DATA_DIR"] = str(data_root)
+        # Unicode path/icerik bozulmalarini azalt.
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
 
     def _kill_existing_openworld_processes(self) -> None:
         cmd = (
@@ -521,7 +543,8 @@ class LauncherApp:
         self.model_var.set(env_map.get("OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"))
         self.gguf_var.set(env_map.get("LLAMA_MODEL_PATH", "../models/Qwen3.5-9B-Q4_K_M.gguf"))
         self.web_domains_var.set(env_map.get("WEB_ALLOWED_DOMAINS", ""))
-        self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "false").strip().lower() == "true")
+        self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "true").strip().lower() == "true")
+        self.web_allow_internet_var.set(env_map.get("WEB_ALLOW_INTERNET", "true").strip().lower() == "true")
         self.enable_shell_var.set(env_map.get("ENABLE_SHELL_TOOL", "true").strip().lower() == "true")
         self.owner_name_var.set(env_map.get("OWNER_NAME", "Ahmet"))
         self.owner_profile_var.set(env_map.get("OWNER_PROFILE", "Teknoloji, otomasyon, urun gelistirme"))
@@ -570,6 +593,7 @@ class LauncherApp:
             "LLAMA_MODEL_PATH": self.gguf_var.get().strip() or "../models/Qwen3.5-9B-Q4_K_M.gguf",
             "WEB_ALLOWED_DOMAINS": self.web_domains_var.get().strip(),
             "WEB_BLOCK_PRIVATE_HOSTS": "true" if self.web_block_private_var.get() else "false",
+            "WEB_ALLOW_INTERNET": "true" if self.web_allow_internet_var.get() else "false",
             "ENABLE_SHELL_TOOL": "true" if self.enable_shell_var.get() else "false",
             "OWNER_NAME": self.owner_name_var.get().strip() or "Ahmet",
             "OWNER_PROFILE": self.owner_profile_var.get().strip() or "Teknoloji, otomasyon, urun gelistirme",
@@ -883,6 +907,7 @@ print("ok")
             self._kill_existing_openworld_processes()
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            runtime_env = self._build_runtime_env()
 
             self._append_status("Backend ba\u015flat\u0131l\u0131yor...")
             backend_out = open(LOG_DIR / "backend.out.log", "w", encoding="utf-8")
@@ -890,6 +915,7 @@ print("ok")
             self.backend_proc = subprocess.Popen(
                 [str(VENV_PYTHON), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=str(BACKEND_DIR),
+                env=runtime_env,
                 stdout=backend_out,
                 stderr=backend_err,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
@@ -902,6 +928,7 @@ print("ok")
             self.telegram_proc = subprocess.Popen(
                 [str(VENV_PYTHON), "-m", "app.telegram_bridge"],
                 cwd=str(BACKEND_DIR),
+                env=runtime_env,
                 stdout=telegram_out,
                 stderr=telegram_err,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,

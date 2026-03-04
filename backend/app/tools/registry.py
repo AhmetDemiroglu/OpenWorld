@@ -919,6 +919,8 @@ def _host_resolves_to_private(hostname: str) -> bool:
 
 
 def _validate_web_url(url: str) -> None:
+    if not settings.web_allow_internet:
+        raise ValueError("Agent offline modda calisiyor. Internet istekleri engellendi.")
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("Only http/https URLs are allowed.")
@@ -1068,6 +1070,8 @@ def _parse_news_items_from_rss(xml_text: str, limit: int, max_age_hours: int = 4
 
 
 def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str, Any]:
+    if not settings.web_allow_internet:
+        return {"error": "Agent offline modda calisiyor. Internet istekleri engellendi."}
     safe_query = _normalize_news_query(query)
     lim = max(1, min(limit, 20))
 

@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     allow_full_disk_access: bool = False
     fs_allowed_roots: str = ""
 
+    web_allow_internet: bool = True
     web_allowed_domains: str = ""
-    web_block_private_hosts: bool = False
+    web_block_private_hosts: bool = True
 
     block_financial_operations: bool = True
 

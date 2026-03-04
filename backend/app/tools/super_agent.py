@@ -106,6 +106,8 @@ def _host_resolves_to_private(hostname: str) -> bool:
 
 
 def _validate_web_url(url: str) -> None:
+    if not settings.web_allow_internet:
+        raise ValueError("Agent offline modda calisiyor. Internet istekleri engellendi.")
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("Only http/https URLs are allowed.")

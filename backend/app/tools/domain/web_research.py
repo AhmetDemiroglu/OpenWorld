@@ -23,6 +23,7 @@ import httpx
 from app.config import settings
 from app.secrets import decrypt_text
 from app.database import memory_store, memory_recall, get_tool_stats
+from app.tools.registry import _validate_web_url, _normalize_news_query, _parse_news_items_from_rss
 
 import logging
 import asyncio
@@ -40,6 +41,8 @@ from datetime import datetime
 
 
 def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str, Any]:
+    if not settings.web_allow_internet:
+        return {"error": "Agent offline modda calisiyor. Internet istekleri engellendi."}
     safe_query = _normalize_news_query(query)
     lim = max(1, min(limit, 20))
 

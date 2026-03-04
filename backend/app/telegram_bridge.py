@@ -156,18 +156,16 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     if any(p in text_lower for p in ["devam et", "not defter", "rapora devam", "raporuna devam"]):
         return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
     
-    # MASAUSTU OTOMASYON: VS Code, Codex, adim adim GUI islemleri (3 dakika)
+    # MASAUSTU OTOMASYON: VS Code, Codex (30 saniye yeterli)
     automation_patterns = [
         "vscode", "vs code", "codex", "copilot",
-        "klasor ac", "programi ac",
-        "uygulamayi ac",
+        "programi ac", "uygulamayi ac",
         "tikla", "yaz ve", "bul ve",
-        "masaustu",
     ]
     if any(p in text_lower for p in automation_patterns) and any(
         p in text_lower for p in ["ac", "bul", "yaz", "tikla", "gir", "git"]
     ):
-        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+        return httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
     
     # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
     research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",

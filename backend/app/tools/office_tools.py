@@ -688,11 +688,29 @@ def tool_open_in_vscode(path: str, wait: bool = False) -> Dict[str, Any]:
             return {"error": "Dosya veya klasör bulunamadı", "path": str(target)}
         
         # VS Code'u aç
-        cmd = ["code", str(target)]
-        if wait:
-            cmd.append("--wait")
-        
-        subprocess.Popen(cmd, shell=False)
+        code_cmd = shutil.which("code") or shutil.which("code-insiders")
+        if code_cmd:
+            cmd = [code_cmd, str(target)]
+            if wait:
+                cmd.append("--wait")
+            subprocess.Popen(cmd, shell=False)
+        else:
+            candidates = [
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code", "Code.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
+                os.path.join(os.environ.get("ProgramFiles", ""), "Microsoft VS Code", "Code.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Microsoft VS Code", "Code.exe"),
+            ]
+            code_exe = next((c for c in candidates if c and Path(c).exists()), "")
+            if not code_exe:
+                return {
+                    "error": "VS Code komutu bulunamadi",
+                    "note": "code/code-insiders PATH'te degil. VS Code veya VS Code Insiders kurulumunu/PATH ayarini kontrol edin.",
+                }
+            cmd = [code_exe, str(target)]
+            if wait:
+                cmd.append("--wait")
+            subprocess.Popen(cmd, shell=False)
         
         return {
             "success": True,
