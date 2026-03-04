@@ -17,6 +17,7 @@ from .secrets import decrypt_text
 
 _LOCK_PATH = settings.data_path / "telegram_bridge.lock"
 _LOCK_FD: int | None = None
+_TIMEOUT_NOTEBOOK_HINT_CACHE: dict[str, str] = {}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -113,9 +114,27 @@ def markdown_to_telegram_html(text: str) -> str:
     return text.strip()
 
 
+def _normalize_tr(text: str) -> str:
+    tr_map = {
+        0x00E7: "c",  # ç
+        0x011F: "g",  # ğ
+        0x0131: "i",  # ı
+        0x00F6: "o",  # ö
+        0x015F: "s",  # ş
+        0x00FC: "u",  # ü
+        0x00C7: "c",  # Ç
+        0x011E: "g",  # Ğ
+        0x0130: "i",  # İ
+        0x00D6: "o",  # Ö
+        0x015E: "s",  # Ş
+        0x00DC: "u",  # Ü
+    }
+    return (text or "").lower().translate(tr_map)
+
+
 def _get_timeout_for_request(text: str) -> httpx.Timeout:
     """İstek turune gore timeout belirle."""
-    text_lower = text.lower()
+    text_lower = _normalize_tr(text)
     
     # GORSEL ISLEME: OCR + analiz uzun surebilir (3 dakika)
     if "gorsel" in text_lower or "[kullanici bir gorsel" in text_lower:
@@ -124,29 +143,29 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     # HIZLI ISLEMLER: Direkt calisir, kisa timeout yeterli
     fast_patterns = [
         "ekran goruntusu", "screenshot", "desktop", "masaustu",
-        "webcam", "web cam", "kamera", "fotograf cek", "fotoğraf çek", 
-        "selfie", "anlik foto", "anılık foto", "camera",
-        "ses kaydet", "ses kaydı", "mikrofon", "audio record", "voice record",
-        "video kaydet", "video çek", "webcam video"
+        "webcam", "web cam", "kamera", "fotograf cek",
+        "selfie", "anlik foto", "camera",
+        "ses kaydet", "ses kaydi", "mikrofon", "audio record", "voice record",
+        "video kaydet", "video cek", "webcam video"
     ]
     if any(p in text_lower for p in fast_patterns):
         # Hizli islemler (screenshot, webcam, ses) 15sn icinde biter
         return httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
     
     # NOTEBOOK DEVAM ETME: Cok uzun surebilir (5 dakika)
-    if any(p in text_lower for p in ["devam", "not defter", "rapora devam"]):
+    if any(p in text_lower for p in ["devam et", "not defter", "rapora devam", "raporuna devam"]):
         return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
     
     # MASAUSTU OTOMASYON: VS Code, Codex, adim adim GUI islemleri (3 dakika)
     automation_patterns = [
         "vscode", "vs code", "codex", "copilot",
-        "klasor ac", "klasörü aç", "programi ac", "programı aç",
-        "uygulamayi ac", "uygulamayı aç",
-        "tikla", "tıkla", "yaz ve", "bul ve",
-        "masaustu", "masaüstü",
+        "klasor ac", "programi ac",
+        "uygulamayi ac",
+        "tikla", "yaz ve", "bul ve",
+        "masaustu",
     ]
     if any(p in text_lower for p in automation_patterns) and any(
-        p in text_lower for p in ["ac", "aç", "bul", "yaz", "tikla", "tıkla", "gir", "git"]
+        p in text_lower for p in ["ac", "bul", "yaz", "tikla", "gir", "git"]
     ):
         return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
     
@@ -184,33 +203,18 @@ async def call_agent(session_id: str, text: str) -> dict:
                 raise RuntimeError(detail)
             return resp.json()
     except httpx.TimeoutException as exc:
-        # Timeout turune gore mesaj
-        text_lower = text.lower()
-        if "gorsel" in text_lower or "[kullanici bir gorsel" in text_lower:
-            raise RuntimeError(
-                "Gorsel analizi zaman asimina ugradi (5dk). Gorsel cok buyuk olabilir veya "
-                "sistem yogun. Lutfen tekrar deneyin veya gorseli daha kucuk boyutta gonderin."
-            ) from exc
-        elif "devam" in text_lower or "not defter" in text_lower:
-            raise RuntimeError(
-                "Notebook devam islemi zaman asimina ugradi (5dk). "
-                "Sistem cok yavas calisiyor olabilir. Lutfen biraz bekleyip tekrar 'devam et' yazin. "
-                "Not defteri kaydedildi, veri kaybi yok."
-            ) from exc
-        elif any(p in text_lower for p in ["arastir", "rapor", "detayli"]):
-            raise RuntimeError(
-                "Arastirma zaman asimina ugradi (5dk) ancak not defterine kaydedildi. "
-                "'Devam et' yazarak kaldigim yerden devam edebilirim."
-            ) from exc
-        elif any(p in text_lower for p in ["vscode", "vs code", "codex", "copilot", "ac", "aç"]):
-            raise RuntimeError(
-                "Masaustu otomasyon islemi zaman asimina ugradi (3dk). "
-                "Bu tur cok adimli islemler bazen uzun surebilir. Lutfen tekrar deneyin."
-            ) from exc
-        else:
-            raise RuntimeError(
-                "Islem zaman asimina ugradi. Lutfen tekrar deneyin."
-            ) from exc
+        # Genel timeout mesaji
+        raise RuntimeError(
+            "Islem zaman asimina ugradi (3 dakika).\n\n"
+            "Olası nedenler:\n"
+            "- Cok karmasik bir islem istediniz\n"
+            "- Sistem yogun\n"
+            "- LLM yavas yanit veriyor\n\n"
+            "Oneriler:\n"
+            "1. Daha kisa ve net komutlar kullanin\n"
+            "2. Islemi parcalara bolun\n"
+            "3. Biraz bekleyip tekrar deneyin"
+        ) from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(str(exc).strip() or exc.__class__.__name__) from exc
 
@@ -309,8 +313,8 @@ async def _process_image_with_ocr(image_bytes: bytes, caption: str = "") -> str:
         return visual_context
 
 
-async def _check_incomplete_notebooks(session_id: str) -> Optional[str]:
-    """Yarim kalan notebook var mi kontrol et, devam mesaji dondur."""
+async def _check_incomplete_notebooks(session_id: str) -> Optional[tuple[str, str]]:
+    """Yarim kalan notebook var mi kontrol et; (signature, mesaj) dondur."""
     try:
         from .tools.notebook_tools import tool_notebook_list
         result = tool_notebook_list()
@@ -319,11 +323,15 @@ async def _check_incomplete_notebooks(session_id: str) -> Optional[str]:
         incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
         if incomplete:
             latest = incomplete[0]  # En sonuncu
-            return (
+            name = str(latest.get("name", "")).strip()
+            progress = str(latest.get("progress", "-")).strip()
+            signature = f"{name}|{progress}"
+            message = (
                 f"\n\n💡 **Yarim kalan isiniz var:** `{latest['name']}`\n"
                 f"İlerleme: {latest['progress']}\n"
                 f"Devam etmek icin: \"{latest['name']} raporuna devam et\" yazabilirsiniz."
             )
+            return signature, message
     except:
         pass
     return None
@@ -439,21 +447,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             notebook_msg = await _check_incomplete_notebooks(session_id)
             
             if notebook_msg:
-                # Notebook var - gercekten kaydedildi
+                signature, hint_text = notebook_msg
+                should_show_hint = _TIMEOUT_NOTEBOOK_HINT_CACHE.get(session_id) != signature
+                _TIMEOUT_NOTEBOOK_HINT_CACHE[session_id] = signature
                 timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
-                timeout_msg += "Bu tur kapsamli istekler icin:\n"
-                timeout_msg += "1️⃣ Not defterine kaydedildi ✅\n"
-                timeout_msg += "2️⃣ Bir sonraki mesajinizda kaldigim yerden devam edecegim\n"
-                timeout_msg += "3️⃣ Veya \"rapora devam et\" yazabilirsiniz\n\n"
-                timeout_msg += notebook_msg
+                timeout_msg += "Sistem o an yogun olabilir. Ayni komutu tekrar deneyin."
+                if should_show_hint:
+                    timeout_msg += hint_text
             else:
                 # Notebook yok - kaydedilemedi
                 timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
                 timeout_msg += "Maalesef islem cok uzun surdu ve tamamlanamadi.\n"
-                timeout_msg += "Lutfen daha kucuk parcalar halinde istekte bulunun:\n"
-                timeout_msg += "- Once 'Irak-Iran petrolu hakkinda kisa bilgi ver'\n"
-                timeout_msg += "- Sonra 'Petrol fiyatlarina etkisini anlat'\n\n"
-                timeout_msg += "💡 Alternatif: Not defteri olusturup adim adim ilerleyebiliriz."
+                timeout_msg += "Lutfen komutu tekrar deneyin veya daha kisa adimlara bolun."
             
             reply = timeout_msg
         elif "ConnectError" in exc_type or "ConnectionRefused" in exc_type:

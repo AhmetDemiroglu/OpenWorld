@@ -3983,68 +3983,14 @@ def _normalize_execute_arguments(name: str, arguments: Dict[str, Any], fn: Calla
 
 
 def get_relevant_tools(user_message: str) -> List[Dict[str, Any]]:
-    """Kullanici mesaji icin ilgili tool spec'lerini dondur."""
-    if not user_message:
+    """Kullanici mesaji icin alan adindaki semantik analizi kullanarak ilgili tool spec'lerini dondur."""
+    try:
+        from app.semantic_router import get_semantic_tools
+        return get_semantic_tools(user_message, top_k=MAX_TOOLS_PER_REQUEST)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Semantic router failed: {e}")
         return [TOOLS[name][1] for name in DEFAULT_TOOL_NAMES if name in TOOLS][:MAX_TOOLS_PER_REQUEST]
-
-    msg_lower = user_message.lower()
-    msg_tokens = set(re.findall(r"[a-z0-9_ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼]+", msg_lower))
-
-    matched_categories: set[str] = set()
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        for keyword in keywords:
-            kw = keyword.lower()
-            if " " in kw:
-                matched = kw in msg_lower
-            elif len(kw) <= 3:
-                # Kisa anahtar kelimeler (sil, cal, vb.) yalnizca token-eslesme ile.
-                matched = kw in msg_tokens
-            else:
-                # Ek almis token'lari da yakala: mail -> maillerim, kamera -> kamerayi
-                matched = kw in msg_tokens or any(token.startswith(kw) for token in msg_tokens)
-            if matched:
-                matched_categories.add(category)
-                break
-
-    explicit_tool_names: List[str] = [
-        name
-        for name in TOOLS
-        if re.search(rf"\b{re.escape(name.lower())}\b", msg_lower)
-    ]
-
-    matched_categories.add("core")
-
-    if len(matched_categories) == 1 and not explicit_tool_names:
-        return [TOOLS[name][1] for name in DEFAULT_TOOL_NAMES if name in TOOLS][:MAX_TOOLS_PER_REQUEST]
-
-    tool_names: List[str] = []
-    seen: set[str] = set()
-
-    def add_tool(name: str) -> None:
-        if name in TOOLS and name not in seen:
-            tool_names.append(name)
-            seen.add(name)
-
-    for name in TOOL_CATEGORIES.get("core", []):
-        add_tool(name)
-
-    for name in explicit_tool_names:
-        add_tool(name)
-
-    for category in TOOL_CATEGORIES.keys():
-        if category == "core":
-            continue
-        if category not in matched_categories:
-            continue
-        for name in TOOL_CATEGORIES.get(category, []):
-            add_tool(name)
-
-    if len(tool_names) < 8:
-        for name in DEFAULT_TOOL_NAMES:
-            add_tool(name)
-
-    return [TOOLS[name][1] for name in tool_names[:MAX_TOOLS_PER_REQUEST]]
-
 
 def get_tool_specs() -> List[Dict[str, Any]]:
     """Tum tool spec'lerini dondur (fallback)."""

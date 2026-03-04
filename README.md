@@ -65,14 +65,12 @@ Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **otoma
 - Telegram'da: Medya dosyaları otomatik olarak gönderilir
 - Tüm medya `data/media/` klasöründe tek yerde saklanır
 
-### 🧠 Akıllı Tool Seçimi
+### 🧠 Akıllı Tool Seçimi (NLP Semantic Routing)
 
-95+ aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajındaki anahtar kelimeler analiz edilerek **en fazla 20 ilgili araç** seçilir:
+95+ aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajı `sentence-transformers` (all-MiniLM-L6-v2) kullanılarak vektörlere dönüştürülür ve cosine similarity ile **en ilgili maksimum 15-20 araç** dinamik olarak seçilir:
 
-- "ekran görüntüsü al" → core + screen kategorisi (~21 araç)
-- "PDF oku" → core + file + office kategorisi
-- "haber ara" → core + web kategorisi
-- Eşleşme yoksa → tüm araçlar (fallback)
+- "ekran görüntüsünü OCR ile oku" → `screenshot_desktop`, `ocr_image` vb. anlamsal olarak yüksek puan alan araçlar LLM'e sunulur.
+- Vektör tabanlı bu NLP Intent Filtering sayesinde LLM context penceresi şişmez ve token tasarrufu sağlanır.
 
 ### ⚡ Hızlı Mod (Düşünme Yok)
 
@@ -744,6 +742,8 @@ BG_WEATHER_CITY=Izmir          # Hava durumu şehri
 BG_CUSTOM_ALERTS=              # Özel aramalar (virgülle ayrılmış)
 ```
 
+**Arka Plan Motoru:** Arka plan servisleri artık `APScheduler` ile kurumsal standartlarda, thread-blocking yaratmadan Cron-benzeri çalışır. Durumlar `SQLite` tabanlarına (örn. `email_seen_log`, `smart_assistant_state`) kaydedilir.
+
 **Durum Kontrolü:**
 ```
 GET http://127.0.0.1:8000/services/status
@@ -842,17 +842,18 @@ pipwin install pyaudio
 │                                                 │           │
 │                         ┌───────────────────────┘           │
 │                         ▼                                   │
-│                ┌──────────────────┐                        │
-│                │   Agent Core     │                        │
-│                └────────┬─────────┘                        │
+│                ┌──────────────────┐    ┌─────────────────┐ │
+│                │   Agent Core     │◄──►│ APScheduler     │ │
+│                │ (Semantic Router)│    │ (BG Services)   │ │
+│                └────────┬─────────┘    └─────────────────┘ │
 │                         │                                   │
 │     ┌───────────────────┼───────────────────┐              │
 │     ▼                   ▼                   ▼              │
-│  ┌───────┐        ┌──────────┐       ┌──────────┐        │
-│  │  LLM  │        │  Memory  │       │  Tools   │        │
-│  │Ollama │        │(Session+ │       │ (95+ Adt)│        │
-│  │        │        │ Notebook)│       │          │        │
-│  └───────┘        └──────────┘       └──────────┘        │
+│  ┌───────┐        ┌───────────┐      ┌──────────┐        │
+│  │  LLM  │        │  Memory   │      │  Tools   │        │
+│  │Ollama │        │(SQLite +  │      │ (Domains:│        │
+│  │       │        │ ChromaDB) │      │ web, sys)│        │
+│  └───────┘        └───────────┘      └──────────┘        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -898,8 +899,14 @@ pipwin install pyaudio
 ## 📦 Bağımlılıklar
 
 ```txt
-# HTTP/Network (Telegram API, Web)
-httpx, aiohttp
+# HTTP/Network/API
+fastapi, uvicorn, httpx, aiohttp
+
+# Arka Plan Servisleri & DB
+apscheduler, sqlite3
+
+# Memory & NLP Intent Router
+chromadb, sentence-transformers
 
 # Ekran/Otomasyon
 pillow, selenium, webdriver-manager, playwright, pyautogui

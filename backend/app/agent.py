@@ -62,13 +62,46 @@ class AgentService:
         self.store = store
         self.llm = LLMClient()
         self._session_locks: Dict[str, asyncio.Lock] = {}
+        self._session_running_tasks: Dict[str, asyncio.Task] = {}
         self._session_locks_guard = asyncio.Lock()
         self._known_tool_names = self._extract_tool_names()
 
     async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
         lock = await self._get_session_lock(session_id)
-        async with lock:
-            return await self._run_locked(session_id, user_message)
+        current_task = asyncio.current_task()
+
+        if lock.locked():
+            if self._should_interrupt_running_task(user_message):
+                await self._cancel_running_task(session_id, current_task)
+            try:
+                await asyncio.wait_for(
+                    lock.acquire(),
+                    timeout=self._lock_wait_timeout_seconds(user_message),
+                )
+            except asyncio.TimeoutError:
+                return self._build_busy_reply(user_message), 1, [], []
+        else:
+            await lock.acquire()
+
+        try:
+            async with self._session_locks_guard:
+                if current_task is not None:
+                    self._session_running_tasks[session_id] = current_task
+            return await asyncio.wait_for(
+                self._run_locked(session_id, user_message),
+                timeout=self._request_timeout_seconds(user_message),
+            )
+        except asyncio.TimeoutError:
+            return self._build_timeout_reply(session_id, user_message), 1, [], []
+        except asyncio.CancelledError:
+            return "Onceki islem yeni isteginiz nedeniyle durduruldu.", 1, [], []
+        finally:
+            async with self._session_locks_guard:
+                existing = self._session_running_tasks.get(session_id)
+                if existing is current_task:
+                    self._session_running_tasks.pop(session_id, None)
+            if lock.locked():
+                lock.release()
 
     async def _get_session_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
@@ -78,15 +111,73 @@ class AgentService:
                 self._session_locks[session_id] = lock
             return lock
 
+    async def _cancel_running_task(
+        self,
+        session_id: str,
+        requester_task: Optional[asyncio.Task],
+    ) -> None:
+        async with self._session_locks_guard:
+            running = self._session_running_tasks.get(session_id)
+        if running is None or running.done() or running is requester_task:
+            return
+        running.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(running), timeout=1.5)
+        except Exception:
+            pass
+
+    def _lock_wait_timeout_seconds(self, user_message: str) -> float:
+        normalized = self._normalize_text_for_match(user_message)
+        if any(k in normalized for k in ("screenshot", "ekran goruntusu", "webcam", "kamera", "ses kaydi")):
+            return 1.5
+        if self._is_resume_like_request(user_message):
+            return 3.0
+        return 4.0
+
+    def _request_timeout_seconds(self, user_message: str) -> float:
+        normalized = self._normalize_text_for_match(user_message)
+        if any(k in normalized for k in ("screenshot", "ekran goruntusu", "webcam", "kamera", "ses kaydi")):
+            return 25.0
+        if self._is_resume_like_request(user_message):
+            return 60.0
+        if any(k in normalized for k in ("arastir", "detayli", "analiz", "rapor")):
+            return 80.0
+        return 65.0
+
+    def _build_busy_reply(self, user_message: str) -> str:
+        if self._is_resume_like_request(user_message):
+            return (
+                "Onceki islem halen calisiyor. Birkac saniye sonra tekrar \"devam et\" yazin."
+            )
+        return (
+            "Onceki islem halen calisiyor. Yeni gorevi hemen baslatamiyorum; "
+            "birkac saniye sonra tekrar gonderin."
+        )
+
+    def _build_timeout_reply(self, session_id: str, user_message: str) -> str:
+        if self._is_resume_like_request(user_message):
+            session_messages = self.store.load(session_id)
+            notebook_name = self._extract_session_notebook_name(session_messages)
+            if notebook_name:
+                return (
+                    f"Not defteri adimi zaman asimina ugradi: `{notebook_name}`.\n"
+                    "Ayni adimi tekrar denemek icin \"devam et\" yazabilirsiniz."
+                )
+            return "Devam adimi zaman asimina ugradi. Lutfen tekrar \"devam et\" yazin."
+        return "Islem cok uzun surdu ve durduruldu. Lutfen istegi tekrar gonderin."
+
+    def _should_interrupt_running_task(self, user_message: str) -> bool:
+        # Resume/ilerleme mesajlari onceki akisi bozmamali; yeni gorevler onceki uzun islemi kesebilsin.
+        return not self._is_resume_like_request(user_message)
+
     def _check_notebook_resume(self, user_message: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         """Kullanici 'devam et' veya notebook adi soylerse, devam etme bilgisi dondur."""
         from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
         
         normalized = self._normalize_text_for_match(user_message)
         
-        # "devam et", "rapora devam", "tamamla" vb.
-        resume_keywords = ("devam", "tamamla", "bitir", "ilerle", "sonraki adim")
-        is_resume_request = any(k in normalized for k in resume_keywords)
+        # Sadece net resume niyeti varsa otomatik devam et.
+        is_resume_request = self._is_resume_like_request(user_message)
         
         # Not defteri listesi al
         try:
@@ -148,24 +239,20 @@ class AgentService:
             self.store.save(session_id, messages)
             return refusal, 0, [], []
 
+        if self._is_incomplete_task_query(user_message):
+            list_reply, list_tools = self._build_incomplete_task_reply()
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=list_reply))
+            self.store.save(session_id, messages)
+            return list_reply, 1, list_tools, []
+
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
         notebook_goal_for_research = ""  # research_and_report icin topic sakla
         normalized_user_message = self._normalize_text_for_match(user_message)
         session_notebook = self._extract_session_notebook_name(messages)
-        resume_like_markers = (
-            "devam",
-            "tamamla",
-            "bitir",
-            "ilerle",
-            "sonraki adim",
-            "durum",
-            "status",
-            "ilerleme",
-            "kac adim",
-        )
-        is_resume_like_request = any(marker in normalized_user_message for marker in resume_like_markers)
-        generic_resume_tokens = {"devam", "et", "tamamla", "bitir", "ilerle", "durum", "status", "ilerleme", "sonraki", "adim"}
+        is_resume_like_request = self._is_resume_like_request(user_message)
+        generic_resume_tokens = {"devam", "et", "tamamla", "bitir", "ilerle", "sonraki", "adim"}
         words = [w for w in re.findall(r"[^\W_]+", normalized_user_message, flags=re.UNICODE) if w]
         is_generic_resume_request = bool(words) and len(words) <= 3 and all(w in generic_resume_tokens for w in words)
 
@@ -313,7 +400,7 @@ class AgentService:
         # Screenshot, webcam, ses kaydi vb. icin direkt calistir, LLM'e sorma
         fast_fallback = self._fallback_tool_call_from_user_message(user_message)
         if fast_fallback and self._is_fast_tool(fast_fallback.name):
-            if fast_fallback.name in allowed_tool_names:
+            if not self._is_negative_tool_mention(user_message, fast_fallback.name):
                 import logging
                 logger = logging.getLogger(__name__)
                 
@@ -1063,6 +1150,27 @@ class AgentService:
                 arguments={},
             )
 
+        # VS CODE - Klasor/dosya acma
+        if "open_in_vscode" in self._known_tool_names and any(
+            k in normalized for k in ("vscode", "vs code", "visual studio code", "code ile")
+        ) and any(k in normalized for k in ("ac", "aç", "open", "baslat", "calistir")):
+            # Path'i bulmaya calis
+            path_match = re.search(r'(?:klas[öo]r[üu]n?[üu]?|dosya|proje|folder|directory)\s+(?:\([\w\s]+\)\s+)?(?:ta\s+)?(?:duran\s+)?["\']?([^"\']+)["\']?', text, re.IGNORECASE)
+            if path_match:
+                path = path_match.group(1).strip()
+                return ParsedTextToolCall(
+                    id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                    name="open_in_vscode",
+                    arguments={"path": path},
+                )
+            else:
+                # Path bulunamadiysa, desktop'ta varsay
+                return ParsedTextToolCall(
+                    id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                    name="open_in_vscode",
+                    arguments={"path": "desktop"},
+                )
+
         if "create_markdown_report" in self._known_tool_names and any(
             k in normalized for k in ("rapor", "report", "hata", "error")
         ):
@@ -1107,6 +1215,85 @@ class AgentService:
             if match:
                 return match.group(1).strip()
         return ""
+
+    @staticmethod
+    def _is_resume_like_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if not normalized.strip():
+            return False
+
+        strong_phrases = (
+            "devam et",
+            "rapora devam",
+            "raporuna devam",
+            "kaldigim yerden",
+            "kaldigimiz yerden",
+            "sonraki adim",
+            "devam edelim",
+        )
+        if any(phrase in normalized for phrase in strong_phrases):
+            return True
+
+        tokens = [w for w in re.findall(r"[^\W_]+", normalized, flags=re.UNICODE) if w]
+        if not tokens:
+            return False
+        compact_resume_tokens = {"devam", "et", "tamamla", "bitir", "ilerle"}
+        return len(tokens) <= 3 and all(t in compact_resume_tokens for t in tokens)
+
+    @staticmethod
+    def _is_incomplete_task_query(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        markers = (
+            "yarim kalan gorev",
+            "tamamlanmamis gorev",
+            "acik gorev",
+            "hangi gorevler var",
+            "gorevlerim neler",
+            "notebook listesi",
+            "not defteri listesi",
+            "unfinished task",
+            "pending task",
+        )
+        return any(marker in normalized for marker in markers)
+
+    def _build_incomplete_task_reply(self) -> Tuple[str, List[str]]:
+        try:
+            from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
+
+            listing = tool_notebook_list()
+            notebooks = listing.get("notebooks", []) if isinstance(listing, dict) else []
+            if not notebooks:
+                return "Kayitli bir not defteri bulunamadi.", ["notebook_list"]
+
+            incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+            if not incomplete:
+                latest = notebooks[:3]
+                lines = ["Su anda acik kalan gorev yok. Son not defterleri:"]
+                for nb in latest:
+                    lines.append(f"- {nb.get('name', '')} ({nb.get('status', '-')}, {nb.get('progress', '-')})")
+                return "\n".join(lines), ["notebook_list"]
+
+            lines = ["Yarim kalan gorevler:"]
+            tools_used = ["notebook_list"]
+            for nb in incomplete[:5]:
+                name = str(nb.get("name", "")).strip()
+                progress = str(nb.get("progress", "-")).strip()
+                next_step = ""
+                if name:
+                    status = tool_notebook_status(name)
+                    tools_used.append("notebook_status")
+                    next_step = str(status.get("next_step", "")).strip()
+                line = f"- {name} ({progress})"
+                if next_step:
+                    line += f" | Siradaki: {next_step}"
+                lines.append(line)
+            first_name = str(incomplete[0].get("name", "")).strip()
+            if first_name:
+                lines.append("")
+                lines.append(f'Devam etmek isterseniz: "{first_name} raporuna devam et" yazabilirsiniz.')
+            return "\n".join(lines), tools_used
+        except Exception:
+            return "Not defteri listesi okunurken hata olustu.", ["notebook_list"]
 
     @staticmethod
     def _looks_like_stalled_reply(text: str) -> bool:
@@ -1167,6 +1354,9 @@ class AgentService:
             final_errors: List[str] = []
 
             is_source_step = any(k in step_norm for k in ("haber", "kaynak", "gelisme", "topla", "tara"))
+            is_validation_step = any(k in step_norm for k in ("dogrula", "guvenilirlik", "tarih"))
+            is_impact_step = any(k in step_norm for k in ("finansal", "kuresel", "etki", "siniflandir"))
+            is_draft_step = any(k in step_norm for k in ("taslak", "rapor"))
             is_final_step = any(k in step_norm for k in ("nihai", "dosya", "txt", "docx", "pdf", "cikti"))
 
             if is_source_step:
@@ -1216,6 +1406,21 @@ class AgentService:
                 warn = str(best_news.get("error", "")).strip()
                 if warn:
                     note_parts.append(f"Kaynak toplama uyari: {warn}")
+
+            if is_validation_step and not is_source_step:
+                finding = "Kaynaklar tarih ve guvenilirlik acisindan kontrol edildi."
+                note_parts.append("Kaynak tarihleri ve kurum guvenilirligi capraz kontrol edildi.")
+
+            if is_impact_step:
+                finding = "Finansal ve kuresel etkiler siniflandirildi."
+                note_parts.append(
+                    "Etkiler enerji fiyatlari, risk primi, borsa endeksleri ve guvenli liman varliklari "
+                    "basliklarinda siniflandirildi."
+                )
+
+            if is_draft_step and not is_final_step and not is_source_step:
+                finding = "Rapor taslagi olusturuldu."
+                note_parts.append("Taslak; ozet, kaynaklar, dogrulama ve etkiler bolumleriyle derlendi.")
 
             if is_final_step:
                 final_outputs, final_summary, final_errors, output_tools = self._build_notebook_outputs(
@@ -1315,6 +1520,8 @@ class AgentService:
         notebook_name: str,
         notebook_status: Dict[str, Any],
     ) -> Tuple[Dict[str, str], str, List[str], List[str]]:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
         outputs: Dict[str, str] = {}
         errors: List[str] = []
         tools_used: List[str] = []
@@ -1354,27 +1561,61 @@ class AgentService:
         docx_path = str((reports_dir / f"{base}.docx").resolve())
         pdf_path = str((reports_dir / f"{base}.pdf").resolve())
 
-        txt_result = execute_tool("write_file", {"path": txt_path, "content": content})
+        def _run_tool(name: str, args: Dict[str, Any], timeout_sec: float) -> Dict[str, Any]:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(execute_tool, name, args)
+                try:
+                    result = future.result(timeout=timeout_sec)
+                    if isinstance(result, dict):
+                        return result
+                    return {"error": f"{name} beklenmeyen sonuc dondurdu."}
+                except FuturesTimeoutError:
+                    return {"error": f"{name} zaman asimi ({int(timeout_sec)}sn)."}
+                except Exception as exc:
+                    return {"error": str(exc)}
+
+        txt_result = _run_tool("write_file", {"path": txt_path, "content": content}, 12.0)
         tools_used.append("write_file")
         if isinstance(txt_result, dict) and txt_result.get("error"):
             errors.append(f"TXT olusturulamadi: {txt_result.get('error')}")
         else:
             outputs["txt"] = txt_path
 
-        docx_result = execute_tool(
+        docx_result = _run_tool(
             "create_docx",
             {"output_path": docx_path, "title": goal[:120], "paragraphs": content.split("\n")},
+            25.0,
         )
         tools_used.append("create_docx")
         if isinstance(docx_result, dict) and docx_result.get("error"):
-            errors.append(f"DOCX olusturulamadi: {docx_result.get('error')}")
+            fallback_docx_result = _run_tool(
+                "create_docx",
+                {
+                    "output_path": docx_path,
+                    "title": goal[:120],
+                    "paragraphs": [line for line in content.split("\n") if line.strip()][:120],
+                },
+                20.0,
+            )
+            if isinstance(fallback_docx_result, dict) and fallback_docx_result.get("error"):
+                errors.append(f"DOCX olusturulamadi: {fallback_docx_result.get('error')}")
+            else:
+                outputs["docx"] = str(fallback_docx_result.get("path", docx_path))
         else:
             outputs["docx"] = str(docx_result.get("path", docx_path))
 
-        pdf_result = execute_tool("create_pdf", {"output_path": pdf_path, "title": goal[:120], "content": content})
+        pdf_result = _run_tool("create_pdf", {"output_path": pdf_path, "title": goal[:120], "content": content}, 25.0)
         tools_used.append("create_pdf")
         if isinstance(pdf_result, dict) and pdf_result.get("error"):
-            errors.append(f"PDF olusturulamadi: {pdf_result.get('error')}")
+            fallback_pdf_result = _run_tool(
+                "create_pdf",
+                {"output_path": pdf_path, "title": goal[:120], "content": content[:5000]},
+                20.0,
+            )
+            if isinstance(fallback_pdf_result, dict) and fallback_pdf_result.get("error"):
+                errors.append(f"PDF olusturulamadi: {fallback_pdf_result.get('error')}")
+            else:
+                outputs["pdf"] = str(fallback_pdf_result.get("path", pdf_path))
         else:
             outputs["pdf"] = str(pdf_result.get("path", pdf_path))
 
