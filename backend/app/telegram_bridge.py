@@ -137,6 +137,19 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     if any(p in text_lower for p in ["devam", "not defter", "rapora devam"]):
         return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
     
+    # MASAUSTU OTOMASYON: VS Code, Codex, adim adim GUI islemleri (3 dakika)
+    automation_patterns = [
+        "vscode", "vs code", "codex", "copilot",
+        "klasor ac", "klasörü aç", "programi ac", "programı aç",
+        "uygulamayi ac", "uygulamayı aç",
+        "tikla", "tıkla", "yaz ve", "bul ve",
+        "masaustu", "masaüstü",
+    ]
+    if any(p in text_lower for p in automation_patterns) and any(
+        p in text_lower for p in ["ac", "aç", "bul", "yaz", "tikla", "tıkla", "gir", "git"]
+    ):
+        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+    
     # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
     research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
                         "analiz", "research", "report", "pdf olustur", "word olustur"]
@@ -144,8 +157,8 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         # Arastirma icin 5 dakika
         return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
     
-    # STANDART: 1 dakika
-    return httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+    # STANDART: 2 dakika (LLM multi-step cevaplari icin 60sn yetersiz)
+    return httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
 
 
 async def call_agent(session_id: str, text: str) -> dict:
@@ -188,6 +201,11 @@ async def call_agent(session_id: str, text: str) -> dict:
             raise RuntimeError(
                 "Arastirma zaman asimina ugradi (5dk) ancak not defterine kaydedildi. "
                 "'Devam et' yazarak kaldigim yerden devam edebilirim."
+            ) from exc
+        elif any(p in text_lower for p in ["vscode", "vs code", "codex", "copilot", "ac", "aç"]):
+            raise RuntimeError(
+                "Masaustu otomasyon islemi zaman asimina ugradi (3dk). "
+                "Bu tur cok adimli islemler bazen uzun surebilir. Lutfen tekrar deneyin."
             ) from exc
         else:
             raise RuntimeError(

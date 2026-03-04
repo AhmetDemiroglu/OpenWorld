@@ -73,6 +73,18 @@ def init_database() -> None:
                     value TEXT NOT NULL,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS smart_assistant_state (
+                    feature_key TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS email_seen_log (
+                    message_id TEXT PRIMARY KEY,
+                    subject TEXT,
+                    seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             conn.commit()
         finally:
@@ -371,8 +383,56 @@ def get_preference(key: str, default: str = "") -> str:
 
 
 # =============================================================================
-# JSON → SQLite MİGRASYON
+# SMART ASSISTANT & EMAIL MONITOR PERSISTENCE
 # =============================================================================
+
+def save_assistant_state(feature_key: str, state: Dict[str, Any]) -> None:
+    with _lock:
+        conn = _get_connection()
+        try:
+            state_str = json.dumps(state, ensure_ascii=False)
+            conn.execute(
+                "INSERT OR REPLACE INTO smart_assistant_state (feature_key, state_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (feature_key, state_str),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+def load_assistant_state(feature_key: str) -> Dict[str, Any]:
+    with _lock:
+        conn = _get_connection()
+        try:
+            row = conn.execute("SELECT state_json FROM smart_assistant_state WHERE feature_key = ?", (feature_key,)).fetchone()
+            if row and row["state_json"]:
+                return json.loads(row["state_json"])
+            return {}
+        finally:
+            conn.close()
+
+def mark_email_seen(message_id: str, subject: str) -> None:
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO email_seen_log (message_id, subject) VALUES (?, ?)",
+                (message_id, subject[:200]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+def get_seen_emails(days: int = 7) -> List[Dict[str, str]]:
+    with _lock:
+        conn = _get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT message_id, subject FROM email_seen_log WHERE seen_at >= datetime('now', ?)",
+                (f"-{days} days",)
+            ).fetchall()
+            return [{"id": r["message_id"], "subject": r["subject"]} for r in rows]
+        finally:
+            conn.close()
 
 
 def migrate_json_sessions(json_dir: Path) -> Dict[str, Any]:

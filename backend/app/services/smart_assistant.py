@@ -16,20 +16,18 @@ from urllib.parse import quote_plus
 import httpx
 
 from ..config import settings
-from .email_monitor import _send_telegram, _load_json, _save_json
+from .email_monitor import _send_telegram
+from ..database import save_assistant_state, load_assistant_state
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR = settings.data_path / "smart_assistant"
-_STATE_FILE = _DATA_DIR / "state.json"
-
 
 def _load_state() -> Dict[str, Any]:
-    return _load_json(_STATE_FILE, {})
+    return load_assistant_state("smart_assistant_main")
 
 
 def _save_state(state: Dict[str, Any]) -> None:
-    _save_json(_STATE_FILE, state)
+    save_assistant_state("smart_assistant_main", state)
 
 
 # ---------------------------------------------------------------------------

@@ -35,8 +35,7 @@ from .core.metrics import (
     timer
 )
 from .core.exceptions import OpenWorldException, ToolExecutionError, LLMError
-from .services.email_monitor import EmailMonitor
-from .services.smart_assistant import SmartAssistant
+from .scheduler import start_scheduler, stop_scheduler, bg_services
 
 # Setup structured logging
 logger = setup_logging(
@@ -66,9 +65,9 @@ _MEDIA_TYPE_MAP = {
 }
 
 
-# Background service instances (module-level for status endpoint access)
-_email_monitor = EmailMonitor()
-_smart_assistant = SmartAssistant()
+# Background service instances (now managed by scheduler.py but accessible here for status)
+_email_monitor = bg_services["email_monitor"]
+_smart_assistant = bg_services["smart_assistant"]
 
 
 @asynccontextmanager
@@ -84,17 +83,14 @@ async def lifespan(app: FastAPI):
     sessions = store.list_sessions()
     chat_sessions_active.set(len(sessions))
     
-    # Start background services
-    if settings.bg_email_monitor:
-        await _email_monitor.start()
-    if settings.bg_smart_assistant:
-        await _smart_assistant.start()
+    # Start background services using APScheduler
+    if settings.bg_email_monitor or settings.bg_smart_assistant:
+        start_scheduler()
     
     logger.info(f"OpenWorld started. Sessions: {len(sessions)}")
     yield
     # Shutdown
-    _email_monitor.stop()
-    _smart_assistant.stop()
+    stop_scheduler()
     logger.info("OpenWorld shutting down...")
 
 

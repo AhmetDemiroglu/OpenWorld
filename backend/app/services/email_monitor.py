@@ -18,44 +18,12 @@ import httpx
 
 from ..config import settings
 from ..secrets import decrypt_text
+from ..database import mark_email_seen, get_seen_emails
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Importance levels
-# ---------------------------------------------------------------------------
-CRITICAL = "CRITICAL"
-IMPORTANT = "IMPORTANT"
-NORMAL = "NORMAL"
-SPAM = "SPAM"
-
-_NOTIFY_LEVELS = {CRITICAL, IMPORTANT}
-
-# ---------------------------------------------------------------------------
-# Seen-state persistence
-# ---------------------------------------------------------------------------
-_DATA_DIR = settings.data_path / "email_monitor"
-_SEEN_FILE = _DATA_DIR / "seen_ids.json"
-_SUBJECTS_FILE = _DATA_DIR / "seen_subjects.json"
-_MAX_SEEN_AGE_DAYS = 7
-
-
-def _load_json(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
-
-
-def _save_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Gmail helpers (reuse existing OAuth logic)
 # ---------------------------------------------------------------------------
 
 def _get_secret(plain: str, encrypted: str) -> str:
@@ -158,33 +126,25 @@ def _subject_similarity(a: str, b: str) -> float:
 
 class DuplicateFilter:
     def __init__(self) -> None:
-        self._seen_ids: Dict[str, str] = _load_json(_SEEN_FILE, {})
-        self._seen_subjects: List[Dict[str, str]] = _load_json(_SUBJECTS_FILE, [])
-        self._prune()
+        self._refresh_cache()
 
-    def _prune(self) -> None:
-        cutoff = (datetime.utcnow() - timedelta(days=_MAX_SEEN_AGE_DAYS)).isoformat()
-        self._seen_ids = {k: v for k, v in self._seen_ids.items() if v > cutoff}
-        self._seen_subjects = [s for s in self._seen_subjects if s.get("ts", "") > cutoff]
+    def _refresh_cache(self) -> None:
+        seen = get_seen_emails(days=7)
+        self._seen_ids = {s["id"] for s in seen}
+        self._seen_subjects = [s["subject"] for s in seen]
 
     def is_duplicate(self, mail_id: str, subject: str) -> bool:
         if mail_id in self._seen_ids:
             return True
-        for entry in self._seen_subjects:
-            if _subject_similarity(entry.get("subject", ""), subject) > 0.85:
+        for seen_subj in self._seen_subjects:
+            if _subject_similarity(seen_subj, subject) > 0.85:
                 return True
         return False
 
     def mark_seen(self, mail_id: str, subject: str) -> None:
-        now = datetime.utcnow().isoformat()
-        self._seen_ids[mail_id] = now
-        self._seen_subjects.append({"subject": subject, "ts": now})
-        self._persist()
-
-    def _persist(self) -> None:
-        self._prune()
-        _save_json(_SEEN_FILE, self._seen_ids)
-        _save_json(_SUBJECTS_FILE, self._seen_subjects)
+        self._seen_ids.add(mail_id)
+        self._seen_subjects.append(subject)
+        mark_email_seen(mail_id, subject)
 
 
 # ---------------------------------------------------------------------------

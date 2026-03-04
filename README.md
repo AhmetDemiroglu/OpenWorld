@@ -859,6 +859,17 @@ pipwin install pyaudio
 
 ---
 
+## ⚠️ Bilinen Kısıtlamalar
+
+| Kısıtlama | Açıklama |
+|-----------|----------|
+| **Çok adımlı GUI otomasyonu** | "VS Code'u aç → Codex'i bul → mesaj yaz" gibi zincirleme masaüstü otomasyonları her zaman başarılı olmayabilir. Yerel LLM modelleri (Qwen 9B vb.) bu tür çok adımlı planlamada sınırlıdır; tek adımlık araç çağrıları (screenshot al, dosya oku) çok daha güvenilirdir. |
+| **LLM model kalitesi** | Araç seçimi ve parametre doğruluğu LLM modeline bağlıdır. Daha büyük modeller (70B+) karmaşık görevlerde daha başarılıdır; küçük modeller basit görevler için optimize edilmiştir. |
+| **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Eğer yanıt gelmezse görev zaman aşımına uğramış olabilir — tekrar denenebilir. |
+| **Gmail token yenileme** | Gmail OAuth token'ları periyodik olarak yenilenmeli. Token süresi dolarsa, yenileme otomatik yapılır ama ilk kurulumda manuel OAuth akışı gerekir. |
+
+---
+
 ## 🔒 Güvenlik
 
 ### 4 Katmanlı Güvenlik Modeli

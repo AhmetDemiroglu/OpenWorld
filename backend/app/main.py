@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import logging
 from pathlib import Path
 from typing import List
 
@@ -15,6 +16,8 @@ from .database import init_database, migrate_json_sessions, get_tool_stats
 from .memory import SessionStore
 from .models import ChatRequest, ChatResponse, MediaAttachment
 from .tools.audit import run_tools_audit
+
+logger = logging.getLogger(__name__)
 
 # Veritabanını başlat
 init_database()
@@ -82,6 +85,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     try:
         reply, steps, used_tools, media_files = await agent.run(req.session_id, req.message)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("chat endpoint failed: session_id=%s source=%s", req.session_id, getattr(req, "source", ""))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # Media dosyalarını data/media/ altına kopyala ve URL oluştur

@@ -114,10 +114,6 @@ class AgentService:
                 if incomplete:
                     specific_notebook = incomplete[0]  # En sonuncu
             
-            # 3. Hala yoksa en sonuncuyu al (tamamlanmis olsa bile)
-            if not specific_notebook and notebooks:
-                specific_notebook = notebooks[0]
-            
             if specific_notebook:
                 status = tool_notebook_status(specific_notebook["name"])
                 return (specific_notebook["name"], status)
@@ -130,6 +126,17 @@ class AgentService:
         messages = self.store.load(session_id)
         if not messages:
             messages.append(ChatMessage(role="system", content=build_system_prompt()))
+            # Inject long-term memory context on session initialization
+            try:
+                from .vector_memory import memory_get_context
+                mems = memory_get_context(limit=10)
+                if mems:
+                    mem_blocks = "\n".join(f"- {m}" for m in mems)
+                    mem_sys_msg = f"=== UZUN SURELI HAFIZAN ===\nAsagidaki bilgiler onceki konusmalarindan ogrendiklerin:\n{mem_blocks}\n=========================="
+                    messages.append(ChatMessage(role="system", content=mem_sys_msg))
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to load memory context: {e}")
 
         if contains_forbidden_financial_intent(user_message):
             refusal = (
@@ -144,7 +151,77 @@ class AgentService:
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
         notebook_goal_for_research = ""  # research_and_report icin topic sakla
-        
+        normalized_user_message = self._normalize_text_for_match(user_message)
+        session_notebook = self._extract_session_notebook_name(messages)
+        resume_like_markers = (
+            "devam",
+            "tamamla",
+            "bitir",
+            "ilerle",
+            "sonraki adim",
+            "durum",
+            "status",
+            "ilerleme",
+            "kac adim",
+        )
+        is_resume_like_request = any(marker in normalized_user_message for marker in resume_like_markers)
+        generic_resume_tokens = {"devam", "et", "tamamla", "bitir", "ilerle", "durum", "status", "ilerleme", "sonraki", "adim"}
+        words = [w for w in re.findall(r"[^\W_]+", normalized_user_message, flags=re.UNICODE) if w]
+        is_generic_resume_request = bool(words) and len(words) <= 3 and all(w in generic_resume_tokens for w in words)
+
+        # Kisa "devam et/durum" mesajlarinda oturumun kendi notebook'unu tercih et.
+        should_prefer_session_notebook = is_resume_like_request and session_notebook and (
+            is_generic_resume_request or len(normalized_user_message.strip()) <= 20
+        )
+        if should_prefer_session_notebook:
+            try:
+                from .tools.notebook_tools import tool_notebook_status
+                status = tool_notebook_status(session_notebook)
+                if not status.get("error"):
+                    notebook_resume = (session_notebook, status)
+            except Exception:
+                pass
+        elif not notebook_resume and is_resume_like_request and session_notebook:
+            try:
+                from .tools.notebook_tools import tool_notebook_status
+                status = tool_notebook_status(session_notebook)
+                if not status.get("error"):
+                    notebook_resume = (session_notebook, status)
+            except Exception:
+                pass
+
+        if is_resume_like_request and not notebook_resume:
+            try:
+                from .tools.notebook_tools import tool_notebook_list
+                listing = tool_notebook_list()
+                notebooks = listing.get("notebooks", []) if isinstance(listing, dict) else []
+            except Exception:
+                notebooks = []
+
+            if notebooks:
+                incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+                if incomplete:
+                    suggestion = incomplete[0]
+                    quick_reply = (
+                        "Devam etmek icin hedef not defterini belirtin.\n"
+                        f"Oneri: `{suggestion.get('name', '')}` ({suggestion.get('progress', '-')})\n"
+                        f"Komut: \"{suggestion.get('name', '')} raporuna devam et\""
+                    )
+                else:
+                    latest = notebooks[0]
+                    quick_reply = (
+                        "Devam edilecek aktif not defteri bulunamadi.\n"
+                        f"Son not defteri: `{latest.get('name', '')}` ({latest.get('status', '-')}, {latest.get('progress', '-')})\n"
+                        f"Yeni bir gorev yazarak yeni not defteri baslatabilirsiniz."
+                    )
+            else:
+                quick_reply = "Devam edilecek not defteri bulunamadi. Yeni bir gorev yazabilirsiniz."
+
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=quick_reply))
+            self.store.save(session_id, messages)
+            return quick_reply, 1, ["notebook_list"], []
+
         if notebook_resume:
             nb_name, nb_status = notebook_resume
             pending = nb_status.get("pending_steps", [])
@@ -152,6 +229,28 @@ class AgentService:
             total = nb_status.get("total_steps", 0)
             goal = nb_status.get("goal", "")
             notebook_goal_for_research = goal  # Sonradan kullanmak icin sakla
+
+            # Tamamlanmis notebook'larda LLM'e dusme; aninda durum ve cikti yollarini dondur.
+            if is_resume_like_request and total > 0 and not pending:
+                done = int(completed or 0)
+                latest_outputs = self._find_latest_notebook_outputs(nb_name)
+                output_lines: List[str] = []
+                if latest_outputs:
+                    output_lines.append("En son uretilen dosyalar:")
+                    for key in ("txt", "docx", "pdf"):
+                        path = latest_outputs.get(key)
+                        if path:
+                            output_lines.append(f"- {key.upper()}: {path}")
+                output_text = ("\n" + "\n".join(output_lines)) if output_lines else ""
+                completion_reply = (
+                    f"Not defteri zaten tamamlandi: `{nb_name}`\n"
+                    f"Ilerleme: {done}/{max(int(total or 0), 1)} adim tamamlandi."
+                    f"{output_text}"
+                )
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=completion_reply))
+                self.store.save(session_id, messages)
+                return completion_reply, 1, ["notebook_status"], []
 
             fast_resume_reply, fast_resume_tools = self._try_fast_notebook_resume(
                 user_message=user_message,
@@ -170,7 +269,7 @@ class AgentService:
                 context_msg = (
                     f"[SISTEM NOTU] '{nb_name}' not defterine devam ediliyor.\n"
                     f"Hedef: {goal}\n"
-                    f"İlerleme: {completed}/{total} adim tamamlandi.\n"
+                    f"Ilerleme: {completed}/{total} adim tamamlandi.\n"
                     f"Siradaki adim: {next_step}\n\n"
                     f"KURALLAR:\n"
                     f"1. Kucuk adimlarla ilerle; tek turda tum raporu cikarmaya calisma.\n"
@@ -229,7 +328,7 @@ class AgentService:
                     result = execute_tool(fast_fallback.name, fast_fallback.arguments)
                     logger.info(f"[FAST MODE] Result: {result}")
                     
-                    # Hata kontrolü
+                    # Hata kontrolu
                     if isinstance(result, dict) and result.get("error"):
                         error_msg = f"❌ Hata: {result['error']}"
                         messages.append(ChatMessage(role="assistant", content=error_msg))
@@ -745,37 +844,37 @@ class AgentService:
     def _is_fast_tool(self, tool_name: str) -> bool:
         """Hizli calisacak, dusunme gerektirmeyen araclar.
         
-        Bu araçlar LLM'in 'dusunme' asamasini atlayarak dogrudan calistirilir.
+        Bu araÃ§lar LLM'in 'dusunme' asamasini atlayarak dogrudan calistirilir.
         Sonuc aninda dondurulur (~1-2 saniye).
         """
-        # NOT: Notebook araçları HIZLI MODDA YOK çünkü devam eden iş akışı gerektirir
+        # NOT: Notebook araÃ§larÄ± HIZLI MODDA YOK Ã§Ã¼nkÃ¼ devam eden iÅŸ akÄ±ÅŸÄ± gerektirir
         fast_tools = {
-            # Ekran - Anlık görüntü
+            # Ekran - AnlÄ±k gÃ¶rÃ¼ntÃ¼
             "screenshot_desktop", "screenshot_webpage",
             
-            # Webcam - Anlık fotoğraf/video
+            # Webcam - AnlÄ±k fotoÄŸraf/video
             "webcam_capture", "webcam_record_video", "list_cameras",
             
-            # Ses - Kayıt ve çalma
+            # Ses - KayÄ±t ve Ã§alma
             "start_audio_recording", "stop_audio_recording", 
             "play_audio", "text_to_speech",
             
-            # OCR - Anlık metin okuma
+            # OCR - AnlÄ±k metin okuma
             "ocr_screenshot", "ocr_image",
             
             # Sistem - Bilgi sorgulama
             "get_system_info", "list_processes", "network_info", "ping_host",
             
-            # Dosya - Okuma ve listeleme (yazma/silme hariç)
+            # Dosya - Okuma ve listeleme (yazma/silme hariÃ§)
             "list_directory", "read_file", "search_files",
             
-            # USB - Liste görüntüleme
+            # USB - Liste gÃ¶rÃ¼ntÃ¼leme
             "list_usb_devices",
             
-            # Fare - Pozisyon sorgulama (hareket hariç)
+            # Fare - Pozisyon sorgulama (hareket hariÃ§)
             "mouse_position",
             
-            # Pencere - Liste görüntüleme
+            # Pencere - Liste gÃ¶rÃ¼ntÃ¼leme
             "get_window_list",
         }
         return tool_name in fast_tools
@@ -853,15 +952,24 @@ class AgentService:
                 arguments=args,
             )
 
-        # EKRAN GÖRÜNTÜSÜ ALMA - Fallback kuralları
+        # EKRAN GÃ–RÃœNTÃœSÃœ ALMA - Fallback kurallarÄ±
+        # NOT: "masaustu" tek baÅŸÄ±na tetiklemez â€“ "masaÃ¼stÃ¼nde X'i aÃ§" automation, screenshot deÄŸil
+        screenshot_keywords = {"ekran goruntusu", "screenshot", "anlik goruntu", "fotograf cek"}
+        screenshot_actions = {"al", "cek", "gonder", "kaydet", "goster"}
+        automation_overrides = {"ac", "yaz", "bul", "tikla", "git", "gir"}
+        
         if "screenshot_desktop" in self._known_tool_names and any(
-            k in normalized for k in ("ekran goruntusu", "screenshot", "desktop", "masaustu", "anlik goruntu", "fotograf cek")
-        ) and any(k in normalized for k in ("al", "cek", "gonder", "kaydet", "goster")):
-            return ParsedTextToolCall(
-                id=f"text_tc_{uuid.uuid4().hex[:10]}",
-                name="screenshot_desktop",
-                arguments={},
-            )
+            k in normalized for k in screenshot_keywords | {"desktop", "masaustu"}
+        ) and any(k in normalized for k in screenshot_actions):
+            # "masaÃ¼stÃ¼nde X'i aÃ§" gibi ifadelerde screenshot'a deÄŸil, automasyona yÃ¶nlendir
+            is_desktop_only = not any(k in normalized for k in screenshot_keywords)
+            has_automation_intent = any(k in normalized for k in automation_overrides)
+            if not (is_desktop_only and has_automation_intent):
+                return ParsedTextToolCall(
+                    id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                    name="screenshot_desktop",
+                    arguments={},
+                )
         
         if "screenshot_webpage" in self._known_tool_names and any(
             k in normalized for k in ("web sayfa", "website", "site", "url", "http")
@@ -897,13 +1005,13 @@ class AgentService:
             except:
                 pass
 
-        # Kapsamlı görev algılama -> notebook_create öner
+        # KapsamlÄ± gÃ¶rev algÄ±lama -> notebook_create Ã¶ner
         if "notebook_create" in self._known_tool_names and any(
             k in normalized for k in ("kapsamli", "detayli", "adim adim", "parcala", "tum", "karsilastir")
         ) and any(
             k in normalized for k in ("arastir", "analiz", "rapor", "incele", "haber", "research")
         ):
-            # Not defteri adı oluştur
+            # Not defteri adÄ± oluÅŸtur
             topic_words = [w for w in text.split()[:5] if len(w) > 2]
             nb_name = "_".join(topic_words[:3]) or "arastirma"
             return ParsedTextToolCall(
@@ -923,7 +1031,7 @@ class AgentService:
                 arguments={"query": text},
             )
         
-        # WEBCAM FOTOĞRAF ÇEKME - Geliştirilmiş pattern matching
+        # WEBCAM FOTOÄRAF Ã‡EKME - GeliÅŸtirilmiÅŸ pattern matching
         if "webcam_capture" in self._known_tool_names and any(
             k in normalized for k in ("webcam", "kamera", "fotograf cek", "fotograf cek", "selfie", 
                                       "anlik foto", "kamerani ac", "cam ac", "beni goster")
@@ -976,8 +1084,29 @@ class AgentService:
             0x00F6: "o",  # o-umlaut
             0x015F: "s",  # s-cedilla
             0x00FC: "u",  # u-umlaut
+            0x00C7: "c",  # C-cedilla
+            0x011E: "g",  # G-breve
+            0x0130: "i",  # I-with-dot
+            0x00D6: "o",  # O-umlaut
+            0x015E: "s",  # S-cedilla
+            0x00DC: "u",  # U-umlaut
         }
         return (text or "").lower().translate(turkish_map)
+
+    @staticmethod
+    def _extract_session_notebook_name(messages: List[ChatMessage]) -> str:
+        pattern = re.compile(
+            r"Not defteri (?:olusturuldu|guncellendi|tamamlandi|zaten tamamlandi):\s*`([^`]+)`",
+            flags=re.IGNORECASE,
+        )
+        for msg in reversed(messages):
+            if msg.role != "assistant":
+                continue
+            content = msg.content or ""
+            match = pattern.search(content)
+            if match:
+                return match.group(1).strip()
+        return ""
 
     @staticmethod
     def _looks_like_stalled_reply(text: str) -> bool:
@@ -1033,39 +1162,99 @@ class AgentService:
         try:
             note_parts: List[str] = [f"Otomatik devam: {next_step}"]
             finding = "Adim tamamlandi."
+            final_outputs: Dict[str, str] = {}
+            final_summary = ""
+            final_errors: List[str] = []
 
-            if any(k in step_norm for k in ("haber", "kaynak", "gelisme", "topla", "tara")):
-                query = self._derive_news_query(goal or next_step)
-                news_result = execute_tool("search_news", {"query": query, "limit": 6})
-                tools_used.append("search_news")
-                count = int(news_result.get("count", 0) or 0)
-                finding = f"{count} kaynak listelendi."
-                if count > 0:
-                    titles: List[str] = []
-                    for item in (news_result.get("results") or [])[:3]:
-                        title = str((item or {}).get("title", "")).strip()
-                        if title:
-                            titles.append(title)
-                    if titles:
-                        note_parts.append("Ilk basliklar: " + " | ".join(titles))
-                else:
-                    warn = str(news_result.get("error", "")).strip()
-                    if warn:
-                        note_parts.append(f"Kaynak toplama uyari: {warn}")
+            is_source_step = any(k in step_norm for k in ("haber", "kaynak", "gelisme", "topla", "tara"))
+            is_final_step = any(k in step_norm for k in ("nihai", "dosya", "txt", "docx", "pdf", "cikti"))
+
+            if is_source_step:
+                query_candidates = [
+                    self._derive_news_query(goal or next_step),
+                    "iran amerika savas son 48 saat",
+                    "iran abd finansal piyasalar etkisi",
+                ]
+                best_news: Dict[str, Any] = {}
+                best_count = 0
+                for q in query_candidates:
+                    news_result = execute_tool("search_news", {"query": q, "limit": 6})
+                    tools_used.append("search_news")
+                    count = int(news_result.get("count", 0) or 0)
+                    if count > best_count:
+                        best_count = count
+                        best_news = news_result
+                    if count > 0:
+                        break
+
+                if best_count <= 0:
+                    warning_note = "Kaynak taramasi yapildi ancak dogrulanabilir haber bulunamadi."
+                    execute_tool("notebook_add_note", {"name": notebook_name, "note": warning_note})
+                    tools_used.append("notebook_add_note")
+                    status_after = execute_tool("notebook_status", {"name": notebook_name})
+                    tools_used.append("notebook_status")
+                    done = int(status_after.get("completed_steps", 0) or 0)
+                    total = int(status_after.get("total_steps", 0) or 0)
+                    reply = (
+                        f"Not defteri guncellendi: `{notebook_name}`\n"
+                        f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
+                        f"Adim tamamlanmadi: {next_step}\n"
+                        "Neden: 0 dogrulanabilir kaynak bulundu.\n\n"
+                        "Ayni adimi yeniden denemek icin \"devam et\" yazabilirsiniz."
+                    )
+                    return reply, tools_used
+
+                finding = f"{best_count} kaynak listelendi."
+                titles: List[str] = []
+                for item in (best_news.get("results") or [])[:3]:
+                    title = str((item or {}).get("title", "")).strip()
+                    if title:
+                        titles.append(title)
+                if titles:
+                    note_parts.append("Ilk basliklar: " + " | ".join(titles))
+                    finding = f"{best_count} kaynak listelendi. Ilk kaynak: {titles[0]}"
+                warn = str(best_news.get("error", "")).strip()
+                if warn:
+                    note_parts.append(f"Kaynak toplama uyari: {warn}")
+
+            if is_final_step:
+                final_outputs, final_summary, final_errors, output_tools = self._build_notebook_outputs(
+                    notebook_name=notebook_name,
+                    notebook_status=notebook_status,
+                )
+                tools_used.extend(output_tools)
+                if final_summary:
+                    note_parts.append(final_summary)
+                if final_outputs:
+                    finding = "Rapor dosyalari olusturuldu."
+                elif final_errors:
+                    finding = "Nihai cikti olusturma kismen basarisiz."
+                    note_parts.append("Hatalar: " + " | ".join(final_errors))
 
             note_text = " ".join(part for part in note_parts if part).strip()
             execute_tool("notebook_add_note", {"name": notebook_name, "note": note_text})
             tools_used.append("notebook_add_note")
 
-            step_keyword = self._step_keyword(next_step)
-            complete_result = execute_tool(
-                "notebook_complete_step",
-                {"name": notebook_name, "step_keyword": step_keyword, "finding": finding},
+            complete_result = self._complete_notebook_step_best_effort(
+                notebook_name=notebook_name,
+                step_text=next_step,
+                finding=finding,
             )
             tools_used.append("notebook_complete_step")
 
             if isinstance(complete_result, dict) and complete_result.get("error"):
-                return "", []
+                status_after = execute_tool("notebook_status", {"name": notebook_name})
+                tools_used.append("notebook_status")
+                done = int(status_after.get("completed_steps", 0) or 0)
+                total = int(status_after.get("total_steps", 0) or 0)
+                reply = (
+                    f"Not defteri guncellendi: `{notebook_name}`\n"
+                    f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
+                    f"Adim kapanamadi: {next_step}\n"
+                    f"Hata: {complete_result.get('error')}\n\n"
+                    "Ayni adimi tekrar denemek icin \"devam et\" yazabilirsiniz."
+                )
+                return reply, tools_used
 
             status_after = execute_tool("notebook_status", {"name": notebook_name})
             tools_used.append("notebook_status")
@@ -1079,25 +1268,177 @@ class AgentService:
                     f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
                     f"Tamamlanan adim: {next_step}\n"
                     f"Siradaki adim: {upcoming}\n\n"
-                    f"Devam etmek icin \"devam et\" yazabilirsiniz."
+                    "Devam etmek icin \"devam et\" yazabilirsiniz."
                 )
             else:
+                output_lines: List[str] = []
+                if final_outputs:
+                    output_lines.append("Uretilen dosyalar:")
+                    for key, path in final_outputs.items():
+                        output_lines.append(f"- {key.upper()}: {path}")
+                if final_errors:
+                    output_lines.append("Uyari:")
+                    for err in final_errors:
+                        output_lines.append(f"- {err}")
+                output_text = ("\n" + "\n".join(output_lines)) if output_lines else ""
                 reply = (
                     f"Not defteri tamamlandi: `{notebook_name}`\n"
                     f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi."
+                    f"{output_text}"
                 )
             return reply, tools_used
-        except Exception:
-            return "", []
+        except Exception as exc:
+            logger = logging.getLogger(__name__)
+            logger.exception("Fast notebook resume failed: %s", notebook_name)
+            try:
+                status_after = execute_tool("notebook_status", {"name": notebook_name})
+                done = int(status_after.get("completed_steps", 0) or 0)
+                total = int(status_after.get("total_steps", 0) or 0)
+                upcoming = str(status_after.get("next_step", "")).strip()
+                reply = (
+                    f"Not defteri durumunu okuyabildim ancak adim ilerletilemedi: `{notebook_name}`\n"
+                    f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
+                    f"Hata: {type(exc).__name__}"
+                )
+                if upcoming:
+                    reply += f"\nSiradaki adim: {upcoming}"
+                reply += "\n\nAyni adimi yeniden denemek icin \"devam et\" yazabilirsiniz."
+                return reply, ["notebook_status"]
+            except Exception:
+                return (
+                    f"Not defteri devam islemi sirasinda hata olustu: {type(exc).__name__}. "
+                    "Tekrar denemek icin \"devam et\" yazabilirsiniz."
+                ), []
+
+    def _build_notebook_outputs(
+        self,
+        notebook_name: str,
+        notebook_status: Dict[str, Any],
+    ) -> Tuple[Dict[str, str], str, List[str], List[str]]:
+        outputs: Dict[str, str] = {}
+        errors: List[str] = []
+        tools_used: List[str] = []
+
+        goal = str(notebook_status.get("goal", "")).strip() or notebook_name
+        completed = notebook_status.get("completed_list", []) or []
+        notes = notebook_status.get("recent_notes", []) or []
+
+        report_lines: List[str] = [
+            f"Rapor Basligi: {goal}",
+            "",
+            "Tamamlanan Adimlar:",
+        ]
+        for idx, step in enumerate(completed, start=1):
+            report_lines.append(f"{idx}. {step}")
+        report_lines.append("")
+        report_lines.append("Son Notlar:")
+        if notes:
+            for note in notes[-8:]:
+                report_lines.append(f"- {note}")
+        else:
+            report_lines.append("- Not bulunamadi.")
+        report_lines.append("")
+        report_lines.append("Kisa Ozet:")
+        report_lines.append(
+            "Jeopolitik gelismeler enerji fiyatlari, risk algisi ve sermaye akislari uzerinde baski olusturur. "
+            "Nihai kararlar icin kaynak tarihlerini manuel dogrulayiniz."
+        )
+        content = "\n".join(report_lines)
+
+        from datetime import datetime
+        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        reports_dir = settings.workspace_path / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        base = f"{notebook_name}_{stamp}"
+        txt_path = str((reports_dir / f"{base}.txt").resolve())
+        docx_path = str((reports_dir / f"{base}.docx").resolve())
+        pdf_path = str((reports_dir / f"{base}.pdf").resolve())
+
+        txt_result = execute_tool("write_file", {"path": txt_path, "content": content})
+        tools_used.append("write_file")
+        if isinstance(txt_result, dict) and txt_result.get("error"):
+            errors.append(f"TXT olusturulamadi: {txt_result.get('error')}")
+        else:
+            outputs["txt"] = txt_path
+
+        docx_result = execute_tool(
+            "create_docx",
+            {"output_path": docx_path, "title": goal[:120], "paragraphs": content.split("\n")},
+        )
+        tools_used.append("create_docx")
+        if isinstance(docx_result, dict) and docx_result.get("error"):
+            errors.append(f"DOCX olusturulamadi: {docx_result.get('error')}")
+        else:
+            outputs["docx"] = str(docx_result.get("path", docx_path))
+
+        pdf_result = execute_tool("create_pdf", {"output_path": pdf_path, "title": goal[:120], "content": content})
+        tools_used.append("create_pdf")
+        if isinstance(pdf_result, dict) and pdf_result.get("error"):
+            errors.append(f"PDF olusturulamadi: {pdf_result.get('error')}")
+        else:
+            outputs["pdf"] = str(pdf_result.get("path", pdf_path))
+
+        summary = "Nihai cikti olusturma asamasi tamamlandi."
+        return outputs, summary, errors, tools_used
+
+    @staticmethod
+    def _find_latest_notebook_outputs(notebook_name: str) -> Dict[str, str]:
+        reports_dir = settings.workspace_path / "reports"
+        if not reports_dir.exists():
+            return {}
+
+        latest: Dict[str, Tuple[float, str]] = {}
+        for ext in ("txt", "docx", "pdf"):
+            pattern = f"{notebook_name}_*.{ext}"
+            for path in reports_dir.glob(pattern):
+                try:
+                    mtime = path.stat().st_mtime
+                except Exception:
+                    continue
+                previous = latest.get(ext)
+                candidate = str(path.resolve())
+                if previous is None or mtime > previous[0]:
+                    latest[ext] = (mtime, candidate)
+        return {ext: value for ext, (_, value) in latest.items()}
+
+    def _complete_notebook_step_best_effort(self, notebook_name: str, step_text: str, finding: str) -> Dict[str, Any]:
+        candidates: List[str] = []
+        raw = (step_text or "").strip()
+        if raw:
+            candidates.append(raw)
+            candidates.append(raw.replace("(", " ").replace(")", " ").replace("/", " "))
+            candidates.append(raw.replace("-", " "))
+            candidates.append(self._step_keyword(raw))
+            words = [w for w in re.findall(r"[^\W_]+", raw, flags=re.UNICODE) if len(w) > 1]
+            if len(words) >= 2:
+                candidates.append(" ".join(words[:2]))
+            if words:
+                candidates.append(words[0])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = candidate.strip()
+            if not key:
+                continue
+            normalized = self._normalize_text_for_match(key)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            result = execute_tool(
+                "notebook_complete_step",
+                {"name": notebook_name, "step_keyword": key, "finding": finding},
+            )
+            if isinstance(result, dict) and not result.get("error"):
+                return result
+        return {"error": f"Adim anahtar kelimesi eslesmedi: {step_text}"}
 
     @staticmethod
     def _derive_news_query(goal: str) -> str:
-        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", goal)
+        words = re.findall(r"[^\W_]+", goal, flags=re.UNICODE)
         filtered = [w for w in words if len(w) > 2][:8]
         if not filtered:
             return "dunya gundem"
         return " ".join(filtered)
-
     def _try_auto_notebook_kickoff(
         self,
         user_message: str,
@@ -1227,14 +1568,16 @@ class AgentService:
 
     @staticmethod
     def _suggest_notebook_name(goal: str) -> str:
-        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", goal)
+        words = re.findall(r"[^\W_]+", goal, flags=re.UNICODE)
         keep = [w for w in words if len(w) > 2][:4]
-        name = "_".join(keep) if keep else "Arastirma_Notu"
-        return name[:60]
+        base = "_".join(keep) if keep else "Arastirma_Notu"
+        safe = re.sub(r"[^A-Za-z0-9_]+", "_", AgentService._normalize_text_for_match(base))
+        safe = re.sub(r"_+", "_", safe).strip("_")
+        return (safe or "arastirma_notu")[:60]
 
     @staticmethod
     def _step_keyword(step_text: str) -> str:
-        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", step_text)
+        words = re.findall(r"[^\W_]+", step_text, flags=re.UNICODE)
         key = " ".join(words[:4]).strip()
         return key or step_text[:24]
 
@@ -1363,13 +1706,13 @@ class AgentService:
         return any(re.search(pattern, normalized) for pattern in negative_patterns)
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:
-        """Ses kaydı için fast mode handler - start, bekle, stop yapar."""
+        """Ses kaydi icin fast mode handler - start, bekle, stop yapar."""
         import logging
         import asyncio
         import re
         logger = logging.getLogger(__name__)
         
-        # Kullanıcıdan süre al (varsayılan 5 saniye)
+        # Kullanicidan sure al (varsayilan 5 saniye)
         duration = 5
         duration_match = re.search(r'(\d+)\s*(?:sn|saniye|sec|dk|dakika|min)', user_message.lower())
         if duration_match:
@@ -1382,41 +1725,41 @@ class AgentService:
         logger.info(f"[AUDIO FAST] Starting recording for {duration} seconds")
         
         try:
-            # 1. Kaydı başlat
+            # 1. Kaydi baslat
             from .tools.registry import execute_tool
             start_result = execute_tool("start_audio_recording", {})
             logger.info(f"[AUDIO FAST] Start result: {start_result}")
             
             if isinstance(start_result, dict) and start_result.get("error"):
-                error_msg = f"❌ Ses kaydı başlatılamadı: {start_result['error']}"
+                error_msg = f"❌ Ses kaydi baslatilamadi: {start_result['error']}"
                 messages.append(ChatMessage(role="assistant", content=error_msg))
                 self.store.save(session_id, messages)
                 return error_msg, 1, ["start_audio_recording"], []
             
-            # 2. Kullanıcıya bilgi ver
-            info_msg = f"🎙️ Ses kaydı başladı ({duration} saniye)..."
+            # 2. Kullaniciya bilgi ver
+            info_msg = f"🎙️ Ses kaydi basladi ({duration} saniye)..."
             messages.append(ChatMessage(role="assistant", content=info_msg))
             self.store.save(session_id, messages)
             
             # 3. Bekle
             await asyncio.sleep(duration)
             
-            # 4. Kaydı durdur
+            # 4. Kaydi durdur
             stop_result = execute_tool("stop_audio_recording", {})
             logger.info(f"[AUDIO FAST] Stop result: {stop_result}")
             
-            # 5. Hata kontrolü
+            # 5. Hata kontrolu
             if isinstance(stop_result, dict) and stop_result.get("error"):
-                error_msg = f"❌ Ses kaydı kaydedilemedi: {stop_result['error']}"
+                error_msg = f"❌ Ses kaydi kaydedilemedi: {stop_result['error']}"
                 messages.append(ChatMessage(role="assistant", content=error_msg))
                 self.store.save(session_id, messages)
                 return error_msg, 1, ["start_audio_recording", "stop_audio_recording"], []
             
-            # 6. Medya dosyasını topla
+            # 6. Medya dosyasini topla
             media_files: List[str] = []
             self._collect_media(stop_result, media_files)
             
-            # 7. Başarı mesajı
+            # 7. Basari mesaji
             success_msg = self._build_success_message("stop_audio_recording", stop_result)
             messages.append(ChatMessage(role="assistant", content=success_msg))
             self.store.save(session_id, messages)
@@ -1426,14 +1769,14 @@ class AgentService:
             
         except Exception as exc:
             logger.error(f"[AUDIO FAST] Exception: {exc}")
-            error_msg = f"❌ Ses kaydı hatası: {exc}"
+            error_msg = f"❌ Ses kaydi hatasi: {exc}"
             messages.append(ChatMessage(role="assistant", content=error_msg))
             self.store.save(session_id, messages)
             return error_msg, 1, ["start_audio_recording"], []
 
     @staticmethod
     def _build_success_message(tool_name: str, result: Dict[str, Any]) -> str:
-        """Başarı mesajı oluştur."""
+        """Basari mesaji olustur."""
         success_msg = f"✅ Islem tamamlandi: `{tool_name}`"
         
         if isinstance(result, dict):
@@ -1456,3 +1799,4 @@ class AgentService:
                 success_msg += f"\n📝 Metin: {result['text']}"
         
         return success_msg
+
