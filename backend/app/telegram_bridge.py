@@ -6,6 +6,7 @@ import html as html_lib
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from telegram import Update
@@ -112,24 +113,37 @@ def markdown_to_telegram_html(text: str) -> str:
     return text.strip()
 
 
+def _get_timeout_for_request(text: str) -> httpx.Timeout:
+    """İstek turune gore timeout belirle."""
+    text_lower = text.lower()
+    
+    # HIZLI ISLEMLER: Direkt calisir, kisa timeout yeterli
+    fast_patterns = ["ekran goruntusu", "screenshot", "webcam", "fotograf cek", 
+                     "masaustu", "desktop", "kamera", "anlik goruntu"]
+    if any(p in text_lower for p in fast_patterns):
+        # Hizli islemler 10sn icinde biter
+        return httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
+    
+    # ARASTIRMA ISLEMLERI: Uzun surebilir
+    research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
+                        "analiz", "research", "report", "pdf olustur", "word olustur"]
+    if any(p in text_lower for p in research_patterns):
+        # Arastirma icin 3 dakika
+        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+    
+    # STANDART: 1 dakika
+    return httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+
+
 async def call_agent(session_id: str, text: str) -> dict:
     """Call agent API and return full response payload."""
     url = f"http://{settings.host}:{settings.port}/chat"
     payload = {"session_id": session_id, "message": text, "source": "telegram"}
     
-    # Dinamik timeout - mesaj uzunluguna ve icerigine gore
-    base_timeout = 60.0  # Temel timeout
-    
-    # Karmasik istekler icin daha uzun timeout
-    text_lower = text.lower()
-    if any(k in text_lower for k in ["arastir", "rapor", "detayli", "tum kaynak", "haber tara"]):
-        base_timeout = 90.0  # Arastirma istekleri icin 90 saniye
-    if any(k in text_lower for k in ["pdf", "word", "docx", "excel", "xlsx"]):
-        base_timeout = 120.0  # Dosya olusturma icin 120 saniye
+    # İstek turune gore timeout belirle
+    timeout = _get_timeout_for_request(text)
     
     try:
-        # (connect, read, write, pool) timeout'lari
-        timeout = httpx.Timeout(base_timeout, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)
             if resp.is_error:
@@ -144,12 +158,17 @@ async def call_agent(session_id: str, text: str) -> dict:
                 raise RuntimeError(detail)
             return resp.json()
     except httpx.TimeoutException as exc:
-        timeout_int = int(base_timeout)
-        raise RuntimeError(
-            f"Islem zaman asimina ugradi ({timeout_int}sn). "
-            f"Bu istek turu icin maksimum sure: {timeout_int} saniye. "
-            f"Daha kisa ve oz bir istek deneyin veya istegi parcalara bolun."
-        ) from exc
+        # Timeout turune gore mesaj
+        text_lower = text.lower()
+        if any(p in text_lower for p in ["arastir", "rapor", "detayli"]):
+            raise RuntimeError(
+                "Arastirma zaman asimina ugradi ancak not defterine kaydedildi. "
+                "'Devam et' yazarak kaldigim yerden devam edebilirim."
+            ) from exc
+        else:
+            raise RuntimeError(
+                "Islem zaman asimina ugradi. Lutfen tekrar deneyin."
+            ) from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(str(exc).strip() or exc.__class__.__name__) from exc
 
@@ -171,15 +190,104 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("OpenWorld aktif. Mesaj at, agent cevap versin.")
 
 
+async def _process_image_with_ocr(image_bytes: bytes, caption: str = "") -> str:
+    """Gorseli OCR ile isleyip metin cikar."""
+    import tempfile
+    from pathlib import Path
+    
+    try:
+        # Gecici dosyaya kaydet
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        
+        # OCR ile oku (tools/registry'den tool_ocr_image cagir)
+        from .tools.registry import execute_tool
+        result = execute_tool("ocr_image", {"image_path": tmp_path})
+        
+        # Gecici dosyayi temizle
+        try:
+            Path(tmp_path).unlink()
+        except:
+            pass
+        
+        ocr_text = result.get("text", "")
+        if ocr_text and ocr_text.strip():
+            prompt = f"[Kullanici bir gorsel gonderdi. OCR ile okunan metin:]\n\n{ocr_text[:2000]}"
+            if caption:
+                prompt += f"\n\n[Gorsel aciklamasi: {caption}]"
+            return prompt
+        else:
+            return "[Kullanici bir gorsel gonderdi ancak icerik okunamadi]"
+    except Exception as e:
+        return f"[Kullanici bir gorsel gonderdi ancak islenirken hata: {e}]"
+
+
+async def _check_incomplete_notebooks(session_id: str) -> Optional[str]:
+    """Yarim kalan notebook var mi kontrol et, devam mesaji dondur."""
+    try:
+        from .tools.notebook_tools import tool_notebook_list
+        result = tool_notebook_list()
+        notebooks = result.get("notebooks", [])
+        
+        incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+        if incomplete:
+            latest = incomplete[0]  # En sonuncu
+            return (
+                f"\n\n💡 **Yarim kalan isiniz var:** `{latest['name']}`\n"
+                f"İlerleme: {latest['progress']}\n"
+                f"Devam etmek icin: \"{latest['name']} raporuna devam et\" yazabilirsiniz."
+            )
+    except:
+        pass
+    return None
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update):
         return
-    if update.message is None or not update.message.text:
+    if update.message is None:
         return
-
+    
     session_id = f"telegram_{update.effective_user.id}"
+    user_message = ""
+    
+    # 1. METIN MESAJI
+    if update.message.text:
+        user_message = update.message.text
+    
+    # 2. FOTOGRAF/GORSEL - OCR ile isle
+    elif update.message.photo:
+        # En buyuk fotografi al
+        photo = update.message.photo[-1]
+        caption = update.message.caption or ""
+        
+        try:
+            # Fotografi indir
+            file = await context.bot.get_file(photo.file_id)
+            image_bytes = await file.download_as_bytearray()
+            
+            # OCR ile isle
+            user_message = await _process_image_with_ocr(bytes(image_bytes), caption)
+            
+            # Kullaniciya bildir
+            await update.message.reply_text("📸 Gorsel algilandi, icerik okunuyor...")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Gorsel islenirken hata: {e}")
+            return
+    
+    # 3. DOKUMAN/DOSYA
+    elif update.message.document:
+        await update.message.reply_text("📎 Dokumanlari henuz isleyemiyorum. Lutfen metin olarak yazin veya gorsel olarak gonderin.")
+        return
+    
+    else:
+        # Desteklenmeyen mesaj tipi
+        return
+    
+    # Agent'i cagir
     try:
-        data = await call_agent(session_id, update.message.text)
+        data = await call_agent(session_id, user_message)
         reply = data.get("reply", "")
         media_list = data.get("media") or []
     except Exception as exc:
@@ -187,14 +295,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         exc_type = type(exc).__name__
         if not err_text:
             err_text = exc_type
-        # Yaygin hata turleri icin aciklayici Turkce mesajlar
-        if "timeout" in err_text.lower() or "Timeout" in exc_type:
-            err_text = f"Islem zaman asimina ugradi (420sn). Daha kisa bir istek deneyin. ({exc_type})"
+        
+        # Timeout hatasi - daha yapici mesaj
+        if "timeout" in err_text.lower() or "Timeout" in exc_type or "zaman asimi" in err_text.lower():
+            timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
+            timeout_msg += "Bu tur kapsamli istekler icin:\n"
+            timeout_msg += "1️⃣ Otomatik olarak not defterine kaydedildi\n"
+            timeout_msg += "2️⃣ Bir sonraki mesajinizda kaldigim yerden devam edecegim\n"
+            timeout_msg += "3️⃣ Veya \"rapora devam et\" yazabilirsiniz\n\n"
+            
+            # Yarim kalan notebook kontrolu
+            notebook_msg = await _check_incomplete_notebooks(session_id)
+            if notebook_msg:
+                timeout_msg += notebook_msg
+            else:
+                timeout_msg += "\n💡 İpucu: Uzun islemleri parcalara bolerek daha verimli calisabiliriz."
+            
+            reply = timeout_msg
         elif "ConnectError" in exc_type or "ConnectionRefused" in exc_type:
-            err_text = "Agent sunucusuna baglanilamiyor. Backend calismiyor olabilir."
+            reply = "❌ Agent sunucusuna baglanilamiyor. Backend calismiyor olabilir."
         elif "RSS" in err_text or "parse" in err_text.lower() or "XML" in err_text:
-            err_text = f"Haber kaynagi hatasi: {err_text[:200]}"
-        reply = f"Hata: {err_text[:500]}"
+            reply = f"📰 Haber kaynagi hatasi: {err_text[:200]}"
+        else:
+            reply = f"❌ Hata: {err_text[:500]}"
         media_list = []
 
     # Send media first.

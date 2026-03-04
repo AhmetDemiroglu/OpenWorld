@@ -64,6 +64,50 @@ class AgentService:
                 self._session_locks[session_id] = lock
             return lock
 
+    def _check_notebook_resume(self, user_message: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Kullanici 'devam et' veya notebook adi soylerse, devam etme bilgisi dondur."""
+        from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
+        
+        normalized = self._normalize_text_for_match(user_message)
+        
+        # "devam et", "rapora devam", "tamamla" vb.
+        resume_keywords = ("devam", "tamamla", "bitir", "ilerle", "sonraki adim")
+        is_resume_request = any(k in normalized for k in resume_keywords)
+        
+        # Not defteri listesi al
+        try:
+            list_result = tool_notebook_list()
+            notebooks = list_result.get("notebooks", [])
+            
+            if not notebooks:
+                return None
+            
+            # 1. Eger belirli bir notebook adi geciyorsa onu bul
+            specific_notebook = None
+            for nb in notebooks:
+                nb_name_norm = self._normalize_text_for_match(nb["name"])
+                if nb_name_norm in normalized or nb["name"].lower() in user_message.lower():
+                    specific_notebook = nb
+                    break
+            
+            # 2. Yoksa son aktif (Devam Ediyor) notebook'u bul
+            if not specific_notebook:
+                incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+                if incomplete:
+                    specific_notebook = incomplete[0]  # En sonuncu
+            
+            # 3. Hala yoksa en sonuncuyu al (tamamlanmis olsa bile)
+            if not specific_notebook and notebooks:
+                specific_notebook = notebooks[0]
+            
+            if specific_notebook:
+                status = tool_notebook_status(specific_notebook["name"])
+                return (specific_notebook["name"], status)
+        except Exception:
+            pass
+        
+        return None
+
     async def _run_locked(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
         messages = self.store.load(session_id)
         if not messages:
@@ -79,6 +123,28 @@ class AgentService:
             self.store.save(session_id, messages)
             return refusal, 0, [], []
 
+        # NOTEBOOK DEVAM ETME KONTROLU
+        notebook_resume = self._check_notebook_resume(user_message)
+        if notebook_resume:
+            nb_name, nb_status = notebook_resume
+            pending = nb_status.get("pending_steps", [])
+            completed = nb_status.get("completed_steps", 0)
+            total = nb_status.get("total_steps", 0)
+            
+            if pending:
+                next_step = pending[0]
+                # Sistem mesaji olarak baglam ekle
+                context_msg = (
+                    f"[SISTEM NOTU] '{nb_name}' not defterine devam ediliyor. "
+                    f"İlerleme: {completed}/{total} adim tamamlandi. "
+                    f"Siradaki adim: {next_step}"
+                )
+                messages.append(ChatMessage(role="system", content=context_msg))
+                
+                # Kullanici mesajini guncelle - daha acik bir talimat
+                if "devam" in user_message.lower() or len(user_message) < 20:
+                    user_message = f"{nb_name} not defterindeki siradaki adimi yap: {next_step}"
+
         messages.append(ChatMessage(role="user", content=user_message))
 
         relevant_tools = get_relevant_tools(user_message)
@@ -93,6 +159,34 @@ class AgentService:
         last_step_results: List[Tuple[str, Dict[str, Any]]] = []
         call_counts: Dict[str, int] = {}
         cached_results: Dict[str, Dict[str, Any]] = {}
+
+        # === HIZLI MOD: Dusunme gerektirmeyen basit araclar ===
+        # Screenshot, webcam vb. icin direkt calistir, LLM'e sorma
+        fast_fallback = self._fallback_tool_call_from_user_message(user_message)
+        if fast_fallback and self._is_fast_tool(fast_fallback.name):
+            if fast_fallback.name in allowed_tool_names:
+                try:
+                    result = execute_tool(fast_fallback.name, fast_fallback.arguments)
+                    self._collect_media(result, media_files)
+                    
+                    # Basari mesaji olustur
+                    success_msg = f"Islem tamamlandi: `{fast_fallback.name}`"
+                    if isinstance(result, dict):
+                        if "path" in result:
+                            success_msg += f"\n📁 Dosya: {result['path']}"
+                        if "resolution" in result:
+                            success_msg += f"\n📐 Cozunurluk: {result['resolution']}"
+                        if "size" in result:
+                            success_msg += f"\n📊 Boyut: {result['size']}"
+                    
+                    messages.append(ChatMessage(role="assistant", content=success_msg))
+                    self.store.save(session_id, messages)
+                    return success_msg, 1, [fast_fallback.name], media_files
+                except Exception as exc:
+                    error_msg = f"Hata: {fast_fallback.name} calistirilamadi: {exc}"
+                    messages.append(ChatMessage(role="assistant", content=error_msg))
+                    self.store.save(session_id, messages)
+                    return error_msg, 1, [fast_fallback.name], media_files
 
         while steps < settings.ollama_max_steps:
             steps += 1
@@ -503,6 +597,15 @@ class AgentService:
             )
 
         return clean.strip()
+
+    def _is_fast_tool(self, tool_name: str) -> bool:
+        """Hizli calisacak, dusunme gerektirmeyen araclar."""
+        fast_tools = {
+            "screenshot_desktop", "screenshot_webpage", "webcam_capture",
+            "webcam_record_video", "mouse_position", "get_system_info",
+            "list_directory", "read_file", "list_processes"
+        }
+        return tool_name in fast_tools
 
     def _fallback_tool_call_from_user_message(self, user_message: str) -> Optional[ParsedTextToolCall]:
         text = (user_message or "").strip()

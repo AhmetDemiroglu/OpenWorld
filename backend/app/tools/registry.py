@@ -1352,12 +1352,12 @@ def _generate_research_queries(topic: str) -> List[str]:
 
     return queries[:3]
 
-def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "", report_style: str = "standard") -> Dict[str, Any]:
-    """Detayli arastirma yap - optimize edilmis, hizli versiyon.
+def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "", report_style: str = "standard") -> Dict[str, Any]:
+    """Detayli arastirma yap - notebook entegreli, checkpoint'li versiyon.
 
     Args:
         topic: Arastirilacak konu
-        max_sources: Maksimum kaynak sayisi (varsayilan: 5, maks: 10)
+        max_sources: Maksimum kaynak sayisi (varsayilan: 8, maks: 15)
         out_path: Rapor dosya yolu
         report_style: standard, technical, academic, brief
     """
@@ -1367,7 +1367,9 @@ def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "
         return {"error": "Topic is required.", "partial": False}
 
     start_time = time.time()
-    MAX_TOTAL_TIME = 60  # Toplam 60 saniye limit (420sn timeout'un cok altinda)
+    # ESNEK ZAMAN LIMIDI - islem turune gore
+    # Haber arama: ~30sn, Icerik cekme: ~60sn, Rapor yazma: ~10sn
+    MAX_TOTAL_TIME = 120  # 2 dakika - yeterli ama cok uzun degil
     
     entries: List[Dict[str, Any]] = []
     failed_sources: List[Dict[str, str]] = []
@@ -1748,11 +1750,26 @@ def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "
     except Exception as exc:  # noqa: BLE001
         scratchpad_lines.append(f"\n=== KRITIK HATA: {type(exc).__name__}: {str(exc)[:200]} ===")
         _save_scratchpad()
+        
+        elapsed = time.time() - start_time
+        is_timeout = elapsed >= MAX_TOTAL_TIME
+        
+        error_msg = str(exc)[:200]
+        if is_timeout or "zaman" in error_msg.lower() or "timeout" in error_msg.lower():
+            error_msg = (
+                f"Arastirma zaman limitine ({int(MAX_TOTAL_TIME)}sn) ulasti, ancak "
+                f"{len(entries)} kaynak toplandi. 'Devam et' yazarak arastirmaya "
+                f"kaldigin yerden devam edebilirsiniz."
+            )
+        else:
+            error_msg = f"Arastirma kismen basarisiz: {type(exc).__name__}: {error_msg}"
 
         response: Dict[str, Any] = {
-            "error": f"Arastirma kismen basarisiz: {type(exc).__name__}: {str(exc)[:200]}",
+            "error": error_msg,
             "partial": True,
             "sources_collected": len(entries),
+            "can_resume": True,
+            "tip": "'Devam et' veya rapor adini yazarak kaldiginiz yerden devam edebilirsiniz.",
         }
         # Kismi sonuclari kaydetmeyi dene
         if entries:
