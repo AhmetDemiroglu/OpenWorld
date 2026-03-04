@@ -27,7 +27,6 @@
 7. [Sorun Giderme](#-sorun-giderme)
 8. [Mimari](#-mimari)
 9. [Güvenlik](#-güvenlik)
-10. [Paketler](#-yeni-paketler-77-araç-i̇çin)
 
 ---
 
@@ -35,31 +34,27 @@
 
 OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajandır**. 4 katmanlı güvenlik sistemi ile tehlikeli işlemler kontrol altında, günlük görevleriniz tamamen serbesttir.
 
-### 🚀 77 Yerleşik Araç + Akıllı Tool Seçimi
+### 🚀 95+ Yerleşik Araç + Akıllı Tool Seçimi
 
 | Kategori | Araç Sayısı | Örnekler |
 |----------|-------------|----------|
-| **Ekran Kontrolü** | 12 | Screenshot, tıklama, yazı yazma, sürükle-bırak |
-| **Ses** | 4 | Kayıt, çalma, metin-ses |
-| **Webcam** | 3 | Fotoğraf, video kaydı |
-| **Dosya Sistemi** | 9 | Okuma, yazma, silme, taşıma, arama, klasör |
-| **ZIP/Arşiv** | 5 | ZIP/TAR oluşturma/çıkarma |
+| **Ekran Kontrolü** | 21 | Screenshot, tıklama, yazı yazma, sürükle-bırak, OCR, pencere yönetimi |
+| **Ses** | 4 | Kayıt, çalma, metin-ses dönüşümü |
+| **Webcam** | 3 | Fotoğraf, video kaydı, kamera listeleme |
+| **Dosya Sistemi** | 7 | Okuma, yazma, silme, taşıma, arama, klasör işlemleri |
+| **ZIP/Arşiv** | 5 | ZIP/TAR oluşturma/çıkarma, şifreleme |
 | **PDF** | 4 | Okuma, oluşturma, birleştirme, bölme |
-| **Word** | 3 | DOCX oluşturma/okuma/düzenleme |
-| **Excel** | 3 | XLSX oluşturma/okuma/düzenleme |
-| **Kod Analiz** | 4 | Proje analizi, pattern arama, VS Code |
-| **Sistem** | 6 | CPU/RAM bilgisi, process kontrolü |
+| **Word/Excel** | 6 | DOCX/XLSX oluşturma/okuma/düzenleme |
+| **Kod & Git** | 11 | Git işlemleri, kod analizi, VS Code entegrasyonu, test çalıştırma |
+| **Sistem** | 6 | CPU/RAM bilgisi, process kontrolü, ağ, shell erişimi |
 | **USB** | 2 | Cihaz listeleme, güvenli çıkarma |
-| **Ağ** | 2 | Ping, network bilgisi |
-| **OCR** | 2 | Ekran/görüntüden metin okuma |
-| **Pencere** | 4 | Pencere yönetimi, kilit, kapatma |
-| **Shell** | 1 | PowerShell/Bash komut çalıştırma |
-| **Diyalog** | 3 | Uyarı, onay, giriş pencereleri |
-| **Görev/Takvim** | 5 | Planlama araçları |
+| **Görev/Takvim** | 5 | Planlama, görev takibi, takvim yönetimi |
 | **E-posta** | 3 | Gmail/Outlook okuma, taslak oluşturma |
-| **Web** | 4 | Haber, web sayfası çekme, screenshot, araştırma |
+| **Web & Araştırma** | 5 | Haber arama, web sayfası çekme, detaylı araştırma raporu |
+| **Not Defteri** | 6 | Karmaşık görevleri adımlara bölme, checkpoint'lerle devam etme |
+| **Hafıza** | 3 | Uzun süreli hafıza, kullanıcı tercihleri hatırlama |
 
-**Toplam: 77 Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
+**Toplam: 95+ Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
 
 ### 📸 Medya Otomatik Teslimi
 
@@ -71,12 +66,26 @@ Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **otoma
 
 ### 🧠 Akıllı Tool Seçimi
 
-77 aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajındaki anahtar kelimeler analiz edilerek **en fazla 20 ilgili araç** seçilir:
+95+ aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajındaki anahtar kelimeler analiz edilerek **en fazla 20 ilgili araç** seçilir:
 
-- "ekran görüntüsü al" → core + screen kategorisi (~17 araç)
+- "ekran görüntüsü al" → core + screen kategorisi (~21 araç)
 - "PDF oku" → core + file + office kategorisi
 - "haber ara" → core + web kategorisi
 - Eşleşme yoksa → tüm araçlar (fallback)
+
+### ⚡ Hızlı Mod (Düşünme Yok)
+
+Screenshot, webcam gibi basit işlemlerde **düşünme aşaması atlanır**:
+- Ekran görüntüsü: Direkt çalıştırılır (~1 saniye)
+- Webcam fotoğraf: Anında çekilir
+- Sistem bilgisi: Hemen döndürülür
+
+### 📓 Not Defteri Sistemi (Checkpoint'ler)
+
+Karmaşık görevler için **otomatik görev parçalama**:
+- Uzun araştırmalar adımlara bölünür
+- Her adım tamamlandığında checkpoint kaydedilir
+- Timeout veya kesinti olursa **"devam et"** yazarak kaldığınız yerden devam edilir
 
 ---
 
@@ -219,9 +228,17 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 "Sayfayı aşağı kaydır"
 ```
 
+**OCR (Metin Tanıma):**
+```
+"Ekrandaki şu bölgedeki metni oku"
+"Şu görüntüdeki yazıyı çıkar"
+```
+
 **Araçlar:**
 - `screenshot_desktop` - Masaüstü görüntüsü
 - `screenshot_webpage` - Web sayfası görüntüsü  
+- `ocr_screenshot` - Ekrandan metin oku
+- `ocr_image` - Görüntüden metin oku
 - `find_image_on_screen` - Görüntü ara
 - `click_on_screen` - Tıklama
 - `type_text` - Yazı yazma
@@ -230,6 +247,11 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 - `drag_to` - Sürükle-bırak
 - `scroll` - Kaydırma
 - `hotkey` - Kısayol (ctrl+c, alt+tab, win+r)
+- `get_window_list` - Pencereleri listele
+- `activate_window` - Pencere öne getir
+- `minimize_all_windows` - Tüm pencereleri küçült
+- `lock_workstation` - Ekran kilidi
+- `shutdown_system` - Bilgisayarı kapat/yeniden başlat
 
 ---
 
@@ -422,7 +444,16 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 💻 9. KOD ve PROJE ANALİZİ
+### 💻 9. KOD ve PROJE ANALİZİ (Git Dahil)
+
+**Git İşlemleri:**
+```
+"Git status kontrol et"
+"Son commit'leri göster"
+"Değişiklikleri diff'le"
+"Yeni branch oluştur"
+"Commit yap: 'Bug fix'"
+```
 
 **Kod Analizi:**
 ```
@@ -431,26 +462,29 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "Tüm Python dosyalarını analiz et ve raporla"
 ```
 
-**Proje Analizi:**
-```
-"Projemin kod yapısını analiz et ve markdown raporu oluştur"
-"Hangi dilde kaç satır kod var?"
-```
-
 **VS Code Açma:**
 ```
 "Bu projeyi VS Code'da aç"
 "Şu dosyayı VS Code'da aç"
-"Bu klasörü VS Code'da aç"
+```
+
+**Test Çalıştırma:**
+```
+"Testleri çalıştır"
+"pytest ile testleri koş"
 ```
 
 **Araçlar:**
+- `git_status`, `git_diff`, `git_log`, `git_commit`, `git_branch`
+- `find_symbols` - Sembol bul
+- `code_search` - Kodda ara
+- `refactor_rename` - Refactor
+- `run_tests` - Test çalıştır
+- `vscode_command` - VS Code komutu
+- `claude_code_ask` - Claude Code entegrasyonu
 - `analyze_code` - Kod analizi
-- `find_code_patterns` - Pattern arama
+- `find_code_patterns` - Pattern ara
 - `analyze_project_code` - Proje analizi
-- `open_in_vscode` - VS Code'da aç
-- `open_folder` - Klasör aç
-- `create_folder` - Klasör oluştur
 
 ---
 
@@ -477,33 +511,24 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "Ekranı kilitle"
 ```
 
+**Shell Erişimi:**
+```
+"ipconfig komutunu çalıştır"
+"Get-Process | Select-Object -First 10"
+```
+
 **Araçlar:**
 - `get_system_info` - Sistem bilgisi
 - `list_processes` - Process listele
 - `kill_process` - Process sonlandır
 - `shutdown_system` - Kapat/yeniden başlat
-- `lock_workstation` - Ekran kilidi
+- `execute_command` - PowerShell/Bash komut
+- `network_info` - Ağ bilgisi
+- `ping_host` - Ping at
 
 ---
 
-### 🪟 11. PENCERE YÖNETİMİ (Windows)
-
-**Pencere Kontrolü:**
-```
-"Açık pencereleri listele"
-"Chrome penceresini öne getir"
-"Tüm pencereleri simge durumuna küçült"
-"Notepad penceresini aktif et"
-```
-
-**Araçlar:**
-- `get_window_list` - Pencereleri listele
-- `activate_window` - Öne getir
-- `minimize_all_windows` - Hepsini küçült
-
----
-
-### 🔌 12. USB YÖNETİMİ
+### 🔌 11. USB YÖNETİMİ
 
 **USB Kontrolü:**
 ```
@@ -517,7 +542,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 👁️ 13. OCR (METİN TANIMA)
+### 👁️ 12. OCR (METİN TANIMA)
 
 **Ekrandan Metin Okuma:**
 ```
@@ -532,7 +557,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 💬 14. DİYALOG PENCERELERİ
+### 💬 13. DİYALOG PENCERELERİ
 
 **Kullanıcı Etkileşimi:**
 ```
@@ -548,24 +573,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 🐚 15. SHELL ERİŞİMİ
-
-**PowerShell/Bash:**
-```
-"ipconfig komutunu çalıştır"
-"Get-Process | Select-Object -First 10"
-"pip install paket_adi"
-"dir C:\Users"
-```
-
-**Not:** Tehlikeli komutlar (format, diskpart, registry) güvenlik katmanı tarafından onay gerektirir.
-
-**Araçlar:**
-- `execute_command` - Komut çalıştır
-
----
-
-### 📅 16. GÖREV ve TAKVİM
+### 📅 14. GÖREV ve TAKVİM
 
 **Görev Yönetimi:**
 ```
@@ -589,21 +597,22 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 📧 17. E-POSTA
+### 📧 15. E-POSTA
 
 **Gmail/Outlook:**
 ```
-"Gmail'deki son 5 okunmamış maili özetle"
+"Gmail'deki son 5 okunmamış maili özelle"
 "Outlook gelen kutusunu kontrol et"
 ```
 
 **Araçlar:**
 - `check_gmail_messages` - Gmail oku
 - `check_outlook_messages` - Outlook oku
+- `create_email_draft` - Taslak oluştur
 
 ---
 
-### 🌐 18. WEB ve ARAŞTIRMA
+### 🌐 16. WEB ve ARAŞTIRMA
 
 **Web:**
 ```
@@ -612,11 +621,60 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "Yapay zeka trendleri hakkında araştırma yap ve rapor yaz"
 ```
 
+**Detaylı Araştırma:**
+```
+"İran-ABD ilişkilerini detaylı araştır ve rapor hazırla"
+"Konu A ve Konu B'yi karşılaştır"
+```
+
 **Araçlar:**
 - `search_news` - Haber ara
 - `fetch_web_page` - Sayfa çek
-- `research_and_report` - Araştırma
-- `create_email_draft` - E-posta taslağı
+- `research_and_report` - Detaylı araştırma raporu
+- `compare_topics` - İki konuyu karşılaştır
+- `research_note` - Araştırma notu al
+
+---
+
+### 📝 17. NOT DEFTERİ SİSTEMİ (Checkpoint'ler)
+
+Karmaşık görevleri **otomatik parçalama** ve **kaldığınız yerden devam etme**:
+
+```
+"İran-ABD savaşının küresel finans piyasalarına etkisini detaylı araştır"
+```
+
+**Otomatik Akış:**
+1. `notebook_create` - Görev planı oluşturulur
+2. Her adım `notebook_complete_step` ile işaretlenir
+3. Timeout olursa → "**Devam et**" yazarak devam edersiniz
+4. `notebook_status` - Durumu kontrol et
+5. `notebook_list` - Tüm not defterlerini gör
+
+**Araçlar:**
+- `notebook_create` - Not defteri oluştur
+- `notebook_add_note` - Not ekle
+- `notebook_complete_step` - Adımı tamamla
+- `notebook_status` - Durum kontrolü
+- `notebook_list` - Listele
+- `notebook_add_step` - Yeni adım ekle
+
+---
+
+### 🧠 18. HAFIZA SİSTEMİ
+
+Uzun süreli hafıza ve kullanıcı tercihleri:
+
+```
+"Benim adım Ahmet, bunu hatırla"
+"Tercihim koyu tema"
+"Önceki görüşmemizde ne konuşmuştuk?"
+```
+
+**Araçlar:**
+- `memory_store` - Bilgi kaydet
+- `memory_recall` - Bilgi hatırla
+- `memory_stats` - Hafıza istatistikleri
 
 ---
 
@@ -628,6 +686,7 @@ Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüle
 
 - Telegram bot'a mesaj yazarsınız, ajan cevap verir
 - Ajan bir ekran görüntüsü veya ses kaydı ürettiğinde, otomatik olarak Telegram'a iletilir
+- **Görseller OCR ile okunur** - Ekran görüntüsü gönderip "bunu analiz et" diyebilirsiniz
 - Ayrı bir tool yoktur — medya pipeline'ı otomatiktir
 
 **Kullanım Örnekleri (Telegram'dan yazın):**
@@ -635,6 +694,7 @@ Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüle
 "Masaüstümün ekran görüntüsünü al"
 "GitHub'ın screenshot'ını al"
 "5 saniyelik ses kaydı yap"
+"[Ekran görüntüsü gönder] Bunu incele"
 ```
 
 **Kurulum:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_ALLOWED_USER_ID` ayarlanmalı
@@ -685,7 +745,13 @@ Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüle
 "Webcam'den fotoğraf çek"
 "10 saniyelik ses kaydı yap"
 ```
-Medya dosyaları otomatik olarak hem web arayüzünde hem de Telegram'da görüntülenir.
+
+**Örnek 6: Checkpoint'li Uzun İş**
+```
+"İran-ABD savaşının küresel finans piyasalarına etkisini detaylı araştır"
+[Timeout olursa]
+"Devam et"
+```
 
 ---
 
@@ -734,7 +800,8 @@ pipwin install pyaudio
 │     ▼                   ▼                   ▼              │
 │  ┌───────┐        ┌──────────┐       ┌──────────┐        │
 │  │  LLM  │        │  Memory  │       │  Tools   │        │
-│  │Ollama │        │(Session) │       │ (77 Adt) │        │
+│  │Ollama │        │(Session+ │       │ (95+ Adt)│        │
+│  │        │        │ Notebook)│       │          │        │
 │  └───────┘        └──────────┘       └──────────┘        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
@@ -753,6 +820,12 @@ pipwin install pyaudio
 | **NORMAL** | Loglanır, çalıştırılır | Dosya yazma, shell komutları, otomasyon, yazılım kurma |
 | **GÜVENLİ** | Hemen çalıştırılır | Dosya okuma, sistem bilgisi, screenshot, OCR, web içeriği, ofis belgeleri |
 
+### Bağlam-Duyarlı Policy
+
+**Finansal analiz** ile **finansal işlem** ayrımı:
+- ✅ "Finansal piyasalar analizi raporu" → İzin verilir
+- ❌ "Para transferi yap" → Engellenir
+
 ### Prompt Injection Koruması
 
 - Harici içerikten (web sayfaları, e-postalar, belgeler) gelen talimatlar reddedilir
@@ -761,7 +834,7 @@ pipwin install pyaudio
 
 ---
 
-## 📦 Yeni Paketler (77 Araç İçin)
+## 📦 Bağımlılıklar
 
 ```txt
 # HTTP/Network (Telegram API, Web)
