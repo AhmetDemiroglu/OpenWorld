@@ -130,20 +130,26 @@ class AgentService:
             pending = nb_status.get("pending_steps", [])
             completed = nb_status.get("completed_steps", 0)
             total = nb_status.get("total_steps", 0)
+            goal = nb_status.get("goal", "")
             
             if pending:
                 next_step = pending[0]
                 # Sistem mesaji olarak baglam ekle
                 context_msg = (
                     f"[SISTEM NOTU] '{nb_name}' not defterine devam ediliyor. "
+                    f"Hedef: {goal}\n"
                     f"İlerleme: {completed}/{total} adim tamamlandi. "
-                    f"Siradaki adim: {next_step}"
+                    f"Siradaki adim: {next_step}\n\n"
+                    f"ONEMLI: Arastirma yapacaksan research_and_report kullan ve topic='{goal}' olarak belirt."
                 )
                 messages.append(ChatMessage(role="system", content=context_msg))
                 
-                # Kullanici mesajini guncelle - daha acik bir talimat
-                if "devam" in user_message.lower() or len(user_message) < 20:
-                    user_message = f"{nb_name} not defterindeki siradaki adimi yap: {next_step}"
+                # Kullanici mesajini guncelle
+                if "devam" in user_message.lower() or len(user_message) < 30:
+                    if goal:
+                        user_message = f"{nb_name} not defterindeki siradaki adimi yap. Hedef: {goal}. Adim: {next_step}"
+                    else:
+                        user_message = f"{nb_name} not defterindeki siradaki adimi yap: {next_step}"
 
         messages.append(ChatMessage(role="user", content=user_message))
 
@@ -224,6 +230,7 @@ class AgentService:
                 steps == 1
                 and preferred_call is not None
                 and preferred_call.name == "research_and_report"
+                and not self._is_negative_tool_mention(user_message, "research_and_report")
                 and preferred_call.name in allowed_tool_names
                 and (not tool_calls or all(getattr(c, "name", "") != "research_and_report" for c in tool_calls))
             ):
@@ -286,6 +293,31 @@ class AgentService:
                     continue
 
                 args = self._normalize_tool_call_arguments(raw_arguments)
+                
+                # research_and_report icin topic kontrolu
+                if call_name == "research_and_report" and not args.get("topic"):
+                    # Notebook'tan goal bilgisini almaya calis
+                    try:
+                        from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
+                        list_result = tool_notebook_list()
+                        notebooks = list_result.get("notebooks", [])
+                        if notebooks:
+                            # Son aktif notebook'u bul
+                            incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+                            if incomplete:
+                                nb_name = incomplete[0]["name"]
+                                status = tool_notebook_status(nb_name)
+                                goal = status.get("goal", "")
+                                if goal:
+                                    args["topic"] = goal
+                                else:
+                                    args["topic"] = nb_name.replace("_", " ")
+                            else:
+                                args["topic"] = notebooks[0]["name"].replace("_", " ")
+                        else:
+                            args["topic"] = "Genel arastirma"
+                    except Exception:
+                        args["topic"] = "Genel arastirma"
                 signature = self._call_signature(call_name, args)
                 call_counts[signature] = call_counts.get(signature, 0) + 1
                 used_tools.append(call_name)
@@ -600,6 +632,7 @@ class AgentService:
 
     def _is_fast_tool(self, tool_name: str) -> bool:
         """Hizli calisacak, dusunme gerektirmeyen araclar."""
+        # NOT: Notebook araçları HIZLI MODDA YOK çünkü devam eden iş akışı gerektirir
         fast_tools = {
             "screenshot_desktop", "screenshot_webpage", "webcam_capture",
             "webcam_record_video", "mouse_position", "get_system_info",
@@ -616,7 +649,16 @@ class AgentService:
         normalized = self._normalize_text_for_match(text)
 
         for tool_name in sorted(self._known_tool_names, key=len, reverse=True):
-            if re.search(rf"\b{re.escape(tool_name.lower())}\b", lower):
+            tool_norm = self._normalize_text_for_match(tool_name)
+            explicit_patterns = (
+                rf"\b(?:tool|arac|command|komut|name)\s*[:=]\s*{re.escape(tool_norm)}\b",
+                rf"\b(?:run|execute|calistir|kullan)\s+{re.escape(tool_norm)}\b",
+                rf"^\s*{re.escape(tool_norm)}\s*(?:\(|$)",
+            )
+            if (
+                any(re.search(pattern, normalized) for pattern in explicit_patterns)
+                and not self._is_negative_tool_mention(text, tool_name)
+            ):
                 return ParsedTextToolCall(
                     id=f"text_tc_{uuid.uuid4().hex[:10]}",
                     name=tool_name,
@@ -693,6 +735,28 @@ class AgentService:
                     name="screenshot_webpage",
                     arguments={"url": url_match.group(0).rstrip(".,)")},
                 )
+
+        # NOTEBOOK DEVAM ETME - "devam et", "rapora devam" vb.
+        if "notebook_status" in self._known_tool_names and any(
+            k in normalized for k in ("devam", "tamamla", "bitir", "ilerle", "sonraki adim", "rapor")
+        ):
+            # Mevcut not defterini bul
+            from .tools.notebook_tools import tool_notebook_list
+            try:
+                list_result = tool_notebook_list()
+                notebooks = list_result.get("notebooks", [])
+                
+                # Devam eden not defteri bul
+                incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+                if incomplete:
+                    nb_name = incomplete[0]["name"]  # En sonuncu
+                    return ParsedTextToolCall(
+                        id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                        name="notebook_status",
+                        arguments={"name": nb_name},
+                    )
+            except:
+                pass
 
         # Kapsamlı görev algılama -> notebook_create öner
         if "notebook_create" in self._known_tool_names and any(
@@ -892,3 +956,16 @@ class AgentService:
             "kamera",
         )
         return any(marker in normalized for marker in intent_markers)
+
+    @staticmethod
+    def _is_negative_tool_mention(text: str, tool_name: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(text)
+        tool_norm = AgentService._normalize_text_for_match(tool_name)
+        if tool_norm not in normalized:
+            return False
+
+        negative_patterns = (
+            rf"\b{re.escape(tool_norm)}\b\s*(?:ile\s*)?(?:kullanma|kullanmadan|olmadan|haric|disinda|except|without)\b",
+            rf"\b(?:kullanma|kullanmadan|olmadan|haric|disinda|except|without)\s+\b{re.escape(tool_norm)}\b",
+        )
+        return any(re.search(pattern, normalized) for pattern in negative_patterns)

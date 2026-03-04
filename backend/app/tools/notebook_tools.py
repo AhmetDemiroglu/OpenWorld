@@ -253,8 +253,14 @@ def tool_notebook_status(name: str) -> Dict[str, Any]:
         for match in re.finditer(r'^- \[\d{2}:\d{2}\] (.+)$', content, re.MULTILINE):
             notes.append(match.group(1))
 
+        # Hedefi cikar
+        goal_match = re.search(r'^## Hedef\s*\n(.+?)(?=\n##|\Z)', content, re.MULTILINE | re.DOTALL)
+        goal = goal_match.group(1).strip() if goal_match else ""
+        
         result: Dict[str, Any] = {
             "path": str(path),
+            "name": name,
+            "goal": goal,
             "total_steps": len(steps),
             "completed_steps": done_count,
             "completed_list": completed,

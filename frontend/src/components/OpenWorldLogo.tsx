@@ -1,4 +1,9 @@
-export function OpenWorldLogo({ size = 40, className = "" }) {
+interface OpenWorldLogoProps {
+  size?: number;
+  className?: string;
+}
+
+export function OpenWorldLogo({ size = 40, className = "" }: OpenWorldLogoProps) {
   return (
     <svg
       className={className}

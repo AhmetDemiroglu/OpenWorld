@@ -1368,8 +1368,8 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
 
     start_time = time.time()
     # ESNEK ZAMAN LIMIDI - islem turune gore
-    # Haber arama: ~30sn, Icerik cekme: ~60sn, Rapor yazma: ~10sn
-    MAX_TOTAL_TIME = 120  # 2 dakika - yeterli ama cok uzun degil
+    # Haber arama: ~60sn, Icerik cekme: ~90sn, Rapor yazma: ~30sn
+    MAX_TOTAL_TIME = 180  # 3 dakika - notebook devam etme icin yeterli
     
     entries: List[Dict[str, Any]] = []
     failed_sources: List[Dict[str, str]] = []

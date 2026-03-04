@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install react-markdown remark-gfm rehype-highlight)"
+      "Bash(cd:*)",
+      "Bash(grep:*)"
     ]
   }
 }

@@ -117,6 +117,10 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     """İstek turune gore timeout belirle."""
     text_lower = text.lower()
     
+    # GORSEL ISLEME: OCR + analiz uzun surebilir (3 dakika)
+    if "gorsel" in text_lower or "[kullanici bir gorsel" in text_lower:
+        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+    
     # HIZLI ISLEMLER: Direkt calisir, kisa timeout yeterli
     fast_patterns = ["ekran goruntusu", "screenshot", "webcam", "fotograf cek", 
                      "masaustu", "desktop", "kamera", "anlik goruntu"]
@@ -124,12 +128,16 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         # Hizli islemler 10sn icinde biter
         return httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
     
-    # ARASTIRMA ISLEMLERI: Uzun surebilir
+    # NOTEBOOK DEVAM ETME: Cok uzun surebilir (5 dakika)
+    if any(p in text_lower for p in ["devam", "not defter", "rapora devam"]):
+        return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+    
+    # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
     research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
                         "analiz", "research", "report", "pdf olustur", "word olustur"]
     if any(p in text_lower for p in research_patterns):
-        # Arastirma icin 3 dakika
-        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+        # Arastirma icin 5 dakika
+        return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
     
     # STANDART: 1 dakika
     return httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
@@ -160,9 +168,20 @@ async def call_agent(session_id: str, text: str) -> dict:
     except httpx.TimeoutException as exc:
         # Timeout turune gore mesaj
         text_lower = text.lower()
-        if any(p in text_lower for p in ["arastir", "rapor", "detayli"]):
+        if "gorsel" in text_lower or "[kullanici bir gorsel" in text_lower:
             raise RuntimeError(
-                "Arastirma zaman asimina ugradi ancak not defterine kaydedildi. "
+                "Gorsel analizi zaman asimina ugradi (5dk). Gorsel cok buyuk olabilir veya "
+                "sistem yogun. Lutfen tekrar deneyin veya gorseli daha kucuk boyutta gonderin."
+            ) from exc
+        elif "devam" in text_lower or "not defter" in text_lower:
+            raise RuntimeError(
+                "Notebook devam islemi zaman asimina ugradi (5dk). "
+                "Sistem cok yavas calisiyor olabilir. Lutfen biraz bekleyip tekrar 'devam et' yazin. "
+                "Not defteri kaydedildi, veri kaybi yok."
+            ) from exc
+        elif any(p in text_lower for p in ["arastir", "rapor", "detayli"]):
+            raise RuntimeError(
+                "Arastirma zaman asimina ugradi (5dk) ancak not defterine kaydedildi. "
                 "'Devam et' yazarak kaldigim yerden devam edebilirim."
             ) from exc
         else:
@@ -191,36 +210,80 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _process_image_with_ocr(image_bytes: bytes, caption: str = "") -> str:
-    """Gorseli OCR ile isleyip metin cikar."""
+    """Gorseli OCR ile isleyip metin cikar. Zaman asimi korumali."""
     import tempfile
+    import asyncio
     from pathlib import Path
+    from concurrent.futures import ThreadPoolExecutor
+    
+    def _do_ocr():
+        try:
+            # Gecici dosyaya kaydet
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+            
+            # OCR ile oku
+            from .tools.registry import execute_tool
+            result = execute_tool("ocr_image", {"image_path": tmp_path})
+            
+            # Gecici dosyayi temizle
+            try:
+                Path(tmp_path).unlink()
+            except:
+                pass
+            
+            return result.get("text", "")
+        except Exception as e:
+            return f""
     
     try:
-        # Gecici dosyaya kaydet
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
+        # OCR islemini 10 saniyede bitir, yoksa iptal et
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            ocr_text = await asyncio.wait_for(
+                loop.run_in_executor(pool, _do_ocr),
+                timeout=10.0
+            )
         
-        # OCR ile oku (tools/registry'den tool_ocr_image cagir)
-        from .tools.registry import execute_tool
-        result = execute_tool("ocr_image", {"image_path": tmp_path})
+        # HER DURUMDA gorsel baglami olustur
+        visual_context = "[SISTEM: Kullanici bir GORSEL gonderdi."
         
-        # Gecici dosyayi temizle
-        try:
-            Path(tmp_path).unlink()
-        except:
-            pass
-        
-        ocr_text = result.get("text", "")
-        if ocr_text and ocr_text.strip():
-            prompt = f"[Kullanici bir gorsel gonderdi. OCR ile okunan metin:]\n\n{ocr_text[:2000]}"
-            if caption:
-                prompt += f"\n\n[Gorsel aciklamasi: {caption}]"
-            return prompt
+        if ocr_text and ocr_text.strip() and len(ocr_text.strip()) > 3:
+            # OCR basarili - metin var
+            visual_context += f" OCR ile metinler okundu:]\n\n"
+            visual_context += f"=== GORSELDEKI METINLER ===\n{ocr_text[:1500]}\n"
+            visual_context += f"=== METIN SONU ===\n\n"
         else:
-            return "[Kullanici bir gorsel gonderdi ancak icerik okunamadi]"
+            # OCR basarisiz - metin yok
+            visual_context += "]\n\n"
+            visual_context += "[NOT: Gorselde okunabilir metin bulunamadi.]\n\n"
+        
+        if caption:
+            visual_context += f"[Kullanicinin istegi: {caption}]\n"
+            visual_context += f"\nGorev: {caption}"
+        else:
+            visual_context += "\nGorev: Gorseldeki metinleri analiz et ve yorumla."
+        
+        return visual_context
+        
+    except asyncio.TimeoutError:
+        # Zaman asimi - yine de gorsel oldugunu ve istegi belirt
+        visual_context = "[SISTEM: Kullanici bir GORSEL gonderdi (OCR zaman asimi)]\n\n"
+        if caption:
+            visual_context += f"[Kullanicinin istegi: {caption}]\n\nGorev: {caption}"
+        else:
+            visual_context += "\nGorev: Gorseli analiz et."
+        return visual_context
+        
     except Exception as e:
-        return f"[Kullanici bir gorsel gonderdi ancak islenirken hata: {e}]"
+        # Hata durumu
+        visual_context = "[SISTEM: Kullanici bir GORSEL gonderdi (OCR hatasi)]\n\n"
+        if caption:
+            visual_context += f"[Kullanicinin istegi: {caption}]\n\nGorev: {caption}"
+        else:
+            visual_context += "\nGorev: Gorseli analiz et."
+        return visual_context
 
 
 async def _check_incomplete_notebooks(session_id: str) -> Optional[str]:
@@ -262,27 +325,78 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         photo = update.message.photo[-1]
         caption = update.message.caption or ""
         
+        # Once bilgi mesaji gonder
+        status_msg = await update.message.reply_text("📸 Gorsel algilandi, icerik okunuyor...")
+        
         try:
             # Fotografi indir
             file = await context.bot.get_file(photo.file_id)
             image_bytes = await file.download_as_bytearray()
             
-            # OCR ile isle
+            # OCR ile isle (max 10 saniye)
             user_message = await _process_image_with_ocr(bytes(image_bytes), caption)
             
-            # Kullaniciya bildir
-            await update.message.reply_text("📸 Gorsel algilandi, icerik okunuyor...")
+            # OCR sonucunu kontrol et
+            if "okunabilir metin bulunamadi" in user_message.lower() or "metin yok" in user_message.lower():
+                # Gorselde metin yok - kullaniciyi bilgilendir
+                info_text = (
+                    "ℹ️ **Gorsel durumu:**\n"
+                    "Gorselde okunabilir **metin bulunamadi**.\n"
+                    "Bu bot gorsellerdeki yazilari OCR ile okuyabilir,\n"
+                    "ama nesneleri/karakterleri goremez.\n\n"
+                )
+                if caption:
+                    info_text += f"Isteginiz isleniyor: {caption}"
+                else:
+                    info_text += "Gorseli metin olarak anlatmak isterseniz yazabilirsiniz."
+                
+                await status_msg.edit_text(info_text)
+            else:
+                # Metin bulundu - devam et
+                await status_msg.edit_text("✅ Gorseldeki metinler OCR ile okundu, analiz ediliyor...")
+            
         except Exception as e:
-            await update.message.reply_text(f"❌ Gorsel islenirken hata: {e}")
-            return
+            await status_msg.edit_text(f"⚠️ Gorsel islenirken sorun: {e}")
+            # Yine de devam et - bos mesaj kontrolu yapilacak
+            if caption:
+                user_message = f"[Kullanici bir gorsel gonderdi. Aciklama: {caption}]"
+            else:
+                await update.message.reply_text("❌ Gorsel islenemedi. Lutfen metin olarak yazin.")
+                return
     
-    # 3. DOKUMAN/DOSYA
+    # 3. DOKUMAN (Resim dosyasi olarak gonderilmis olabilir)
     elif update.message.document:
-        await update.message.reply_text("📎 Dokumanlari henuz isleyemiyorum. Lutfen metin olarak yazin veya gorsel olarak gonderin.")
-        return
+        # Resim dosyasi mi kontrol et
+        mime_type = update.message.document.mime_type or ""
+        if mime_type.startswith("image/"):
+            status_msg = await update.message.reply_text("📸 Gorsel (dokuman olarak gonderildi) algilandi, icerik okunuyor...")
+            
+            try:
+                file = await context.bot.get_file(update.message.document.file_id)
+                image_bytes = await file.download_as_bytearray()
+                
+                caption = update.message.caption or ""
+                user_message = await _process_image_with_ocr(bytes(image_bytes), caption)
+                
+                await status_msg.edit_text("✅ Gorsel icerigi okundu, analiz ediliyor...")
+            except Exception as e:
+                await status_msg.edit_text(f"⚠️ Gorsel islenirken sorun: {e}")
+                if caption:
+                    user_message = f"[Kullanici bir gorsel gonderdi. Aciklama: {caption}]"
+                else:
+                    await update.message.reply_text("❌ Gorsel analiz edilemedi.")
+                    return
+        else:
+            await update.message.reply_text("📎 Bu dokuman turunu henuz isleyemiyorum. Lutfen metin olarak yazin veya gorsel olarak gonderin.")
+            return
     
     else:
         # Desteklenmeyen mesaj tipi
+        return
+    
+    # Bos mesaj kontrolu
+    if not user_message or not user_message.strip():
+        await update.message.reply_text("⚠️ Mesaj icerigi bos. Lutfen metin yazin veya gorsel gonderin.")
         return
     
     # Agent'i cagir
@@ -383,7 +497,11 @@ async def main() -> None:
     try:
         app = Application.builder().token(token).build()
         app.add_handler(CommandHandler("start", start_cmd))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+        # Hem metin hem fotoğraf mesajlarını dinle
+        app.add_handler(MessageHandler(
+            (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND, 
+            on_message
+        ))
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
