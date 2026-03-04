@@ -21,7 +21,8 @@ class OllamaClient:
         }
         if self.tools_supported and tools:
             payload["tools"] = tools
-        async with httpx.AsyncClient(timeout=90) as client:
+        timeout = httpx.Timeout(180.0, connect=20.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
             if resp.status_code == 400 and self.tools_supported:
                 self.tools_supported = False
@@ -83,11 +84,19 @@ def parse_tool_calls(raw_message: Dict[str, Any]) -> List[ToolCall]:
     parsed: List[ToolCall] = []
     for idx, call in enumerate(tool_calls):
         fn = call.get("function", {})
+        raw_arguments = fn.get("arguments", {}) or {}
+        if isinstance(raw_arguments, str):
+            try:
+                raw_arguments = __import__("json").loads(raw_arguments)
+            except Exception:
+                raw_arguments = {}
+        if not isinstance(raw_arguments, dict):
+            raw_arguments = {}
         parsed.append(
             ToolCall(
                 id=str(call.get("id", f"tc_{idx}")),
                 name=fn.get("name", ""),
-                arguments=fn.get("arguments", {}) or {},
+                arguments=raw_arguments,
             )
         )
     return parsed

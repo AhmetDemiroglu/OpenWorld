@@ -244,6 +244,13 @@ frontend/*.tsbuildinfo
 # DATA - USER GENERATED CONTENT (Kisisel veriler)
 # =============================================================================
 
+# Runtime/user outputs (tamami repo disi)
+data/**
+!data/.gitkeep
+backend/data/**
+backend/media/**
+backend/*_raporu.txt
+
 # Sessions (Sohbet gecmisi)
 data/sessions/
 data/sessions/*.json

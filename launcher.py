@@ -444,8 +444,10 @@ class LauncherApp:
     def _kill_existing_openworld_processes(self) -> None:
         cmd = (
             "$procs = Get-CimInstance Win32_Process | Where-Object { "
-            "($_.CommandLine -like '*app.main:app*' -or $_.CommandLine -like '*app.telegram_bridge*') "
-            "-and $_.CommandLine -like '*OpenWorld*backend*' }; "
+            "$cl = ($_.CommandLine | Out-String); "
+            "$isOpenWorldTool = ($cl -like '*app.main:app*' -or $cl -like '*app.telegram_bridge*'); "
+            "$isOurRuntime = ($cl -like '*OpenWorld*' -or $cl -like '*OpenWorldRuntime*'); "
+            "$isOpenWorldTool -and $isOurRuntime }; "
             "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }"
         )
         subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True)

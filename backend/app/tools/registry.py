@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import html as html_lib
 import ipaddress
 import os
@@ -12,7 +13,7 @@ import socket
 import subprocess
 import uuid
 from urllib.parse import quote_plus, urlparse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple, Optional
 import xml.etree.ElementTree as ET
@@ -22,7 +23,7 @@ import httpx
 from ..config import settings
 from ..secrets import decrypt_text
 
-# SÜPER AJAN ARAÇLARI
+# SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 from .super_agent import (
     # Screenshot
     tool_screenshot_desktop,
@@ -63,9 +64,9 @@ from .super_agent import (
     tool_ocr_image,
 )
 
-# OFİS ve ARŞİV ARAÇLARI
+# OFÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°S ve ARÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°V ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 from .office_tools import (
-    # ZIP/Arşiv
+    # ZIP/ArÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸iv
     tool_create_zip,
     tool_extract_zip,
     tool_list_zip_contents,
@@ -84,7 +85,7 @@ from .office_tools import (
     tool_create_excel,
     tool_read_excel,
     tool_add_to_excel,
-    # Diğer
+    # DiÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸er
     tool_open_in_vscode,
     tool_open_folder,
     tool_create_folder,
@@ -93,49 +94,110 @@ from .office_tools import (
 
 
 # =============================================================================
-# GELİŞMİŞ DOSYA SİSTEMİ ARAÇLARI - TÜM DİSK ERİŞİMİ
+# GELÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂMÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â DOSYA SÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°STEMÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â° ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - TÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“M DÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°SK ERÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°MÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°
 # =============================================================================
 
 _HOME_DIR = Path.home()
+_WORKSPACE_DIR = settings.workspace_path.resolve()
+_DESKTOP_DIR = (_WORKSPACE_DIR / "desktop").resolve()
+_DOCUMENTS_DIR = (_WORKSPACE_DIR / "documents").resolve()
+_DOWNLOADS_DIR = (_WORKSPACE_DIR / "downloads").resolve()
 
-# Kısa yol kısaltmaları → home altındaki gerçek dizinler
+# Shortcut aliases mapped to real folders
 _PATH_SHORTCUTS = {
-    "desktop": _HOME_DIR / "Desktop",
-    "masaustu": _HOME_DIR / "Desktop",
-    "masaüstü": _HOME_DIR / "Desktop",
-    "belgeler": _HOME_DIR / "Documents",
-    "documents": _HOME_DIR / "Documents",
-    "indirilenler": _HOME_DIR / "Downloads",
-    "downloads": _HOME_DIR / "Downloads",
+    "desktop": _DESKTOP_DIR,
+    "masaustu": _DESKTOP_DIR,
+    "belgeler": _DOCUMENTS_DIR,
+    "documents": _DOCUMENTS_DIR,
+    "indirilenler": _DOWNLOADS_DIR,
+    "downloads": _DOWNLOADS_DIR,
 }
+
+_USER_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\[^\\]+\\desktop(?:\\(?P<tail>.*))?$", re.IGNORECASE)
+_PUBLIC_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\public\\desktop(?:\\(?P<tail>.*))?$", re.IGNORECASE)
+
+
+def _map_desktop_tail_to_workspace(tail: str) -> Optional[Path]:
+    normalized = tail.replace("/", "\\").lstrip("\\/")
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if lowered.startswith("data\\"):
+        return (_WORKSPACE_DIR / normalized[len("data\\"):]).resolve()
+    project_prefix = f"{_WORKSPACE_DIR.parent.name.lower()}\\data\\"
+    if lowered.startswith(project_prefix):
+        return (_WORKSPACE_DIR / normalized[len(project_prefix):]).resolve()
+    return None
+
+
+def _map_desktop_to_workspace(path: str) -> str:
+    # If caller already points inside workspace, keep it as-is.
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        resolved_candidate = candidate.resolve()
+        try:
+            resolved_candidate.relative_to(_WORKSPACE_DIR)
+            return str(resolved_candidate)
+        except ValueError:
+            pass
+
+    normalized = path.replace("/", "\\")
+    for pattern in (_PUBLIC_DESKTOP_RE, _USER_DESKTOP_RE):
+        match = pattern.match(normalized)
+        if not match:
+            continue
+        tail = (match.group("tail") or "").lstrip("\\/")
+        mapped_workspace = _map_desktop_tail_to_workspace(tail)
+        if mapped_workspace is not None:
+            return str(mapped_workspace)
+        if not tail:
+            return str(_DESKTOP_DIR)
+        return str((_DESKTOP_DIR / tail).resolve())
+    return path
+
+
+def _normalize_generated_target(target: Path, category: str) -> Tuple[Path, Optional[str]]:
+    workspace = _WORKSPACE_DIR
+    resolved = target.resolve()
+    try:
+        resolved.relative_to(workspace)
+        return resolved, None
+    except ValueError:
+        rerouted = (workspace / category / resolved.name).resolve()
+        return rerouted, str(resolved)
 
 
 def _resolve_path(path: str) -> Path:
-    """Genişletilmiş path çözümleyici - tüm diske erişim."""
+    """Expanded path resolver with desktop alias normalization."""
     if not path or path == ".":
-        return _HOME_DIR
+        return _WORKSPACE_DIR
 
     stripped = path.strip().strip('"').strip("'")
+    lowered = stripped.lower().replace("/", "\\")
 
-    # Kısa yol kontrolü (ör. "Desktop", "Masaüstü")
-    shortcut = _PATH_SHORTCUTS.get(stripped.lower())
+    shortcut = _PATH_SHORTCUTS.get(lowered)
     if shortcut is not None:
         return shortcut
 
-    # /tmp/ → C:\tmp (Linux path düzeltme)
-    if stripped.startswith("/tmp"):
-        stripped = "C:\\tmp" + stripped[4:]
+    for shortcut_name, shortcut_path in _PATH_SHORTCUTS.items():
+        prefix = f"{shortcut_name}\\"
+        if lowered.startswith(prefix):
+            tail = stripped[len(prefix):].lstrip("\\/")
+            return (shortcut_path / tail).resolve()
 
-    # Absolute path kontrolü
+    if stripped.startswith("/tmp"):
+        tmp_tail = stripped[4:].lstrip("/\\")
+        return (_WORKSPACE_DIR / "tmp" / tmp_tail).resolve()
+
+    stripped = _map_desktop_to_workspace(stripped)
+
     if stripped.startswith("/") or (len(stripped) > 1 and stripped[1] == ":"):
         return Path(stripped).resolve()
 
-    # Relative path - home directory'den çöz
-    return Path(stripped).expanduser().resolve()
-
+    return (_WORKSPACE_DIR / Path(stripped).expanduser()).resolve()
 
 def _is_safe_path(path: Path) -> bool:
-    """Kritik sistem dosyalarını koru ama geri kalan her şeye izin ver."""
+    """Kritik sistem dosyalarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± koru ama geri kalan her ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸eye izin ver."""
     critical_paths = [
         Path("/System"),
         Path("/sys"),
@@ -155,14 +217,14 @@ def _is_safe_path(path: Path) -> bool:
 
 
 def tool_list_directory(path: str = ".", recursive: bool = False, pattern: str = "") -> Dict[str, Any]:
-    """Dizin içeriğini listele - tüm disk erişimi."""
+    """Dizin iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eriÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ini listele - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi."""
     target = _resolve_path(path)
     
     if not target.exists():
-        return {"error": f"Dizin bulunamadı: {path}", "path": str(target)}
+        return {"error": f"Dizin bulunamadÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±: {path}", "path": str(target)}
     
     if not target.is_dir():
-        return {"error": f"Bu bir dizin değil: {path}", "path": str(target)}
+        return {"error": f"Bu bir dizin deÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸il: {path}", "path": str(target)}
     
     try:
         items = []
@@ -211,14 +273,14 @@ def tool_list_directory(path: str = ".", recursive: bool = False, pattern: str =
 
 
 def tool_read_file(path: str, offset: int = 0, limit: int = 50000) -> Dict[str, Any]:
-    """Dosya oku - tüm disk erişimi (metin ve binary)."""
+    """Dosya oku - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi (metin ve binary)."""
     target = _resolve_path(path)
     
     if not target.exists():
-        return {"error": f"Dosya bulunamadı: {path}", "path": str(target)}
+        return {"error": f"Dosya bulunamadÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±: {path}", "path": str(target)}
     
     if not target.is_file():
-        return {"error": f"Bu bir dosya değil: {path}", "path": str(target)}
+        return {"error": f"Bu bir dosya deÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸il: {path}", "path": str(target)}
     
     try:
         # Text file detection
@@ -252,18 +314,18 @@ def tool_read_file(path: str, offset: int = 0, limit: int = 50000) -> Dict[str, 
                 "type": "binary",
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                "note": "Binary dosya - içerik gösterilemiyor"
+                "note": "Binary dosya - icerik gosterilemiyor",
             }
     except Exception as e:
         return {"error": str(e), "path": str(target)}
 
 
 def tool_write_file(path: str, content: str, append: bool = False) -> Dict[str, Any]:
-    """Dosya yaz - tüm disk erişimi."""
+    """Dosya yaz - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi."""
     target = _resolve_path(path)
     
     if not _is_safe_path(target):
-        return {"error": "Kritik sistem dosyası - yazma engellendi", "path": str(target)}
+        return {"error": "Kritik sistem dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± - yazma engellendi", "path": str(target)}
     
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -289,7 +351,7 @@ def tool_delete_file(path: str, confirm: bool = False) -> Dict[str, Any]:
     target = _resolve_path(path)
     
     if not _is_safe_path(target):
-        return {"error": "Kritik sistem dosyası - silme engellendi", "path": str(target)}
+        return {"error": "Kritik sistem dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± - silme engellendi", "path": str(target)}
     
     try:
         if target.is_file():
@@ -299,7 +361,7 @@ def tool_delete_file(path: str, confirm: bool = False) -> Dict[str, Any]:
             shutil.rmtree(target)
             return {"deleted": str(target), "type": "directory"}
         else:
-            return {"error": "Dosya bulunamadı", "path": str(target)}
+            return {"error": "Dosya bulunamadÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "path": str(target)}
     except Exception as e:
         return {"error": str(e), "path": str(target)}
 
@@ -323,12 +385,12 @@ def tool_copy_file(source: str, destination: str) -> Dict[str, Any]:
 
 
 def tool_move_file(source: str, destination: str) -> Dict[str, Any]:
-    """Dosya taşı."""
+    """Dosya taÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±."""
     src = _resolve_path(source)
     dst = _resolve_path(destination)
     
     if not _is_safe_path(src) or not _is_safe_path(dst):
-        return {"error": "Kritik sistem dosyası - taşıma engellendi"}
+        return {"error": "Kritik sistem dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± - taÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ma engellendi"}
     
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -339,7 +401,7 @@ def tool_move_file(source: str, destination: str) -> Dict[str, Any]:
 
 
 def tool_search_files(path: str, pattern: str, file_type: str = "") -> Dict[str, Any]:
-    """Dosya ara - tüm diskte."""
+    """Dosya ara - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m diskte."""
     target = _resolve_path(path)
     results = []
     
@@ -384,15 +446,15 @@ def tool_search_files(path: str, pattern: str, file_type: str = "") -> Dict[str,
 
 
 # =============================================================================
-# KOD ANALİZ ARAÇLARI
+# KOD ANALÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°Z ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 # =============================================================================
 
 def tool_analyze_code(path: str) -> Dict[str, Any]:
-    """Kod dosyasını analiz et."""
+    """Kod dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± analiz et."""
     target = _resolve_path(path)
     
     if not target.exists() or not target.is_file():
-        return {"error": "Dosya bulunamadı", "path": str(target)}
+        return {"error": "Dosya bulunamadÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "path": str(target)}
     
     try:
         content = target.read_text(encoding='utf-8', errors='ignore')
@@ -460,15 +522,18 @@ def tool_find_code_patterns(path: str, pattern: str, language: str = "") -> Dict
 
 
 # =============================================================================
-# OFİS/RAPOR ARAÇLARI
+# OFÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°S/RAPOR ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 # =============================================================================
 
 def tool_create_word_document(path: str, title: str, content: str, style: str = "default") -> Dict[str, Any]:
-    """Word belgesi oluştur (HTML formatında .docx)."""
+    """Word belgesi olustur (HTML formatinda .html)."""
     target = _resolve_path(path)
-    
+    warnings: List[str] = []
+    target, rerouted_from = _normalize_generated_target(target, "reports")
+    if rerouted_from:
+        warnings.append(f"Istenen yol workspace disindaydi, data altina yonlendirildi: {rerouted_from}")
+
     try:
-        # Simple HTML-based Word document
         html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -485,61 +550,94 @@ def tool_create_word_document(path: str, title: str, content: str, style: str = 
     <h1>{title}</h1>
     {content.replace(chr(10), '<br>')}
     <hr>
-    <p><small>Oluşturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}</small></p>
+    <p><small>Olusturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}</small></p>
 </body>
 </html>"""
-        
+
         target.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Save as .html (can be opened in Word)
-        if not str(target).endswith('.html'):
-            target = target.with_suffix('.html')
-        
-        target.write_text(html_content, encoding='utf-8')
-        
-        return {
+        if target.suffix.lower() != ".html":
+            target = target.with_suffix(".html")
+        target.write_text(html_content, encoding="utf-8")
+
+        payload: Dict[str, Any] = {
             "path": str(target),
             "title": title,
             "size": len(html_content),
-            "note": "HTML formatında Word uyumlu belge"
+            "note": "HTML formatinda Word uyumlu belge",
         }
+        if warnings:
+            payload["warnings"] = warnings
+        return payload
     except Exception as e:
         return {"error": str(e)}
 
-
-def tool_create_markdown_report(path: str, title: str, sections: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Markdown raporu oluştur."""
-    target = _resolve_path(path)
-    
+def tool_create_markdown_report(
+    path: str = "",
+    title: str = "",
+    sections: Optional[List[Dict[str, str]]] = None,
+    content: str = "",
+) -> Dict[str, Any]:
+    """Markdown raporu olustur. Daha esnek input kabul eder."""
     try:
-        lines = [f"# {title}", "", f"*Oluşturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}*", ""]
-        
-        for section in sections:
-            lines.append(f"## {section.get('title', 'Bölüm')}")
+        warnings: List[str] = []
+        clean_title = (title or "").strip() or "Rapor"
+        clean_content = content or ""
+
+        normalized_sections: List[Dict[str, str]] = []
+        if isinstance(sections, list):
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                normalized_sections.append(
+                    {
+                        "title": str(section.get("title", "Bolum")),
+                        "content": str(section.get("content", "")),
+                    }
+                )
+
+        if not normalized_sections and clean_content.strip():
+            normalized_sections.append({"title": "Detay", "content": clean_content})
+
+        if not normalized_sections:
+            normalized_sections.append({"title": "Detay", "content": "Icerik belirtilmedi."})
+
+        if path:
+            target = _resolve_path(path)
+        else:
+            stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            target = (settings.workspace_path / "reports" / f"report_{stamp}.md").resolve()
+        target, rerouted_from = _normalize_generated_target(target, "reports")
+        if rerouted_from:
+            warnings.append(f"Istenen yol workspace disindaydi, data altina yonlendirildi: {rerouted_from}")
+
+        lines = [f"# {clean_title}", "", f"*Olusturulma: {datetime.now().strftime('%Y-%m-%d %H:%M')}*", ""]
+        for section in normalized_sections:
+            lines.append(f"## {section.get('title', 'Bolum')}")
             lines.append("")
-            lines.append(section.get('content', ''))
+            lines.append(section.get("content", ""))
             lines.append("")
-        
-        content = '\n'.join(lines)
-        
-        if not str(target).endswith('.md'):
-            target = target.with_suffix('.md')
-        
+
+        report_text = "\n".join(lines)
+        if target.suffix.lower() != ".md":
+            target = target.with_suffix(".md")
+
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding='utf-8')
-        
-        return {
+        target.write_text(report_text, encoding="utf-8")
+
+        payload: Dict[str, Any] = {
             "path": str(target),
-            "title": title,
-            "sections": len(sections),
-            "size": len(content)
+            "title": clean_title,
+            "sections": len(normalized_sections),
+            "size": len(report_text),
         }
+        if warnings:
+            payload["warnings"] = warnings
+        return payload
     except Exception as e:
         return {"error": str(e)}
-
 
 # =============================================================================
-# SİSTEM BİLGİSİ ARAÇLARI
+# SÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°STEM BÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°LGÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°SÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â° ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 # =============================================================================
 
 def tool_get_system_info() -> Dict[str, Any]:
@@ -574,7 +672,7 @@ def tool_get_system_info() -> Dict[str, Any]:
 
 
 def tool_list_processes(filter_name: str = "", limit: int = 20) -> Dict[str, Any]:
-    """Çalışan process'leri listele."""
+    """ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸an process'leri listele."""
     try:
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'status', 'cpu_percent', 'memory_percent', 'create_time']):
@@ -598,7 +696,7 @@ def tool_list_processes(filter_name: str = "", limit: int = 20) -> Dict[str, Any
 
 
 def tool_kill_process(pid: int, confirm: bool = False) -> Dict[str, Any]:
-    """Process sonlandır."""
+    """Process sonlandÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r."""
     if not confirm:
         return {"error": "confirm=true gerekli", "pid": pid}
     
@@ -612,15 +710,15 @@ def tool_kill_process(pid: int, confirm: bool = False) -> Dict[str, Any]:
 
 
 # =============================================================================
-# GELİŞMİŞ SHELL ARACI
+# GELÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂMÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â SHELL ARACI
 # =============================================================================
 
 def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60) -> Dict[str, Any]:
-    """Komut çalıştır - gelişmiş shell erişimi."""
+    """Komut ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r - geliÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸miÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ shell eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi."""
     if not settings.enable_shell_tool:
-        return {"error": "Shell tool devre dışı. ENABLE_SHELL_TOOL=true ile etkinleştirin."}
+        return {"error": "Shell tool devre dÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±. ENABLE_SHELL_TOOL=true ile etkinleÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tirin."}
     
-    # Finansal komutları engelle
+    # Finansal komutlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± engelle
     forbidden_patterns = [
         'payment', 'purchase', 'credit card', 'bank transfer',
         'wire transfer', 'crypto', 'bitcoin', 'wallet'
@@ -629,7 +727,7 @@ def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60)
     cmd_lower = command.lower()
     for pattern in forbidden_patterns:
         if pattern in cmd_lower:
-            return {"error": f"Finansal işlem içeren komut engellendi: {pattern}"}
+            return {"error": f"Finansal iÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lem iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eren komut engellendi: {pattern}"}
     
     try:
         cwd = _resolve_path(working_dir) if working_dir else Path.home()
@@ -656,17 +754,17 @@ def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60)
             "stderr": result.stderr[:5000] if result.stderr else ""
         }
     except subprocess.TimeoutExpired:
-        return {"error": "Komut zaman aşımına uğradı", "command": command}
+        return {"error": "Komut zaman aÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±mÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±na uÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸radÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "command": command}
     except Exception as e:
         return {"error": str(e), "command": command}
 
 
 # =============================================================================
-# AĞ ARAÇLARI
+# AÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 # =============================================================================
 
 def tool_network_info() -> Dict[str, Any]:
-    """Ağ bilgisi al."""
+    """AÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ bilgisi al."""
     try:
         interfaces = {}
         for name, addrs in psutil.net_if_addrs().items():
@@ -709,11 +807,11 @@ def tool_ping_host(host: str, count: int = 4) -> Dict[str, Any]:
 
 
 # =============================================================================
-# ESKİ ARAÇLAR (Geriye uyumluluk için)
+# ESKÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â° ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LAR (Geriye uyumluluk iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§in)
 # =============================================================================
 
 def _resolve_inside_workspace(relative_path: str) -> Path:
-    """Eski workspace fonksiyonu - şimdi tüm diske erişim sağlar."""
+    """Eski workspace fonksiyonu - ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imdi tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m diske eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸im saÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸lar."""
     return _resolve_path(relative_path)
 
 
@@ -878,16 +976,30 @@ def tool_create_email_draft(to: str, subject: str, body: str) -> Dict[str, Any]:
     return {"draft_id": draft_id, "path": str(draft_path)}
 
 
-def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str, Any]:
-    lim = max(1, min(limit, 20))
-    rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=tr&gl=TR&ceid=TR:tr"
-    with httpx.Client(timeout=20, follow_redirects=True) as client:
-        resp = client.get(rss_url)
-        resp.raise_for_status()
-    root = ET.fromstring(resp.text)
-    items = []
-    for it in root.findall(".//item")[:lim]:
-        items.append(
+def _normalize_news_query(query: str) -> str:
+    safe_query = (query or "").strip()
+    if not safe_query:
+        return "turkiye gundem"
+
+    lowered = safe_query.lower()
+    generic_markers = (
+        "gunun haber",
+        "haber baslik",
+        "gundem",
+        "dunyada neler oluyor",
+        "dunya neler oluyor",
+        "world news",
+    )
+    if any(marker in lowered for marker in generic_markers):
+        return "dunya gundem OR iran OR abd OR savas OR ekonomi OR teknoloji"
+    return safe_query
+
+
+def _parse_news_items_from_rss(xml_text: str, limit: int) -> List[Dict[str, Any]]:
+    root = ET.fromstring(xml_text)
+    parsed: List[Dict[str, Any]] = []
+    for it in root.findall(".//item")[:limit]:
+        parsed.append(
             {
                 "title": it.findtext("title", default=""),
                 "link": it.findtext("link", default=""),
@@ -895,7 +1007,54 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
                 "source": it.findtext("source", default=""),
             }
         )
-    return {"query": query, "count": len(items), "results": items}
+    return parsed
+
+
+def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str, Any]:
+    safe_query = _normalize_news_query(query)
+    lim = max(1, min(limit, 20))
+
+    feed_urls = [
+        f"https://news.google.com/rss/search?q={quote_plus(safe_query)}&hl=tr&gl=TR&ceid=TR:tr",
+    ]
+    if any(k in safe_query.lower() for k in ("dunya", "world", "iran", "abd", "savas", "war")):
+        feed_urls.append(
+            f"https://news.google.com/rss/search?q={quote_plus(safe_query)}&hl=en-US&gl=US&ceid=US:en"
+        )
+
+    merged: List[Dict[str, Any]] = []
+    seen_links: set[str] = set()
+    feed_errors: List[str] = []
+
+    with httpx.Client(timeout=20, follow_redirects=True) as client:
+        for feed_url in feed_urls:
+            try:
+                resp = client.get(feed_url)
+                resp.raise_for_status()
+                for item in _parse_news_items_from_rss(resp.text, lim):
+                    link = str(item.get("link", "")).strip()
+                    key = link or str(item.get("title", "")).strip().lower()
+                    if not key or key in seen_links:
+                        continue
+                    seen_links.add(key)
+                    merged.append(item)
+                    if len(merged) >= lim:
+                        break
+            except (httpx.HTTPError, httpx.TimeoutException) as exc:
+                feed_errors.append(f"RSS fetch hatasi ({feed_url[:80]}): {type(exc).__name__}")
+            except ET.ParseError as exc:
+                feed_errors.append(f"RSS parse hatasi: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                feed_errors.append(f"Beklenmeyen hata: {type(exc).__name__}: {str(exc)[:100]}")
+            if len(merged) >= lim:
+                break
+
+    result: Dict[str, Any] = {"query": safe_query, "count": len(merged), "results": merged}
+    if feed_errors:
+        result["feed_warnings"] = feed_errors
+    if not merged and feed_errors:
+        result["error"] = "Tum haber kaynaklari basarisiz oldu: " + "; ".join(feed_errors)
+    return result
 
 
 def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
@@ -921,20 +1080,61 @@ def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
     }
 
 
-def tool_check_gmail_messages(max_results: int = 10, query: str = "in:inbox newer_than:2d") -> Dict[str, Any]:
+def _gmail_today_query() -> str:
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+    return f"in:inbox after:{today:%Y/%m/%d} before:{tomorrow:%Y/%m/%d}"
+
+
+def _outlook_today_filter_utc() -> str:
+    local_now = datetime.now().astimezone()
+    start_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_utc = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"receivedDateTime ge {start_utc} and receivedDateTime lt {end_utc}"
+
+
+def tool_check_gmail_messages(max_results: int = 10, query: str = "", **kwargs: Any) -> Dict[str, Any]:
     token = _get_secret_token(settings.gmail_access_token, settings.gmail_access_token_enc)
     if not token:
         token = _refresh_gmail_access_token()
     if not token:
         raise ValueError("Gmail token missing. Set access token or configure OAuth refresh token + client id.")
     limit = max(1, min(max_results, 20))
+    today_query = _gmail_today_query()
+    custom_query = (query or "").strip()
+    if not custom_query:
+        effective_query = today_query
+    elif "after:" in custom_query.lower() or "before:" in custom_query.lower():
+        effective_query = custom_query
+    else:
+        # Varsayilan olarak daima bugune kilitle.
+        effective_query = f"({custom_query}) {today_query}"
+    ignored_kwargs = {k: v for k, v in kwargs.items() if k not in {"query", "max_results"}}
     headers = {"Authorization": f"Bearer {token}"}
-    with httpx.Client(timeout=20) as client:
+    with httpx.Client(timeout=30) as client:
         list_resp = client.get(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-            params={"q": query, "maxResults": limit},
+            params={"q": effective_query, "maxResults": limit},
             headers=headers,
         )
+        if list_resp.status_code == 401:
+            refreshed = _refresh_gmail_access_token()
+            if refreshed:
+                token = refreshed
+                headers = {"Authorization": f"Bearer {token}"}
+                list_resp = client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                    params={"q": effective_query, "maxResults": limit},
+                    headers=headers,
+                )
+        if list_resp.status_code == 401:
+            body_preview = list_resp.text[:300]
+            raise ValueError(
+                "Gmail 401 Unauthorized. Access token gecersiz/suresi dolmus olabilir. "
+                f"API cevabi: {body_preview}"
+            )
         list_resp.raise_for_status()
         ids = [m["id"] for m in list_resp.json().get("messages", [])]
         results = []
@@ -957,10 +1157,18 @@ def tool_check_gmail_messages(max_results: int = 10, query: str = "in:inbox newe
                     "snippet": payload.get("snippet", ""),
                 }
             )
-    return {"count": len(results), "messages": results}
+    payload: Dict[str, Any] = {"count": len(results), "messages": results, "query": effective_query}
+    if ignored_kwargs:
+        payload["ignored_arguments"] = sorted(ignored_kwargs.keys())
+    return payload
 
 
-def tool_check_outlook_messages(max_results: int = 10, unread_only: bool = True) -> Dict[str, Any]:
+def tool_check_outlook_messages(
+    max_results: int = 10,
+    unread_only: bool = True,
+    today_only: bool = True,
+    **kwargs: Any,
+) -> Dict[str, Any]:
     token = _get_secret_token(settings.outlook_access_token, settings.outlook_access_token_enc)
     if not token:
         token = _refresh_outlook_access_token()
@@ -972,11 +1180,29 @@ def tool_check_outlook_messages(max_results: int = 10, unread_only: bool = True)
         "$select": "subject,from,receivedDateTime,importance,isRead,webLink",
         "$orderby": "receivedDateTime DESC",
     }
+    filters: List[str] = []
     if unread_only:
-        params["$filter"] = "isRead eq false"
+        filters.append("isRead eq false")
+    if today_only:
+        filters.append(_outlook_today_filter_utc())
+    if filters:
+        params["$filter"] = " and ".join(filters)
+    ignored_kwargs = {k: v for k, v in kwargs.items() if k not in {"max_results", "unread_only", "today_only"}}
     headers = {"Authorization": f"Bearer {token}"}
-    with httpx.Client(timeout=20) as client:
+    with httpx.Client(timeout=30) as client:
         resp = client.get("https://graph.microsoft.com/v1.0/me/messages", params=params, headers=headers)
+        if resp.status_code == 401:
+            refreshed = _refresh_outlook_access_token()
+            if refreshed:
+                token = refreshed
+                headers = {"Authorization": f"Bearer {token}"}
+                resp = client.get("https://graph.microsoft.com/v1.0/me/messages", params=params, headers=headers)
+        if resp.status_code == 401:
+            body_preview = resp.text[:300]
+            raise ValueError(
+                "Outlook 401 Unauthorized. Access token gecersiz/suresi dolmus olabilir. "
+                f"API cevabi: {body_preview}"
+            )
         resp.raise_for_status()
     items = []
     for m in resp.json().get("value", []):
@@ -992,63 +1218,356 @@ def tool_check_outlook_messages(max_results: int = 10, unread_only: bool = True)
                 "web_link": m.get("webLink", ""),
             }
         )
-    return {"count": len(items), "messages": items}
+    payload: Dict[str, Any] = {"count": len(items), "messages": items, "filter": params.get("$filter", "")}
+    if ignored_kwargs:
+        payload["ignored_arguments"] = sorted(ignored_kwargs.keys())
+    return payload
 
 
-def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "") -> Dict[str, Any]:
+def _write_text_with_fallback(target: Path, content: str) -> Tuple[Path, List[str]]:
+    warnings: List[str] = []
+    candidates: List[Path] = [target]
+
+    # Keep generated artifacts inside workspace and try sane fallbacks.
+    candidates.append((_WORKSPACE_DIR / "reports" / target.name).resolve())
+    candidates.append((_DESKTOP_DIR / target.name).resolve())
+    candidates.append((_WORKSPACE_DIR / target.name).resolve())
+
+    seen: set[str] = set()
+    last_error = "unknown write failure"
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            candidate.write_text(content, encoding="utf-8")
+            if candidate != target:
+                warnings.append(
+                    f"Istenen yol yazilamadi, alternatif yol kullanildi: {candidate}"
+                )
+            return candidate, warnings
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            continue
+
+    raise ValueError(f"Rapor kaydedilemedi: {last_error}")
+
+
+def _generate_research_queries(topic: str) -> List[str]:
+    """Konu metninden birden fazla arama sorgusu uret (TR + EN varyantlari)."""
+    queries: List[str] = [topic.strip()]
+
+    # Turkce karakterler varsa ascii varyant ekle
+    tr_map = {
+        0x00E7: "c",  # ç
+        0x011F: "g",  # ğ
+        0x0131: "i",  # ı
+        0x00F6: "o",  # ö
+        0x015F: "s",  # ş
+        0x00FC: "u",  # ü
+        0x00C7: "C",
+        0x011E: "G",
+        0x0130: "I",
+        0x00D6: "O",
+        0x015E: "S",
+        0x00DC: "U",
+    }
+    en_variant = topic.translate(tr_map)
+    if en_variant != topic:
+        queries.append(en_variant)
+
+    # Anahtar kelimeleri cikar ve odakli sorgu olustur
+    stopwords = {
+        "bir", "ve", "ile", "icin", "bu", "su", "ne", "nasil", "neler", "oluyor",
+        "hakkinda", "bakalim", "bak", "tum", "kaynak", "detayli", "analiz", "rapor",
+        "tara", "hazirla", "kaydet", "dosya", "olarak", "da", "de", "mi", "mu",
+        "the", "and", "for", "how", "what", "about", "all", "from", "with",
+    }
+    words = [w for w in re.split(r'\s+', topic.strip()) if len(w) > 2 and w.lower() not in stopwords]
+    if len(words) >= 2:
+        focused = " ".join(words[:4])
+        if focused not in queries:
+            queries.append(focused)
+
+    return queries[:3]
+
+def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "") -> Dict[str, Any]:
     if not topic.strip():
-        raise ValueError("Topic is required.")
-    limit = max(1, min(max_sources, 8))
-    news = tool_search_news(topic, limit=limit)
-    entries = []
-    for item in news["results"][:limit]:
-        link = item.get("link", "")
-        excerpt = ""
-        if link:
-            try:
-                page = tool_fetch_web_page(link, max_chars=2500)
-                excerpt = page.get("content", "")[:700]
-            except Exception as exc:
-                excerpt = f"(fetch failed: {exc})"
-        entries.append({"title": item.get("title", ""), "link": link, "pub_date": item.get("pub_date", ""), "excerpt": excerpt})
+        return {"error": "Topic is required.", "partial": False}
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    default_path = f"reports/research_{timestamp}.md"
-    target = _resolve_inside_workspace(out_path or default_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    lines = [
-        f"# Arastirma Raporu: {topic}",
+    entries: List[Dict[str, Any]] = []
+    failed_sources: List[Dict[str, str]] = []
+    scratchpad_lines: List[str] = [
+        f"=== ARASTIRMA: {topic} ===",
+        f"Baslangic: {datetime.utcnow().isoformat()}Z",
         "",
-        f"- Uretim zamani (UTC): {datetime.utcnow().isoformat()}Z",
-        f"- Kaynak sayisi: {len(entries)}",
-        "",
-        "## Kaynaklar",
     ]
-    for idx, e in enumerate(entries, start=1):
-        lines.extend(
-            [
-                f"### {idx}. {e['title']}",
-                f"- Link: {e['link']}",
-                f"- Tarih: {e['pub_date']}",
+
+    # Scratchpad dosyasi
+    scratchpad_path = settings.workspace_path / "research" / "scratchpad.txt"
+    try:
+        scratchpad_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _save_scratchpad() -> None:
+        try:
+            scratchpad_path.write_text("\n".join(scratchpad_lines), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        limit = max(1, min(max_sources, 15))
+        queries = _generate_research_queries(topic)
+        scratchpad_lines.append(f"Sorgular ({len(queries)}): {queries}")
+        scratchpad_lines.append("")
+        _save_scratchpad()
+
+        # Coklu sorgu ile haber topla
+        all_news: List[Dict[str, Any]] = []
+        seen_links: set[str] = set()
+
+        for qi, query in enumerate(queries):
+            scratchpad_lines.append(f"[SORGU {qi+1}/{len(queries)}] \"{query}\"")
+            _save_scratchpad()
+
+            try:
+                news = tool_search_news(query, limit=limit)
+                items = news.get("results", [])
+                added = 0
+                for item in items:
+                    link = str(item.get("link", "")).strip()
+                    title = str(item.get("title", "")).strip().lower()
+                    key = link or title
+                    if not key or key in seen_links:
+                        continue
+                    seen_links.add(key)
+                    all_news.append(item)
+                    added += 1
+                scratchpad_lines.append(f"  -> {added} yeni sonuc ({len(items)} toplam, {len(news.get('feed_warnings', []))} uyari)")
+                if news.get("feed_warnings"):
+                    for fw in news["feed_warnings"]:
+                        scratchpad_lines.append(f"  UYARI: {fw}")
+            except Exception as exc:  # noqa: BLE001
+                scratchpad_lines.append(f"  -> HATA: {type(exc).__name__}: {str(exc)[:150]}")
+            _save_scratchpad()
+
+        scratchpad_lines.append(f"\nToplam benzersiz kaynak: {len(all_news)}")
+        scratchpad_lines.append(f"Icerik cekilecek: {min(len(all_news), limit)} kaynak\n")
+        _save_scratchpad()
+
+        # Her kaynak icin icerik cek
+        fetch_count = min(len(all_news), limit)
+        for fi, item in enumerate(all_news[:fetch_count]):
+            link = item.get("link", "")
+            title = item.get("title", "")
+            excerpt = ""
+
+            if link:
+                scratchpad_lines.append(f"[FETCH {fi+1}/{fetch_count}] {link[:70]}")
+                _save_scratchpad()
+                try:
+                    page = tool_fetch_web_page(link, max_chars=6000)
+                    excerpt = page.get("content", "")[:2000]
+                    scratchpad_lines.append(f"  -> OK ({len(excerpt)} karakter)")
+                except Exception as exc:  # noqa: BLE001
+                    err_msg = f"{type(exc).__name__}: {str(exc)[:100]}"
+                    scratchpad_lines.append(f"  -> BASARISIZ: {err_msg}")
+                    failed_sources.append({"title": title, "link": link, "error": err_msg})
+                _save_scratchpad()
+
+            entries.append({
+                "title": title,
+                "link": link,
+                "pub_date": item.get("pub_date", ""),
+                "source": item.get("source", ""),
+                "excerpt": excerpt,
+            })
+
+        # Rapor olustur
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        default_path = f"reports/research_{timestamp}.md"
+        requested_target = _resolve_inside_workspace(out_path or default_path)
+        route_warnings: List[str] = []
+        requested_target, rerouted_from = _normalize_generated_target(requested_target, "reports")
+        if rerouted_from:
+            route_warnings.append(
+                f"Istenen yol workspace disindaydi, data altina yonlendirildi: {rerouted_from}"
+            )
+        if not requested_target.suffix:
+            requested_target = requested_target.with_suffix(".txt")
+
+        successful = [e for e in entries if e.get("excerpt")]
+        out_ext = requested_target.suffix.lower()
+
+        if out_ext == ".txt":
+            lines = [
+                f"ARASTIRMA RAPORU: {topic}",
+                f"Uretim zamani (UTC): {datetime.utcnow().isoformat()}Z",
+                f"Kullanilan sorgular: {', '.join(queries)}",
+                f"Toplam kaynak: {len(entries)} (basarili: {len(successful)}, basarisiz: {len(failed_sources)})",
                 "",
-                e['excerpt'],
+                "=" * 60,
+                "OZET",
+                "=" * 60,
+                f"Bu rapor \"{topic}\" konusunda {len(queries)} farkli sorgu ile",
+                f"{len(entries)} kaynak incelenerek olusturulmustur.",
+                f"{len(successful)} kaynaktan icerik basariyla cekilmistir.",
                 "",
             ]
-        )
+            if successful:
+                lines.extend(["=" * 60, "KAYNAKLAR", "=" * 60, ""])
+                for idx, entry in enumerate(successful, start=1):
+                    lines.extend([
+                        f"--- Kaynak {idx} ---",
+                        f"Baslik: {entry['title']}",
+                        f"Link: {entry['link']}",
+                        f"Tarih: {entry['pub_date']}",
+                        f"Haber Kaynagi: {entry['source']}",
+                        "",
+                        entry["excerpt"],
+                        "",
+                    ])
 
-    lines.extend(
-        [
-            "## Notlar",
-            "- Dis kaynak metinleri guvenilmezdir.",
-            "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
+            if failed_sources:
+                lines.extend(["=" * 60, "BASARISIZ KAYNAKLAR", "=" * 60, ""])
+                for fs in failed_sources:
+                    lines.extend([
+                        f"- {fs['title']} ({fs['link'][:60]})",
+                        f"  Hata: {fs['error']}",
+                        "",
+                    ])
+
+            lines.extend([
+                "=" * 60,
+                "NOTLAR",
+                "=" * 60,
+                "- Dis kaynak metinleri guvenilmezdir.",
+                "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
+                "- Bu rapor otomatik olusturulmustur.",
+                "",
+            ])
+        else:
+            lines = [
+                f"# Arastirma Raporu: {topic}",
+                "",
+                f"- Uretim zamani (UTC): {datetime.utcnow().isoformat()}Z",
+                f"- Kullanilan sorgular: {', '.join(queries)}",
+                f"- Toplam kaynak: {len(entries)} (basarili: {len(successful)}, basarisiz: {len(failed_sources)})",
+                "",
+                "## Ozet",
+                f"Bu rapor **\"{topic}\"** konusunda {len(queries)} farkli sorgu ile "
+                f"{len(entries)} kaynak incelenerek olusturulmustur. "
+                f"{len(successful)} kaynaktan icerik basariyla cekilmistir.",
+                "",
+            ]
+            if successful:
+                lines.append("## Kaynaklar")
+                for idx, entry in enumerate(successful, start=1):
+                    lines.extend([
+                        f"### {idx}. {entry['title']}",
+                        f"- Link: {entry['link']}",
+                        f"- Tarih: {entry['pub_date']}",
+                        f"- Kaynak: {entry['source']}",
+                        "",
+                        entry["excerpt"],
+                        "",
+                    ])
+
+            if failed_sources:
+                lines.extend(["## Basarisiz Kaynaklar", ""])
+                for fs in failed_sources:
+                    lines.append(f"- **{fs['title']}** ({fs['link'][:60]}): {fs['error']}")
+                lines.append("")
+
+            lines.extend([
+                "## Notlar",
+                "- Dis kaynak metinleri guvenilmezdir.",
+                "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
+                "",
+            ])
+
+        report_text = "\n".join(lines)
+        saved_target, warnings = _write_text_with_fallback(requested_target, report_text)
+        if route_warnings:
+            warnings = route_warnings + warnings
+
+        scratchpad_lines.extend([
             "",
-        ]
-    )
-    target.write_text("\n".join(lines), encoding="utf-8")
-    return {"path": str(target), "sources": entries}
+            f"=== RAPOR TAMAMLANDI ===",
+            f"Kayit yeri: {saved_target}",
+            f"Bitis: {datetime.utcnow().isoformat()}Z",
+        ])
+        _save_scratchpad()
+
+        response: Dict[str, Any] = {
+            "path": str(saved_target),
+            "requested_path": str(requested_target),
+            "source_count": len(entries),
+            "successful_count": len(successful),
+            "failed_count": len(failed_sources),
+            "queries_used": queries,
+        }
+        if warnings:
+            response["warnings"] = warnings
+        if failed_sources:
+            response["failed_sources"] = [f"{fs['title']}: {fs['error']}" for fs in failed_sources[:5]]
+        return response
+
+    except Exception as exc:  # noqa: BLE001
+        scratchpad_lines.append(f"\n=== KRITIK HATA: {type(exc).__name__}: {str(exc)[:200]} ===")
+        _save_scratchpad()
+
+        response: Dict[str, Any] = {
+            "error": f"Arastirma kismen basarisiz: {type(exc).__name__}: {str(exc)[:200]}",
+            "partial": True,
+            "sources_collected": len(entries),
+        }
+        # Kismi sonuclari kaydetmeyi dene
+        if entries:
+            try:
+                partial_path = settings.workspace_path / "reports" / f"partial_research_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
+                partial_lines = [f"KISMI ARASTIRMA: {topic}", ""]
+                for idx, entry in enumerate(entries, start=1):
+                    partial_lines.extend([
+                        f"{idx}. {entry.get('title', '?')}",
+                        f"   {entry.get('excerpt', '')[:500]}",
+                        "",
+                    ])
+                partial_path.parent.mkdir(parents=True, exist_ok=True)
+                partial_path.write_text("\n".join(partial_lines), encoding="utf-8")
+                response["partial_report_path"] = str(partial_path)
+            except Exception:  # noqa: BLE001
+                pass
+        return response
 
 
+
+
+def tool_research_note(note: str, scratchpad: str = "research/scratchpad.txt") -> Dict[str, Any]:
+    """Arastirma surecinde not ekle. Her cagri dosyaya eklenir."""
+    if not note.strip():
+        return {"error": "Not bos olamaz."}
+
+    target = _resolve_inside_workspace(scratchpad)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.utcnow().strftime("%H:%M:%S")
+        line = f"[{timestamp}] {note.strip()}\n"
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(line)
+
+        all_lines = target.read_text(encoding="utf-8").strip().split("\n")
+        recent = all_lines[-5:] if len(all_lines) > 5 else all_lines
+        return {
+            "path": str(target),
+            "total_notes": len(all_lines),
+            "recent_notes": recent,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"Not yazma basarisiz: {type(exc).__name__}: {exc}"}
 
 
 # =============================================================================
@@ -1058,20 +1577,20 @@ def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "
 ToolFn = Callable[..., Dict[str, Any]]
 
 TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
-    # Dosya Sistemi (Gelişmiş)
+    # Dosya Sistemi (GeliÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸miÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸)
     "list_directory": (
         tool_list_directory,
         {
             "type": "function",
             "function": {
                 "name": "list_directory",
-                "description": "Dizin içeriğini listele - tüm disk erişimi. Recursive arama yapılabilir.",
+                "description": "Dizin iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eriÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ini listele - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi. Recursive arama yapÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±labilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Dizin yolu (mutlak veya göreli)"},
+                        "path": {"type": "string", "description": "Dizin yolu (mutlak veya gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶reli)"},
                         "recursive": {"type": "boolean", "description": "Alt dizinleri de listele"},
-                        "pattern": {"type": "string", "description": "İsim filtresi (regex)"}
+                        "pattern": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°sim filtresi (regex)"}
                     },
                     "required": []
                 }
@@ -1084,13 +1603,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Dosya oku - metin veya binary. Tüm disk erişimi.",
+                "description": "Dosya oku - metin veya binary. TÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Dosya yolu"},
-                        "offset": {"type": "integer", "description": "Başlangıç konumu"},
-                        "limit": {"type": "integer", "description": "Maksimum karakter sayısı"}
+                        "offset": {"type": "integer", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸langÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ konumu"},
+                        "limit": {"type": "integer", "description": "Maksimum karakter sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["path"]
                 }
@@ -1103,13 +1622,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Dosya yaz/oluştur. Tüm disk erişimi.",
+                "description": "Dosya yaz/oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur. TÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m disk eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Dosya yolu"},
-                        "content": {"type": "string", "description": "Dosya içeriği"},
-                        "append": {"type": "boolean", "description": "Sonuna ekle (true) veya üzerine yaz (false)"}
+                        "content": {"type": "string", "description": "Dosya iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eriÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸i"},
+                        "append": {"type": "boolean", "description": "Sonuna ekle (true) veya ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼zerine yaz (false)"}
                     },
                     "required": ["path", "content"]
                 }
@@ -1127,7 +1646,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Silinecek dosya/dizin yolu"},
-                        "confirm": {"type": "boolean", "description": "Onay (true olmalı)"}
+                        "confirm": {"type": "boolean", "description": "Onay (true olmalÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±)"}
                     },
                     "required": ["path", "confirm"]
                 }
@@ -1158,7 +1677,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "move_file",
-                "description": "Dosya veya dizin taşı.",
+                "description": "Dosya veya dizin taÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1176,13 +1695,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "search_files",
-                "description": "Dosya ara - tüm diskte arama yapar.",
+                "description": "Dosya ara - tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m diskte arama yapar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Arama başlangıç dizini"},
+                        "path": {"type": "string", "description": "Arama baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸langÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ dizini"},
                         "pattern": {"type": "string", "description": "Aranacak isim (case-insensitive)"},
-                        "file_type": {"type": "string", "description": "Dosya uzantısı filtresi (örn: .py)"}
+                        "file_type": {"type": "string", "description": "Dosya uzantÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± filtresi (ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rn: .py)"}
                     },
                     "required": ["path", "pattern"]
                 }
@@ -1197,11 +1716,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "analyze_code",
-                "description": "Kod dosyasını analiz et - satır sayısı, fonksiyon sayısı vb.",
+                "description": "Kod dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± analiz et - satÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±, fonksiyon sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± vb.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Kod dosyası yolu"}
+                        "path": {"type": "string", "description": "Kod dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"}
                     },
                     "required": ["path"]
                 }
@@ -1218,7 +1737,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Arama dizini veya dosyası"},
+                        "path": {"type": "string", "description": "Arama dizini veya dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
                         "pattern": {"type": "string", "description": "Aranacak pattern (regex)"},
                         "language": {"type": "string", "description": "Dil filtresi"}
                     },
@@ -1235,13 +1754,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_word_document",
-                "description": "Word/HTML belgesi oluştur.",
+                "description": "Word/HTML belgesi oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Kaydedilecek yol"},
-                        "title": {"type": "string", "description": "Belge başlığı"},
-                        "content": {"type": "string", "description": "İçerik (HTML destekler)"},
+                        "title": {"type": "string", "description": "Belge baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "content": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§erik (HTML destekler)"},
                         "style": {"type": "string", "description": "Stil (default)"}
                     },
                     "required": ["path", "title", "content"]
@@ -1255,15 +1774,15 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_markdown_report",
-                "description": "Markdown raporu oluştur.",
+                "description": "Markdown raporu oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Kaydedilecek yol"},
-                        "title": {"type": "string", "description": "Rapor başlığı"},
-                        "sections": {"type": "array", "description": "Bölümler listesi [{title, content}]"}
-                    },
-                    "required": ["path", "title", "sections"]
+                        "title": {"type": "string", "description": "Rapor baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "sections": {"type": "array", "description": "BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼mler listesi [{title, content}]"},
+                        "content": {"type": "string", "description": "Tek parÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§a iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§erik (sections yerine kullanÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±labilir)"}
+                    }
                 }
             }
         }
@@ -1287,12 +1806,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "list_processes",
-                "description": "Çalışan process'leri listele.",
+                "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸an process'leri listele.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "filter_name": {"type": "string", "description": "İsim filtresi"},
-                        "limit": {"type": "integer", "description": "Maksimum sayı"}
+                        "filter_name": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°sim filtresi"},
+                        "limit": {"type": "integer", "description": "Maksimum sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     }
                 }
             }
@@ -1304,12 +1823,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "kill_process",
-                "description": "Process sonlandır.",
+                "description": "Process sonlandÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "pid": {"type": "integer", "description": "Process ID"},
-                        "confirm": {"type": "boolean", "description": "Onay (true olmalı)"}
+                        "confirm": {"type": "boolean", "description": "Onay (true olmalÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±)"}
                     },
                     "required": ["pid", "confirm"]
                 }
@@ -1317,14 +1836,14 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
         }
     ),
     
-    # Ağ
+    # AÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸
     "network_info": (
         tool_network_info,
         {
             "type": "function",
             "function": {
                 "name": "network_info",
-                "description": "Ağ bilgisi al - arayüzler, IP, bağlantılar.",
+                "description": "AÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ bilgisi al - arayÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼zler, IP, baÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸lantÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lar.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1339,8 +1858,8 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "host": {"type": "string", "description": "Ping atılacak host"},
-                        "count": {"type": "integer", "description": "Ping sayısı"}
+                        "host": {"type": "string", "description": "Ping atÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak host"},
+                        "count": {"type": "integer", "description": "Ping sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["host"]
                 }
@@ -1355,13 +1874,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "execute_command",
-                "description": "Komut çalıştır - gelişmiş shell erişimi (ENABLE_SHELL_TOOL=true gerekir).",
+                "description": "Komut ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r - geliÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸miÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ shell eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi (ENABLE_SHELL_TOOL=true gerekir).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "Çalıştırılacak komut"},
-                        "working_dir": {"type": "string", "description": "Çalışma dizini"},
-                        "timeout": {"type": "integer", "description": "Zaman aşımı (saniye)"}
+                        "command": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak komut"},
+                        "working_dir": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ma dizini"},
+                        "timeout": {"type": "integer", "description": "Zaman aÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±mÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (saniye)"}
                     },
                     "required": ["command"]
                 }
@@ -1375,7 +1894,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "add_task",
-                "description": "Görev ekle.",
+                "description": "GÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rev ekle.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1394,7 +1913,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "list_tasks",
-                "description": "Görevleri listele.",
+                "description": "GÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶revleri listele.",
                 "parameters": {"type": "object", "properties": {"status": {"type": "string"}}}
             }
         }
@@ -1405,7 +1924,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "complete_task",
-                "description": "Görev tamamla.",
+                "description": "GÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rev tamamla.",
                 "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}}
             }
         }
@@ -1416,7 +1935,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "add_calendar_event",
-                "description": "Takvim etkinliği ekle.",
+                "description": "Takvim etkinliÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸i ekle.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1447,7 +1966,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_email_draft",
-                "description": "E-posta taslağı oluştur.",
+                "description": "E-posta taslaÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1477,7 +1996,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "fetch_web_page",
-                "description": "Web sayfası çek.",
+                "description": "Web sayfasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ek.",
                 "parameters": {"type": "object", "properties": {"url": {"type": "string"}, "max_chars": {"type": "integer"}}}
             }
         }
@@ -1488,7 +2007,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "check_gmail_messages",
-                "description": "Gmail mesajlarını oku.",
+                "description": "Gmail mesajlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± oku (varsayilan: sadece bugun).",
                 "parameters": {"type": "object", "properties": {"max_results": {"type": "integer"}, "query": {"type": "string"}}}
             }
         }
@@ -1499,8 +2018,8 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "check_outlook_messages",
-                "description": "Outlook mesajlarını oku.",
-                "parameters": {"type": "object", "properties": {"max_results": {"type": "integer"}, "unread_only": {"type": "boolean"}}}
+                "description": "Outlook mesajlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± oku (varsayilan: sadece bugun).",
+                "parameters": {"type": "object", "properties": {"max_results": {"type": "integer"}, "unread_only": {"type": "boolean"}, "today_only": {"type": "boolean"}}}
             }
         }
     ),
@@ -1510,14 +2029,32 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "research_and_report",
-                "description": "Araştırma yap ve rapor oluştur.",
-                "parameters": {"type": "object", "properties": {"topic": {"type": "string"}, "max_sources": {"type": "integer"}, "out_path": {"type": "string"}}}
+                "description": "Detayli arastirma yap: coklu sorgu ile haber topla, kaynaklari oku, rapor olustur. Uzun surabilir.",
+                "parameters": {"type": "object", "properties": {"topic": {"type": "string", "description": "Arastirilacak konu"}, "max_sources": {"type": "integer", "description": "Maksimum kaynak sayisi (varsayilan: 8)"}, "out_path": {"type": "string", "description": "Rapor dosya yolu (orn: Desktop\\rapor.txt)"}}}
             }
         }
     ),
-    
+    "research_note": (
+        tool_research_note,
+        {
+            "type": "function",
+            "function": {
+                "name": "research_note",
+                "description": "Arastirma surecinde not tut. Dosyaya eklenir, sonra okunabilir. Cok adimli arastirmalarda baglam korumak icin kullan.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "note": {"type": "string", "description": "Eklenecek not"},
+                        "scratchpad": {"type": "string", "description": "Not dosyasi adi (varsayilan: research/scratchpad.txt)"}
+                    },
+                    "required": ["note"]
+                }
+            }
+        }
+    ),
+
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - EKRAN
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - EKRAN
     # ============================================================
     "screenshot_desktop": (
         tool_screenshot_desktop,
@@ -1525,11 +2062,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "screenshot_desktop",
-                "description": "Masaüstü ekran görüntüsü al. Dosya otomatik kaydedilir.",
+                "description": "MasaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼stÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ ekran gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ al. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "region": {"type": "array", "description": "Bölge [x, y, width, height]", "items": {"type": "integer"}}
+                        "region": {"type": "array", "description": "BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶lge [x, y, width, height]", "items": {"type": "integer"}}
                     }
                 }
             }
@@ -1541,12 +2078,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "screenshot_webpage",
-                "description": "Web sayfası ekran görüntüsü al. Dosya otomatik kaydedilir.",
+                "description": "Web sayfasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± ekran gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ al. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string", "description": "Web sayfası URL"},
-                        "wait_time": {"type": "integer", "description": "Sayfanın yüklenme süresi (saniye)"}
+                        "url": {"type": "string", "description": "Web sayfasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± URL"},
+                        "wait_time": {"type": "integer", "description": "SayfanÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±n yÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼klenme sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼resi (saniye)"}
                     },
                     "required": ["url"]
                 }
@@ -1559,12 +2096,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "find_image_on_screen",
-                "description": "Ekranda bir görüntü ara ve konumunu bul.",
+                "description": "Ekranda bir gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ ara ve konumunu bul.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "image_path": {"type": "string", "description": "Aranacak görüntü dosyası"},
-                        "confidence": {"type": "number", "description": "Eşleşme güveni (0-1)"}
+                        "image_path": {"type": "string", "description": "Aranacak gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "confidence": {"type": "number", "description": "EÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸leÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸me gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼veni (0-1)"}
                     },
                     "required": ["image_path"]
                 }
@@ -1577,14 +2114,14 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "click_on_screen",
-                "description": "Ekranda belirli bir koordinata tıkla.",
+                "description": "Ekranda belirli bir koordinata tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kla.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "x": {"type": "integer", "description": "X koordinatı"},
-                        "y": {"type": "integer", "description": "Y koordinatı"},
-                        "clicks": {"type": "integer", "description": "Tıklama sayısı"},
-                        "button": {"type": "string", "description": "Sol/sağ tık", "enum": ["left", "right"]}
+                        "x": {"type": "integer", "description": "X koordinatÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "y": {"type": "integer", "description": "Y koordinatÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "clicks": {"type": "integer", "description": "TÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±klama sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "button": {"type": "string", "description": "Sol/saÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k", "enum": ["left", "right"]}
                     },
                     "required": ["x", "y"]
                 }
@@ -1601,8 +2138,8 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "text": {"type": "string", "description": "Yazılacak metin"},
-                        "interval": {"type": "number", "description": "Tuşlar arası bekleme (saniye)"}
+                        "text": {"type": "string", "description": "YazÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak metin"},
+                        "interval": {"type": "number", "description": "TuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lar arasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± bekleme (saniye)"}
                     },
                     "required": ["text"]
                 }
@@ -1615,12 +2152,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "press_key",
-                "description": "Klavye tuşuna bas.",
+                "description": "Klavye tuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸una bas.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "key": {"type": "string", "description": "Tuş adı (enter, esc, tab, vb.)"},
-                        "presses": {"type": "integer", "description": "Basma sayısı"}
+                        "key": {"type": "string", "description": "TuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ adÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (enter, esc, tab, vb.)"},
+                        "presses": {"type": "integer", "description": "Basma sayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["key"]
                 }
@@ -1650,7 +2187,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                     "properties": {
                         "x": {"type": "integer", "description": "Hedef X"},
                         "y": {"type": "integer", "description": "Hedef Y"},
-                        "duration": {"type": "number", "description": "Hareket süresi (saniye)"}
+                        "duration": {"type": "number", "description": "Hareket sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼resi (saniye)"}
                     },
                     "required": ["x", "y"]
                 }
@@ -1663,14 +2200,14 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "drag_to",
-                "description": "Sürükle-bırak yap.",
+                "description": "SÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼kle-bÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rak yap.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "x": {"type": "integer", "description": "Hedef X"},
                         "y": {"type": "integer", "description": "Hedef Y"},
-                        "duration": {"type": "number", "description": "Sürükleme süresi"},
-                        "button": {"type": "string", "description": "Fare tuşu"}
+                        "duration": {"type": "number", "description": "SÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼kleme sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼resi"},
+                        "button": {"type": "string", "description": "Fare tuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸u"}
                     },
                     "required": ["x", "y"]
                 }
@@ -1683,13 +2220,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "scroll",
-                "description": "Fare tekerleği kaydır.",
+                "description": "Fare tekerleÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸i kaydÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "amount": {"type": "integer", "description": "Kaydırma miktarı (+/-)"},
-                        "x": {"type": "integer", "description": "X koordinatı (opsiyonel)"},
-                        "y": {"type": "integer", "description": "Y koordinatı (opsiyonel)"}
+                        "amount": {"type": "integer", "description": "KaydÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rma miktarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (+/-)"},
+                        "x": {"type": "integer", "description": "X koordinatÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (opsiyonel)"},
+                        "y": {"type": "integer", "description": "Y koordinatÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (opsiyonel)"}
                     },
                     "required": ["amount"]
                 }
@@ -1702,11 +2239,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "hotkey",
-                "description": "Klavye kısayolu çalıştır (ctrl+c, alt+tab, vb.).",
+                "description": "Klavye kÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sayolu ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r (ctrl+c, alt+tab, vb.).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "keys": {"type": "array", "description": "Tuşlar", "items": {"type": "string"}}
+                        "keys": {"type": "array", "description": "TuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lar", "items": {"type": "string"}}
                     },
                     "required": ["keys"]
                 }
@@ -1715,7 +2252,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - SES
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - SES
     # ============================================================
     "start_audio_recording": (
         tool_start_audio_recording,
@@ -1723,7 +2260,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "start_audio_recording",
-                "description": "Mikrofondan ses kaydına başla.",
+                "description": "Mikrofondan ses kaydÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±na baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸la.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1734,7 +2271,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "stop_audio_recording",
-                "description": "Ses kaydını durdur ve kaydet. Dosya otomatik kaydedilir.",
+                "description": "Ses kaydÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± durdur ve kaydet. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {}
@@ -1748,11 +2285,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "play_audio",
-                "description": "Ses dosyasını çal.",
+                "description": "Ses dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§al.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "audio_path": {"type": "string", "description": "Ses dosyası yolu"}
+                        "audio_path": {"type": "string", "description": "Ses dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"}
                     },
                     "required": ["audio_path"]
                 }
@@ -1765,11 +2302,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "text_to_speech",
-                "description": "Metni sese çevir (konuş).",
+                "description": "Metni sese ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§evir (konuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "text": {"type": "string", "description": "Konuşulacak metin"},
+                        "text": {"type": "string", "description": "KonuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ulacak metin"},
                         "lang": {"type": "string", "description": "Dil kodu (tr, en)"}
                     },
                     "required": ["text"]
@@ -1779,7 +2316,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - WEBCAM
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - WEBCAM
     # ============================================================
     "list_cameras": (
         tool_list_cameras,
@@ -1787,7 +2324,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "list_cameras",
-                "description": "Kullanılabilir kameraları listele.",
+                "description": "KullanÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±labilir kameralarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± listele.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1798,11 +2335,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "webcam_capture",
-                "description": "Webcam'den fotoğraf çek. Dosya otomatik kaydedilir.",
+                "description": "Webcam'den fotoÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸raf ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ek. Dosya otomatik kaydedilir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "camera_index": {"type": "integer", "description": "Kamera indeksi"}
+                        "camera_index": {"type": "integer", "description": "Kamera indeksi"},
+                        "output_path": {"type": "string", "description": "Kayit dosya yolu (opsiyonel)"}
                     }
                 }
             }
@@ -1818,8 +2356,9 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "duration": {"type": "integer", "description": "Kayıt süresi (saniye)"},
-                        "camera_index": {"type": "integer", "description": "Kamera indeksi"}
+                        "duration": {"type": "integer", "description": "KayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±t sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼resi (saniye)"},
+                        "camera_index": {"type": "integer", "description": "Kamera indeksi"},
+                        "output_path": {"type": "string", "description": "Kayit dosya yolu (opsiyonel)"}
                     }
                 }
             }
@@ -1827,7 +2366,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - USB
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - USB
     # ============================================================
     "list_usb_devices": (
         tool_list_usb_devices,
@@ -1835,7 +2374,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "list_usb_devices",
-                "description": "Bağlı USB cihazlarını listele.",
+                "description": "BaÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± USB cihazlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± listele.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1846,11 +2385,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "eject_usb_drive",
-                "description": "USB sürücüsünü güvenli çıkar.",
+                "description": "USB sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼venli ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "drive_letter": {"type": "string", "description": "Sürücü harfi (E:, F:, vb.)"}
+                        "drive_letter": {"type": "string", "description": "SÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ harfi (E:, F:, vb.)"}
                     },
                     "required": ["drive_letter"]
                 }
@@ -1859,7 +2398,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - DİYALOG
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - DÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°YALOG
     # ============================================================
     "alert": (
         tool_alert,
@@ -1867,12 +2406,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "alert",
-                "description": "Ekranda uyarı penceresi göster.",
+                "description": "Ekranda uyarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± penceresi gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ster.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "message": {"type": "string", "description": "Mesaj"},
-                        "title": {"type": "string", "description": "Pencere başlığı"}
+                        "title": {"type": "string", "description": "Pencere baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["message"]
                 }
@@ -1885,12 +2424,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "confirm",
-                "description": "Onay penceresi göster.",
+                "description": "Onay penceresi gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ster.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "message": {"type": "string", "description": "Mesaj"},
-                        "title": {"type": "string", "description": "Pencere başlığı"}
+                        "title": {"type": "string", "description": "Pencere baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["message"]
                 }
@@ -1903,13 +2442,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "prompt",
-                "description": "Kullanıcıdan giriş iste.",
+                "description": "KullanÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±cÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±dan giriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ iste.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "message": {"type": "string", "description": "Mesaj"},
-                        "title": {"type": "string", "description": "Pencere başlığı"},
-                        "default": {"type": "string", "description": "Varsayılan değer"}
+                        "title": {"type": "string", "description": "Pencere baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "default": {"type": "string", "description": "VarsayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lan deÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸er"}
                     },
                     "required": ["message"]
                 }
@@ -1918,7 +2457,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - WINDOWS YÖNETİMİ
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - WINDOWS YÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“NETÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°MÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°
     # ============================================================
     "get_window_list": (
         tool_get_window_list,
@@ -1926,7 +2465,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "get_window_list",
-                "description": "Açık pencereleri listele.",
+                "description": "AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k pencereleri listele.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1937,11 +2476,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "activate_window",
-                "description": "Belirli bir pencereyi öne getir.",
+                "description": "Belirli bir pencereyi ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ne getir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "title_pattern": {"type": "string", "description": "Pencere başlığı patterni"}
+                        "title_pattern": {"type": "string", "description": "Pencere baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± patterni"}
                     },
                     "required": ["title_pattern"]
                 }
@@ -1954,7 +2493,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "minimize_all_windows",
-                "description": "Tüm pencereleri simge durumuna küçült.",
+                "description": "TÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼m pencereleri simge durumuna kÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼lt.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1965,7 +2504,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "lock_workstation",
-                "description": "İş istasyonunu kilitle.",
+                "description": "ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ istasyonunu kilitle.",
                 "parameters": {"type": "object", "properties": {}}
             }
         }
@@ -1976,12 +2515,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "shutdown_system",
-                "description": "Bilgisayarı kapat/yeniden başlat.",
+                "description": "BilgisayarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± kapat/yeniden baÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lat.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {"type": "string", "description": "shutdown/restart/logout", "enum": ["shutdown", "restart", "logout"]},
-                        "timeout": {"type": "integer", "description": "Zaman aşımı (saniye)"}
+                        "timeout": {"type": "integer", "description": "Zaman aÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±mÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (saniye)"}
                     }
                 }
             }
@@ -1989,7 +2528,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SÜPER AJAN ARAÇLARI - OCR
+    # SÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“PER AJAN ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI - OCR
     # ============================================================
     "ocr_screenshot": (
         tool_ocr_screenshot,
@@ -1997,11 +2536,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "ocr_screenshot",
-                "description": "Ekran görüntüsünden metin oku (OCR).",
+                "description": "Ekran gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼nden metin oku (OCR).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "region": {"type": "array", "description": "Bölge [x, y, width, height]", "items": {"type": "integer"}},
+                        "region": {"type": "array", "description": "BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶lge [x, y, width, height]", "items": {"type": "integer"}},
                         "lang": {"type": "string", "description": "Dil (tur, eng)"}
                     }
                 }
@@ -2014,11 +2553,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "ocr_image",
-                "description": "Görüntü dosyasından metin oku (OCR).",
+                "description": "GÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ndan metin oku (OCR).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "image_path": {"type": "string", "description": "Görüntü dosyası yolu"},
+                        "image_path": {"type": "string", "description": "GÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
                         "lang": {"type": "string", "description": "Dil (tur, eng)"}
                     },
                     "required": ["image_path"]
@@ -2028,23 +2567,23 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # OFİS ve ARŞİV ARAÇLARI
+    # OFÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°S ve ARÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°V ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
     # ============================================================
     
-    # ZIP / Arşiv
+    # ZIP / ArÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸iv
     "create_zip": (
         tool_create_zip,
         {
             "type": "function",
             "function": {
                 "name": "create_zip",
-                "description": "ZIP arşivi oluştur.",
+                "description": "ZIP arÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivi oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "source_path": {"type": "string", "description": "Arşivlenecek dosya/klasör"},
-                        "output_path": {"type": "string", "description": "Çıktı yolu"},
-                        "password": {"type": "string", "description": "Şifre (opsiyonel)"}
+                        "source_path": {"type": "string", "description": "ArÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivlenecek dosya/klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r"},
+                        "output_path": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ktÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "password": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Âifre (opsiyonel)"}
                     },
                     "required": ["source_path"]
                 }
@@ -2057,13 +2596,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "extract_zip",
-                "description": "ZIP arşivini çıkar.",
+                "description": "ZIP arÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivini ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "zip_path": {"type": "string", "description": "ZIP dosyası yolu"},
-                        "output_dir": {"type": "string", "description": "Çıkarılacak dizin"},
-                        "password": {"type": "string", "description": "Şifre (varsa)"}
+                        "zip_path": {"type": "string", "description": "ZIP dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "output_dir": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±karÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak dizin"},
+                        "password": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Âifre (varsa)"}
                     },
                     "required": ["zip_path"]
                 }
@@ -2076,11 +2615,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "list_zip_contents",
-                "description": "ZIP içeriğini listele.",
+                "description": "ZIP iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eriÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ini listele.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "zip_path": {"type": "string", "description": "ZIP dosyası yolu"}
+                        "zip_path": {"type": "string", "description": "ZIP dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"}
                     },
                     "required": ["zip_path"]
                 }
@@ -2093,12 +2632,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_tar",
-                "description": "TAR arşivi oluştur (.tar.gz, .tar.bz2, .tar.xz).",
+                "description": "TAR arÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivi oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur (.tar.gz, .tar.bz2, .tar.xz).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "source_path": {"type": "string", "description": "Arşivlenecek dosya/klasör"},
-                        "output_path": {"type": "string", "description": "Çıktı yolu"},
+                        "source_path": {"type": "string", "description": "ArÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivlenecek dosya/klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r"},
+                        "output_path": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ktÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
                         "compression": {"type": "string", "description": "gz/bz2/xz", "enum": ["gz", "bz2", "xz"]}
                     },
                     "required": ["source_path"]
@@ -2112,12 +2651,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "extract_tar",
-                "description": "TAR arşivini çıkar.",
+                "description": "TAR arÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ivini ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kar.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "tar_path": {"type": "string", "description": "TAR dosyası yolu"},
-                        "output_dir": {"type": "string", "description": "Çıkarılacak dizin"}
+                        "tar_path": {"type": "string", "description": "TAR dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "output_dir": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±karÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak dizin"}
                     },
                     "required": ["tar_path"]
                 }
@@ -2132,13 +2671,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "read_pdf",
-                "description": "PDF dosyasını oku (metin çıkarma).",
+                "description": "PDF dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± oku (metin ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±karma).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pdf_path": {"type": "string", "description": "PDF dosyası yolu"},
-                        "page_start": {"type": "integer", "description": "Başlangıç sayfası (0-index)"},
-                        "page_end": {"type": "integer", "description": "Bitiş sayfası"}
+                        "pdf_path": {"type": "string", "description": "PDF dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "page_start": {"type": "integer", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸langÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ sayfasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (0-index)"},
+                        "page_end": {"type": "integer", "description": "BitiÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ sayfasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["pdf_path"]
                 }
@@ -2151,13 +2690,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_pdf",
-                "description": "Basit PDF oluştur.",
+                "description": "Basit PDF oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
-                        "title": {"type": "string", "description": "Başlık"},
-                        "content": {"type": "string", "description": "İçerik"}
+                        "output_path": {"type": "string", "description": "KayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±t yolu"},
+                        "title": {"type": "string", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k"},
+                        "content": {"type": "string", "description": "ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§erik"}
                     },
                     "required": ["output_path", "content"]
                 }
@@ -2170,12 +2709,12 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "merge_pdfs",
-                "description": "Birden fazla PDF'i birleştir.",
+                "description": "Birden fazla PDF'i birleÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tir.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pdf_list": {"type": "array", "description": "PDF dosyaları listesi", "items": {"type": "string"}},
-                        "output_path": {"type": "string", "description": "Çıktı yolu"}
+                        "pdf_list": {"type": "array", "description": "PDF dosyalarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± listesi", "items": {"type": "string"}},
+                        "output_path": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ktÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"}
                     },
                     "required": ["pdf_list", "output_path"]
                 }
@@ -2188,13 +2727,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "split_pdf",
-                "description": "PDF'i sayfa aralıklarına göre böl.",
+                "description": "PDF'i sayfa aralÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±klarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±na gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶re bÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶l.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pdf_path": {"type": "string", "description": "PDF dosyası yolu"},
-                        "page_ranges": {"type": "array", "description": "Sayfa aralıkları [{start, end, name}]"},
-                        "output_prefix": {"type": "string", "description": "Çıktı öneki"}
+                        "pdf_path": {"type": "string", "description": "PDF dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "page_ranges": {"type": "array", "description": "Sayfa aralÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±klarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± [{start, end, name}]"},
+                        "output_prefix": {"type": "string", "description": "ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ktÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶neki"}
                     },
                     "required": ["pdf_path", "page_ranges"]
                 }
@@ -2209,14 +2748,14 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_docx",
-                "description": "Word belgesi (.docx) oluştur.",
+                "description": "Word belgesi (.docx) oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
-                        "title": {"type": "string", "description": "Başlık"},
+                        "output_path": {"type": "string", "description": "KayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±t yolu"},
+                        "title": {"type": "string", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k"},
                         "paragraphs": {"type": "array", "description": "Paragraflar", "items": {"type": "string"}},
-                        "headings": {"type": "array", "description": "Başlıklar [{text, level, content}]"},
+                        "headings": {"type": "array", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±klar [{text, level, content}]"},
                         "tables": {"type": "array", "description": "Tablolar"}
                     },
                     "required": ["output_path"]
@@ -2234,7 +2773,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "docx_path": {"type": "string", "description": "DOCX dosyası yolu"}
+                        "docx_path": {"type": "string", "description": "DOCX dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"}
                     },
                     "required": ["docx_path"]
                 }
@@ -2251,10 +2790,10 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "docx_path": {"type": "string", "description": "DOCX dosyası yolu"},
+                        "docx_path": {"type": "string", "description": "DOCX dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
                         "paragraphs": {"type": "array", "description": "Eklenecek paragraflar", "items": {"type": "string"}},
-                        "heading": {"type": "string", "description": "Başlık"},
-                        "heading_level": {"type": "integer", "description": "Başlık seviyesi"}
+                        "heading": {"type": "string", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k"},
+                        "heading_level": {"type": "integer", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±k seviyesi"}
                     },
                     "required": ["docx_path"]
                 }
@@ -2269,14 +2808,14 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_excel",
-                "description": "Excel dosyası (.xlsx) oluştur.",
+                "description": "Excel dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (.xlsx) oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "output_path": {"type": "string", "description": "Kayıt yolu"},
-                        "sheet_name": {"type": "string", "description": "Sayfa adı"},
-                        "headers": {"type": "array", "description": "Başlıklar", "items": {"type": "string"}},
-                        "data": {"type": "array", "description": "Veri satırları"}
+                        "output_path": {"type": "string", "description": "KayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±t yolu"},
+                        "sheet_name": {"type": "string", "description": "Sayfa adÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "headers": {"type": "array", "description": "BaÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±klar", "items": {"type": "string"}},
+                        "data": {"type": "array", "description": "Veri satÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["output_path"]
                 }
@@ -2289,13 +2828,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "read_excel",
-                "description": "Excel dosyasını oku.",
+                "description": "Excel dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± oku.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "excel_path": {"type": "string", "description": "Excel dosyası yolu"},
-                        "sheet_name": {"type": "string", "description": "Sayfa adı (boş=aktif)"},
-                        "max_rows": {"type": "integer", "description": "Maksimum satır"}
+                        "excel_path": {"type": "string", "description": "Excel dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "sheet_name": {"type": "string", "description": "Sayfa adÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± (boÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸=aktif)"},
+                        "max_rows": {"type": "integer", "description": "Maksimum satÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r"}
                     },
                     "required": ["excel_path"]
                 }
@@ -2308,13 +2847,13 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "add_to_excel",
-                "description": "Excel dosyasına veri ekle.",
+                "description": "Excel dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±na veri ekle.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "excel_path": {"type": "string", "description": "Excel dosyası yolu"},
-                        "data": {"type": "array", "description": "Veri satırları"},
-                        "sheet_name": {"type": "string", "description": "Sayfa adı"}
+                        "excel_path": {"type": "string", "description": "Excel dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± yolu"},
+                        "data": {"type": "array", "description": "Veri satÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"},
+                        "sheet_name": {"type": "string", "description": "Sayfa adÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±"}
                     },
                     "required": ["excel_path", "data"]
                 }
@@ -2322,18 +2861,18 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
         }
     ),
     
-    # VS Code ve Klasör
+    # VS Code ve KlasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r
     "open_in_vscode": (
         tool_open_in_vscode,
         {
             "type": "function",
             "function": {
                 "name": "open_in_vscode",
-                "description": "Dosya veya klasörü VS Code'da aç.",
+                "description": "Dosya veya klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ VS Code'da aÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Dosya veya klasör yolu"},
+                        "path": {"type": "string", "description": "Dosya veya klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r yolu"},
                         "wait": {"type": "boolean", "description": "Kapanana kadar bekle"}
                     },
                     "required": ["path"]
@@ -2347,11 +2886,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "open_folder",
-                "description": "Klasörü Dosya Gezgini'nde aç.",
+                "description": "KlasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ Dosya Gezgini'nde aÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "folder_path": {"type": "string", "description": "Klasör yolu"}
+                        "folder_path": {"type": "string", "description": "KlasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r yolu"}
                     },
                     "required": ["folder_path"]
                 }
@@ -2364,11 +2903,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "create_folder",
-                "description": "Yeni klasör oluştur.",
+                "description": "Yeni klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "folder_path": {"type": "string", "description": "Klasör yolu"}
+                        "folder_path": {"type": "string", "description": "KlasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r yolu"}
                     },
                     "required": ["folder_path"]
                 }
@@ -2381,11 +2920,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "analyze_project_code",
-                "description": "Proje kodlarını analiz et ve raporla.",
+                "description": "Proje kodlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± analiz et ve raporla.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "project_path": {"type": "string", "description": "Proje klasörü yolu"},
+                        "project_path": {"type": "string", "description": "Proje klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ yolu"},
                         "output_format": {"type": "string", "description": "json/markdown", "enum": ["json", "markdown"]}
                     },
                     "required": ["project_path"]
@@ -2397,7 +2936,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
 
 
 # =============================================================================
-# TOOL KATEGORİLEME SİSTEMİ
+# TOOL KATEGORÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°LEME SÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°STEMÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°
 # =============================================================================
 
 TOOL_CATEGORIES: Dict[str, List[str]] = {
@@ -2423,7 +2962,7 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     ],
     "web": [
         "fetch_web_page", "search_news", "screenshot_webpage",
-        "research_and_report",
+        "research_and_report", "research_note",
     ],
     "email": [
         "check_gmail_messages", "check_outlook_messages", "create_email_draft",
@@ -2468,48 +3007,48 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
 
 CATEGORY_KEYWORDS: Dict[str, set] = {
     "file": {
-        "dosya", "dosyala", "klasor", "klasör", "dizin", "directory", "folder",
-        "file", "sil", "silmek", "kopyala", "tasi", "taşı", "delete", "copy",
-        "move", "rename", "kaydet", "save", "oluştur", "olustur", "create",
+        "dosya", "dosyala", "klasor", "klasÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶r", "dizin", "directory", "folder",
+        "file", "sil", "silmek", "kopyala", "tasi", "taÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "delete", "copy",
+        "move", "rename", "kaydet", "save", "oluÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tur", "olustur", "create",
         "ara", "search", "bul", "find", "listele", "list",
     },
     "screen": {
-        "ekran", "screen", "screenshot", "goruntu", "görüntü", "tikla", "tıkla",
+        "ekran", "screen", "screenshot", "goruntu", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼", "tikla", "tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kla",
         "click", "klavye", "keyboard", "fare", "mouse", "surukle",
-        "sürükle", "drag", "kaydir", "kaydır", "scroll", "kisayol", "kısayol",
-        "hotkey", "shortcut", "ctrl", "alt", "tus", "tuş", "key",
-        "masaustu", "masaüstü", "desktop",
+        "sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼kle", "drag", "kaydir", "kaydÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r", "scroll", "kisayol", "kÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±sayol",
+        "hotkey", "shortcut", "ctrl", "alt", "tus", "tuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸", "key",
+        "masaustu", "masaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼stÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼", "desktop",
     },
     "audio": {
         "ses", "audio", "sound", "mikrofon", "microphone", "dinle", "listen",
-        "cal", "çal", "play", "muzik", "müzik", "music", "konuş", "konus",
+        "cal", "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§al", "play", "muzik", "mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼zik", "music", "konuÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸", "konus",
         "speak", "tts", "seslendir",
     },
     "webcam": {
-        "kamera", "camera", "webcam", "fotograf", "fotoğraf", "photo",
-        "video", "goruntule", "görüntüle",
+        "kamera", "camera", "webcam", "fotograf", "fotoÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸raf", "photo",
+        "video", "goruntule", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼le",
     },
     "web": {
         "web", "site", "sayfa", "page", "url", "http", "https", "link",
-        "internet", "haber", "news", "arastir", "araştır", "research",
+        "internet", "haber", "news", "arastir", "araÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r", "research",
         "google", "fetch", "indir", "download", "browse", "github",
     },
     "email": {
         "email", "e-posta", "eposta", "mail", "gmail", "outlook",
-        "mesaj", "message", "inbox", "gelen", "gonder", "gönder",
+        "mesaj", "message", "inbox", "gelen", "gonder", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶nder",
         "taslak", "draft",
     },
     "system": {
         "sistem", "system", "cpu", "ram", "bellek", "memory", "disk",
-        "process", "islem", "işlem", "sonlandir", "sonlandır", "kill",
+        "process", "islem", "iÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lem", "sonlandir", "sonlandÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r", "kill",
         "terminate", "bilgisayar", "computer", "kapat", "shutdown",
-        "restart", "yeniden", "ag", "ağ", "network", "ping", "ip",
+        "restart", "yeniden", "ag", "aÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸", "network", "ping", "ip",
         "komut", "command", "powershell", "cmd", "terminal", "shell",
-        "calistir", "çalıştır", "run",
+        "calistir", "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r", "run",
     },
     "window": {
         "pencere", "window", "uygulama", "application", "minimize",
-        "küçült", "kucult", "one getir", "öne getir", "activate",
+        "kÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼lt", "kucult", "one getir", "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ne getir", "activate",
         "kilit", "kilitle", "lock",
     },
     "office": {
@@ -2517,97 +3056,258 @@ CATEGORY_KEYWORDS: Dict[str, set] = {
         "table", "spreadsheet", "pdf", "rapor", "report", "markdown",
     },
     "archive": {
-        "zip", "tar", "arsiv", "arşiv", "archive", "sikistir", "sıkıştır",
-        "compress", "cikar", "çıkar", "extract", "unzip",
+        "zip", "tar", "arsiv", "arÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸iv", "archive", "sikistir", "sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r",
+        "compress", "cikar", "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±kar", "extract", "unzip",
     },
     "code": {
         "kod", "code", "analiz", "analyze", "analysis", "pattern",
-        "fonksiyon", "function", "class", "sinif", "sınıf", "import",
+        "fonksiyon", "function", "class", "sinif", "sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±f", "import",
         "proje", "project", "vscode", "debug",
     },
     "planner": {
-        "gorev", "görev", "task", "takvim", "calendar", "etkinlik",
-        "event", "plan", "hatirla", "hatırla", "remind", "ajanda",
-        "todo", "yapilacak", "yapılacak",
+        "gorev", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rev", "task", "takvim", "calendar", "etkinlik",
+        "event", "plan", "hatirla", "hatÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±rla", "remind", "ajanda",
+        "todo", "yapilacak", "yapÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±lacak",
     },
     "usb": {
-        "usb", "flash", "surucu", "sürücü", "eject",
+        "usb", "flash", "surucu", "sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼", "eject",
     },
     "ocr": {
-        "ocr", "metin tani", "metin tanı", "recognize",
-        "goruntuden", "görüntüden",
+        "ocr", "metin tani", "metin tanÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "recognize",
+        "goruntuden", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ntÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼den",
     },
     "dialog": {
-        "uyar", "uyarı", "onay", "confirm", "popup", "dialog",
+        "uyar", "uyarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "onay", "confirm", "popup", "dialog",
     },
 }
 
-MAX_TOOLS_PER_REQUEST = 20
+MAX_TOOLS_PER_REQUEST = 28
+
+DEFAULT_TOOL_NAMES: List[str] = [
+    "read_file",
+    "write_file",
+    "list_directory",
+    "get_system_info",
+    "search_news",
+    "fetch_web_page",
+    "research_and_report",
+    "research_note",
+    "check_gmail_messages",
+    "check_outlook_messages",
+    "create_markdown_report",
+    "create_folder",
+    "open_folder",
+    "open_in_vscode",
+    "analyze_project_code",
+    "add_task",
+    "list_tasks",
+]
+
+_TRANSIENT_ARGUMENT_KEYS = {
+    "status", "process", "state", "step", "progress", "message", "note",
+}
+
+_TOOL_ARGUMENT_ALIASES: Dict[str, Dict[str, str]] = {
+    "webcam_capture": {
+        "file_path": "output_path",
+        "path": "output_path",
+        "camera": "camera_index",
+        "index": "camera_index",
+    },
+    "webcam_record_video": {
+        "file_path": "output_path",
+        "path": "output_path",
+        "camera": "camera_index",
+        "seconds": "duration",
+    },
+    "screenshot_desktop": {"file_path": "output_path", "path": "output_path"},
+    "screenshot_webpage": {"file_path": "output_path", "path": "output_path"},
+    "stop_audio_recording": {"file_path": "output_path", "path": "output_path"},
+    "create_docx": {"path": "output_path", "file_path": "output_path"},
+    "create_excel": {"path": "output_path", "file_path": "output_path"},
+    "create_pdf": {"path": "output_path", "file_path": "output_path"},
+    "open_folder": {"path": "folder_path"},
+    "write_file": {"file_path": "path", "text": "content"},
+    "read_file": {"file_path": "path"},
+    "create_markdown_report": {"file_path": "path", "text": "content"},
+    "check_gmail_messages": {"limit": "max_results"},
+    "check_outlook_messages": {"limit": "max_results"},
+    "research_and_report": {"path": "out_path", "file_path": "out_path", "query": "topic"},
+}
+
+
+def _coerce_to_annotation(value: Any, annotation: Any) -> Any:
+    ann_name = annotation
+    if annotation is inspect._empty:  # type: ignore[attr-defined]
+        return value
+    if not isinstance(ann_name, str):
+        ann_name = getattr(annotation, "__name__", str(annotation))
+    ann_name = str(ann_name).lower()
+
+    if ann_name.endswith("int") and isinstance(value, str):
+        stripped = value.strip()
+        if re.fullmatch(r"-?\d+", stripped):
+            return int(stripped)
+    if ann_name.endswith("float") and isinstance(value, str):
+        stripped = value.strip()
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", stripped):
+            return float(stripped)
+    if ann_name.endswith("bool") and isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "evet"}:
+            return True
+        if lowered in {"false", "0", "no", "hayir", "hayÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r"}:
+            return False
+    return value
+
+
+def _normalize_execute_arguments(name: str, arguments: Dict[str, Any], fn: Callable[..., Dict[str, Any]]) -> Dict[str, Any]:
+    args = dict(arguments or {}) if isinstance(arguments, dict) else {}
+
+    nested = args.get("arguments")
+    if isinstance(nested, dict):
+        args.pop("arguments", None)
+        for key, value in nested.items():
+            args.setdefault(key, value)
+
+    aliases = _TOOL_ARGUMENT_ALIASES.get(name, {})
+    for source_key, target_key in aliases.items():
+        if source_key in args and target_key not in args:
+            args[target_key] = args[source_key]
+
+    for transient in _TRANSIENT_ARGUMENT_KEYS:
+        args.pop(transient, None)
+
+    if name == "search_news":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            args["query"] = "turkiye gundem"
+
+    if name == "create_markdown_report":
+        sections = args.get("sections")
+        if isinstance(sections, str):
+            try:
+                parsed_sections = json.loads(sections)
+            except Exception:
+                parsed_sections = None
+            if isinstance(parsed_sections, list):
+                args["sections"] = parsed_sections
+            else:
+                args.pop("sections", None)
+                args.setdefault("content", sections)
+        if "content" not in args and isinstance(args.get("text"), str):
+            args["content"] = args["text"]
+        if not str(args.get("title", "")).strip():
+            for key in ("topic", "subject", "report_title"):
+                value = args.get(key)
+                if isinstance(value, str) and value.strip():
+                    args["title"] = value.strip()
+                    break
+
+    signature = inspect.signature(fn)
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+    if not accepts_kwargs:
+        allowed = set(signature.parameters.keys())
+        args = {k: v for k, v in args.items() if k in allowed}
+
+    for param_name, param in signature.parameters.items():
+        if param_name in args:
+            args[param_name] = _coerce_to_annotation(args[param_name], param.annotation)
+
+    return args
 
 
 def get_relevant_tools(user_message: str) -> List[Dict[str, Any]]:
-    """Kullanıcı mesajına göre sadece ilgili tool spec'lerini döndür."""
+    """Kullanici mesaji icin ilgili tool spec'lerini dondur."""
     if not user_message:
-        return get_tool_specs()
+        return [TOOLS[name][1] for name in DEFAULT_TOOL_NAMES if name in TOOLS][:MAX_TOOLS_PER_REQUEST]
 
     msg_lower = user_message.lower()
+    msg_tokens = set(re.findall(r"[a-z0-9_ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼]+", msg_lower))
 
-    matched_categories: set = set()
+    matched_categories: set[str] = set()
     for category, keywords in CATEGORY_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in msg_lower:
+            kw = keyword.lower()
+            if " " in kw:
+                matched = kw in msg_lower
+            elif len(kw) <= 3:
+                # Kisa anahtar kelimeler (sil, cal, vb.) yalnizca token-eslesme ile.
+                matched = kw in msg_tokens
+            else:
+                # Ek almis token'lari da yakala: mail -> maillerim, kamera -> kamerayi
+                matched = kw in msg_tokens or any(token.startswith(kw) for token in msg_tokens)
+            if matched:
                 matched_categories.add(category)
                 break
 
-    # Her zaman core dahil
+    explicit_tool_names: List[str] = [
+        name
+        for name in TOOLS
+        if re.search(rf"\b{re.escape(name.lower())}\b", msg_lower)
+    ]
+
     matched_categories.add("core")
 
-    # Hiçbir ek kategori eşleşmediyse → fallback tüm tool'lar
-    if len(matched_categories) == 1:
-        return get_tool_specs()
+    if len(matched_categories) == 1 and not explicit_tool_names:
+        return [TOOLS[name][1] for name in DEFAULT_TOOL_NAMES if name in TOOLS][:MAX_TOOLS_PER_REQUEST]
 
-    # Unique tool isimlerini topla
     tool_names: List[str] = []
-    seen: set = set()
+    seen: set[str] = set()
 
-    # Önce core
-    for name in TOOL_CATEGORIES["core"]:
+    def add_tool(name: str) -> None:
         if name in TOOLS and name not in seen:
             tool_names.append(name)
             seen.add(name)
 
-    # Sonra eşleşen kategoriler
-    for cat in matched_categories:
-        if cat == "core":
+    for name in TOOL_CATEGORIES.get("core", []):
+        add_tool(name)
+
+    for name in explicit_tool_names:
+        add_tool(name)
+
+    for category in TOOL_CATEGORIES.keys():
+        if category == "core":
             continue
-        for name in TOOL_CATEGORIES.get(cat, []):
-            if name in TOOLS and name not in seen:
-                tool_names.append(name)
-                seen.add(name)
+        if category not in matched_categories:
+            continue
+        for name in TOOL_CATEGORIES.get(category, []):
+            add_tool(name)
 
-    # Sınırla
-    tool_names = tool_names[:MAX_TOOLS_PER_REQUEST]
+    if len(tool_names) < 8:
+        for name in DEFAULT_TOOL_NAMES:
+            add_tool(name)
 
-    return [TOOLS[name][1] for name in tool_names]
+    return [TOOLS[name][1] for name in tool_names[:MAX_TOOLS_PER_REQUEST]]
 
 
 def get_tool_specs() -> List[Dict[str, Any]]:
-    """Tüm tool spec'lerini döndür (fallback)."""
+    """Tum tool spec'lerini dondur (fallback)."""
     return [TOOLS[name][1] for name in TOOLS]
 
 
 def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     if name not in TOOLS:
-        # Model'e hangi tool'ların mevcut olduğunu hatırlat
         available = ", ".join(sorted(TOOLS.keys()))
         raise ValueError(
-            f"'{name}' adında bir araç mevcut değil. "
-            f"Bu araç kayıtlı değil. Sadece mevcut araçları kullan. "
-            f"Mevcut araçlar: {available}"
+            f"'{name}' adinda bir arac mevcut degil. "
+            f"Bu arac kayitli degil. Sadece mevcut araclari kullan. "
+            f"Mevcut araclar: {available}"
         )
     fn, _ = TOOLS[name]
-    return fn(**arguments)
+    normalized_args = _normalize_execute_arguments(name, arguments, fn)
+    return fn(**normalized_args)
+
+
+_MAX_TOOL_RESULT_CHARS = 4000
 
 
 def serialize_tool_result(result: Dict[str, Any]) -> str:
-    return json.dumps(result, ensure_ascii=False)
+    text = json.dumps(result, ensure_ascii=False)
+    if len(text) > _MAX_TOOL_RESULT_CHARS:
+        text = text[:_MAX_TOOL_RESULT_CHARS] + '... [truncated]"}'
+    return text
+
+
+
+

@@ -1,10 +1,19 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+def _resolve_from_backend(raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (_BACKEND_DIR / path).resolve()
 
 
 class Settings(BaseSettings):
@@ -16,7 +25,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b-q4_K_M"
-    ollama_max_steps: int = 8
+    ollama_max_steps: int = 25
     llm_backend: str = "ollama"
     llama_model_path: str = "../models/Qwen3.5-9B-Q4_K_M.gguf"
     llama_n_ctx: int = 8192
@@ -84,15 +93,19 @@ class Settings(BaseSettings):
 
     @property
     def workspace_path(self) -> Path:
-        return Path(self.workspace_root).resolve()
+        return _resolve_from_backend(self.workspace_root)
 
     @property
     def sessions_path(self) -> Path:
-        return Path(self.sessions_dir).resolve()
+        return _resolve_from_backend(self.sessions_dir)
+
+    @property
+    def data_path(self) -> Path:
+        return _resolve_from_backend(self.data_dir)
 
     @property
     def llama_model_path_abs(self) -> Path:
-        return Path(self.llama_model_path).resolve()
+        return _resolve_from_backend(self.llama_model_path)
 
     @field_validator("port")
     @classmethod

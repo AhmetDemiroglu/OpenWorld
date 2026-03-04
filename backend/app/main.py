@@ -13,6 +13,7 @@ from .agent import AgentService
 from .config import settings
 from .memory import SessionStore
 from .models import ChatRequest, ChatResponse, MediaAttachment
+from .tools.audit import run_tools_audit
 
 store = SessionStore(settings.sessions_path)
 agent = AgentService(store)
@@ -27,7 +28,7 @@ app.add_middleware(
 )
 
 # Media dizini
-_DATA_DIR = Path(settings.data_dir).resolve()
+_DATA_DIR = settings.data_path
 _MEDIA_DIR = _DATA_DIR / "media"
 _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -56,6 +57,14 @@ async def health() -> dict:
 @app.get("/sessions")
 async def sessions() -> dict:
     return {"sessions": store.list_sessions()}
+
+
+@app.get("/tools/audit")
+async def tools_audit(run_probes: bool = True) -> dict:
+    try:
+        return run_tools_audit(run_probes=run_probes)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/chat", response_model=ChatResponse)
