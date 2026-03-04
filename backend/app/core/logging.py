@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Logs directory
+# Logs directory - project root/data/logs
 LOGS_DIR = Path(__file__).resolve().parents[3] / "data" / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 

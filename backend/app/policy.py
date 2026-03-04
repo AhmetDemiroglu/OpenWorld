@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, Set
 
 
@@ -52,6 +53,58 @@ ALLOWED_FINANCIAL_CONTEXTS = [
     "piyasalar", "borsa", "ekonomi", "finansal piyasa",
     "impact", "analysis", "report", "research", "effect", "markets"
 ]
+
+_FINANCIAL_EXECUTION_TOOLS: Set[str] = {
+    "execute_command",
+    "type_text",
+    "press_key",
+    "hotkey",
+    "click_on_screen",
+    "drag_to",
+}
+
+_ACTION_PHRASES = (
+    "odeme yap",
+    "odeme al",
+    "para gonder",
+    "para transfer",
+    "banka transfer",
+    "wire transfer",
+    "make payment",
+    "send payment",
+    "send money",
+    "transfer money",
+    "crypto transfer",
+    "bitcoin transfer",
+    "wallet send",
+    "paypal send",
+    "venmo pay",
+)
+
+_SHORT_SENSITIVE_TOKENS = {"eft", "iban", "cvv"}
+_ACTION_VERBS = {
+    "yap", "gonder", "transfer", "ode", "odeme", "yatir", "cek",
+    "pay", "send", "transfer", "purchase", "buy",
+}
+
+
+def _normalize_tr(text: str) -> str:
+    tr_map = {
+        0x00E7: "c",  # c-cedilla
+        0x011F: "g",  # g-breve
+        0x0131: "i",  # dotless i
+        0x00F6: "o",  # o-umlaut
+        0x015F: "s",  # s-cedilla
+        0x00FC: "u",  # u-umlaut
+    }
+    return (text or "").lower().translate(tr_map)
+
+
+def _contains_term(text: str, term: str) -> bool:
+    escaped = re.escape(term)
+    # Kelime/söz öbeği sınırında eşleş: "defter" içindeki "eft" gibi false-positive'leri engeller.
+    pattern = rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_])"
+    return re.search(pattern, text) is not None
 
 UNTRUSTED_CONTENT_TOOLS: Set[str] = {
     "fetch_web_page",
@@ -113,25 +166,44 @@ def contains_forbidden_financial_intent(text: str) -> bool:
     """
     if not text:
         return False
-    
-    t = text.lower()
-    
-    # Önce bağlam kontrolü - analiz/araştırma/rapor bağlamı mı?
-    is_analysis_context = any(ctx in t for ctx in ALLOWED_FINANCIAL_CONTEXTS)
-    
-    for term, strict in FINANCIAL_BLOCK_TERMS:
-        if term in t:
-            # Eğer analiz/araştırma bağlamındaysa ve strict değilse, izin ver
-            if is_analysis_context and not strict:
-                continue
-            # Aksi halde engelle
+
+    t = _normalize_tr(text)
+
+    # Acik islemsel finans niyetleri her zaman engellenir.
+    for phrase in _ACTION_PHRASES:
+        if phrase in t:
             return True
-    
+
+    # Analiz/rapor baglaminda genel finans kelimeleri serbest.
+    is_analysis_context = any(ctx in t for ctx in ALLOWED_FINANCIAL_CONTEXTS)
+
+    has_action_verb = any(_contains_term(t, v) for v in _ACTION_VERBS)
+    for term, strict in FINANCIAL_BLOCK_TERMS:
+        term_n = _normalize_tr(term)
+        if not _contains_term(t, term_n):
+            continue
+
+        # Kisa tokenlar yalnizca islemsel fiillerle birlikte engellenmeli.
+        if term_n in _SHORT_SENSITIVE_TOKENS and not has_action_verb:
+            continue
+
+        if is_analysis_context and not strict:
+            continue
+        return True
+
     return False
 
 
 
 def is_forbidden_tool_payload(payload: Any) -> bool:
+    # Tool payload kontrolu sadece dogrudan eylem ureten yuksek etkili araclarda uygulanir.
+    if isinstance(payload, dict):
+        tool_name = str(payload.get("name", "")).strip().lower()
+        if tool_name and tool_name not in _FINANCIAL_EXECUTION_TOOLS:
+            return False
+        args = payload.get("arguments")
+        if isinstance(args, dict):
+            return contains_forbidden_financial_intent(str(args))
     return contains_forbidden_financial_intent(str(payload))
 
 

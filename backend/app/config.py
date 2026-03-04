@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     owner_profile: str = "Teknoloji, otomasyon, urun gelistirme"
     assistant_name: str = "OpenWorld"
 
+    # Background Services
+    bg_email_monitor: bool = True
+    bg_email_interval_min: int = 15
+    bg_smart_assistant: bool = True
+    bg_weather_city: str = "Izmir"
+    bg_custom_alerts: str = ""
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]

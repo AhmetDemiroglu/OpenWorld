@@ -1371,11 +1371,33 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
     # Haber arama: ~60sn, Icerik cekme: ~90sn, Rapor yazma: ~30sn
     MAX_TOTAL_TIME = 180  # 3 dakika - notebook devam etme icin yeterli
     
+    # === ONCELIKLE NOTEBOOK OLUSTUR ===
+    # Timeout olsa bile notebook kayitli olsun
+    notebook_name = None
+    try:
+        from .notebook_tools import tool_notebook_create
+        # Notebook adi olustur (topic'den)
+        safe_name = re.sub(r'[^\w\s-]', '', topic[:40]).strip().replace(' ', '_')
+        if not safe_name:
+            safe_name = f"arastirma_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        
+        notebook_result = tool_notebook_create(
+            name=safe_name,
+            goal=topic,
+            steps="Haber ara ve kaynaklari topla\nKaynaklari oku ve not al\nBulgulari analiz et\nRapor olustur"
+        )
+        
+        if "error" not in notebook_result:
+            notebook_name = safe_name
+    except Exception:
+        pass
+    
     entries: List[Dict[str, Any]] = []
     failed_sources: List[Dict[str, str]] = []
     scratchpad_lines: List[str] = [
         f"=== ARASTIRMA: {topic} ===",
         f"Baslangic: {datetime.utcnow().isoformat()}Z",
+        f"Notebook: {notebook_name or 'OLUSTURULAMADI'}",
         "",
     ]
 
@@ -1769,7 +1791,8 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
             "partial": True,
             "sources_collected": len(entries),
             "can_resume": True,
-            "tip": "'Devam et' veya rapor adini yazarak kaldiginiz yerden devam edebilirsiniz.",
+            "notebook_name": notebook_name,
+            "tip": f"'{notebook_name or 'Devam et'}' yazarak kaldiginiz yerden devam edebilirsiniz." if notebook_name else "'Devam et' yazarak devam edebilirsiniz.",
         }
         # Kismi sonuclari kaydetmeyi dene
         if entries:
@@ -3817,7 +3840,7 @@ DEFAULT_TOOL_NAMES: List[str] = [
 ]
 
 _TRANSIENT_ARGUMENT_KEYS = {
-    "status", "process", "state", "step", "progress", "message", "note",
+    "status", "process", "state", "step", "progress", "message",
 }
 
 _TOOL_ARGUMENT_ALIASES: Dict[str, Dict[str, str]] = {
@@ -3919,6 +3942,32 @@ def _normalize_execute_arguments(name: str, arguments: Dict[str, Any], fn: Calla
                 if isinstance(value, str) and value.strip():
                     args["title"] = value.strip()
                     break
+
+    if name in {"create_pdf", "create_docx", "create_excel"}:
+        if not str(args.get("output_path", "")).strip():
+            stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            ext_map = {
+                "create_pdf": "pdf",
+                "create_docx": "docx",
+                "create_excel": "xlsx",
+            }
+            ext = ext_map.get(name, "txt")
+            default_dir = settings.workspace_path / "reports"
+            default_dir.mkdir(parents=True, exist_ok=True)
+            args["output_path"] = str(default_dir / f"{name}_{stamp}.{ext}")
+
+    if name == "research_and_report":
+        topic = args.get("topic")
+        topic_text = topic.strip() if isinstance(topic, str) else ""
+        if not topic_text:
+            for key in ("query", "goal", "subject", "title", "name", "message", "content", "note", "step"):
+                value = args.get(key)
+                if isinstance(value, str) and value.strip():
+                    topic_text = value.strip()
+                    break
+        if not topic_text:
+            topic_text = "Genel arastirma"
+        args["topic"] = topic_text
 
     signature = inspect.signature(fn)
     accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())

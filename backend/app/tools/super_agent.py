@@ -1,6 +1,6 @@
 """
 SUPER AGENT TOOLS
-GerÃ§ek bir ajan iÃ§in geliÅŸmiÅŸ yetenekler
+Gercek bir ajan icin gelismis yetenekler
 """
 from __future__ import annotations
 
@@ -121,14 +121,14 @@ def _validate_web_url(url: str) -> None:
 
 
 # =============================================================================
-# SCREENSHOT ARAÃ‡LARI
+# SCREENSHOT ARACLARI
 # =============================================================================
 
 def tool_screenshot_desktop(output_path: str = "", region: List[int] = None) -> Dict[str, Any]:
-    """MasaÃ¼stÃ¼ ekran gÃ¶rÃ¼ntÃ¼sÃ¼ al."""
+    """Masaustu ekran goruntusu al."""
     try:
         if region and len(region) == 4:
-            # Belirli bÃ¶lge: [x, y, width, height]
+            # Belirli bolge: [x, y, width, height]
             x, y, w, h = region
             screenshot = pyautogui.screenshot(region=(x, y, w, h))
         else:
@@ -153,7 +153,7 @@ def tool_screenshot_desktop(output_path: str = "", region: List[int] = None) -> 
 
 
 def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3) -> Dict[str, Any]:
-    """Web sayfasÄ± ekran gÃ¶rÃ¼ntÃ¼sÃ¼ al."""
+    """Web sayfasi ekran goruntusu al."""
     try:
         _validate_web_url(url)
         from selenium import webdriver
@@ -176,7 +176,7 @@ def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3)
         
         try:
             driver.get(url)
-            time.sleep(max(1, min(wait_time, 20)))  # SayfanÄ±n yÃ¼klenmesini bekle
+            time.sleep(max(1, min(wait_time, 20)))  # Sayfanin yuklenmesini bekle
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             domain = url.replace("https://", "").replace("http://", "").replace("/", "_")[:30]
@@ -195,15 +195,15 @@ def tool_screenshot_webpage(url: str, output_path: str = "", wait_time: int = 3)
             driver.quit()
             
     except Exception as e:
-        return {"error": str(e), "note": "Chrome kurulu olduÄŸundan emin olun"}
+        return {"error": str(e), "note": "Chrome kurulu oldugundan emin olun"}
 
 
 def tool_find_image_on_screen(image_path: str, confidence: float = 0.9) -> Dict[str, Any]:
-    """Ekranda bir gÃ¶rÃ¼ntÃ¼ ara ve konumunu bul."""
+    """Ekranda bir goruntu ara ve konumunu bul."""
     try:
         target = Path(image_path)
         if not target.exists():
-            return {"error": "GÃ¶rÃ¼ntÃ¼ dosyasÄ± bulunamadÄ±", "path": image_path}
+            return {"error": "Goruntu dosyasi bulunamadi", "path": image_path}
         
         location = pyautogui.locateOnScreen(str(target), confidence=confidence)
         
@@ -216,14 +216,14 @@ def tool_find_image_on_screen(image_path: str, confidence: float = 0.9) -> Dict[
                 "center": {"x": center.x, "y": center.y}
             }
         else:
-            return {"found": False, "message": "GÃ¶rÃ¼ntÃ¼ ekranda bulunamadÄ±"}
+            return {"found": False, "message": "Goruntu ekranda bulunamadi"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_click_on_screen(x: int, y: int, clicks: int = 1, button: str = "left") -> Dict[str, Any]:
-    """Ekranda belirli bir koordinata tÄ±kla."""
+    """Ekranda belirli bir koordinata tikla."""
     try:
         pyautogui.click(x, y, clicks=clicks, button=button)
         return {"success": True, "x": x, "y": y, "clicks": clicks, "button": button}
@@ -241,7 +241,7 @@ def tool_type_text(text: str, interval: float = 0.01) -> Dict[str, Any]:
 
 
 def tool_press_key(key: str, presses: int = 1) -> Dict[str, Any]:
-    """Klavye tuÅŸuna bas."""
+    """Klavye tusuna bas."""
     try:
         pyautogui.press(key, presses=presses)
         return {"success": True, "key": key, "presses": presses}
@@ -250,11 +250,11 @@ def tool_press_key(key: str, presses: int = 1) -> Dict[str, Any]:
 
 
 # =============================================================================
-# SES KAYIT ARAÃ‡LARI
+# SES KAYIT ARACLARI
 # =============================================================================
 
 class AudioRecorder:
-    """Ses kaydedici sÄ±nÄ±f."""
+    """Ses kaydedici sinif."""
     def __init__(self):
         self.recording = False
         self.frames = []
@@ -295,22 +295,22 @@ _audio_recorder = None
 
 
 def tool_start_audio_recording() -> Dict[str, Any]:
-    """Ses kaydÄ±na baÅŸla."""
+    """Ses kaydina basla."""
     global _audio_recorder
     try:
         _audio_recorder = AudioRecorder()
         _audio_recorder.start_recording()
-        return {"success": True, "message": "Ses kaydÄ± baÅŸladÄ±", "sample_rate": 44100}
+        return {"success": True, "message": "Ses kaydi basladi", "sample_rate": 44100}
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_stop_audio_recording(output_path: str = "") -> Dict[str, Any]:
-    """Ses kaydÄ±nÄ± durdur ve kaydet."""
+    """Ses kaydini durdur ve kaydet."""
     global _audio_recorder
     try:
         if not _audio_recorder:
-            return {"error": "Aktif ses kaydÄ± yok"}
+            return {"error": "Aktif ses kaydi yok"}
         
         _audio_recorder.stop_recording()
         
@@ -326,14 +326,14 @@ def tool_stop_audio_recording(output_path: str = "") -> Dict[str, Any]:
                 "size": target.stat().st_size
             }
         else:
-            return {"error": "KayÄ±t boÅŸ veya kaydedilemedi"}
+            return {"error": "Kayit bos veya kaydedilemedi"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_play_audio(audio_path: str) -> Dict[str, Any]:
-    """Ses dosyasÄ±nÄ± Ã§al."""
+    """Ses dosyasini cal."""
     try:
         from scipy.io import wavfile
         import sounddevice as sd
@@ -348,7 +348,7 @@ def tool_play_audio(audio_path: str) -> Dict[str, Any]:
 
 
 def tool_text_to_speech(text: str, output_path: str = "", lang: str = "tr") -> Dict[str, Any]:
-    """Metni sese Ã§evir."""
+    """Metni sese cevir."""
     try:
         # Windows TTS
         if platform.system() == "Windows":
@@ -357,7 +357,7 @@ def tool_text_to_speech(text: str, output_path: str = "", lang: str = "tr") -> D
             speaker = win32com.client.Dispatch("SAPI.SpVoice")
             
             if not output_path:
-                # DoÄŸrudan konuÅŸ
+                # Dogrudan konus
                 speaker.Speak(text)
                 return {"success": True, "spoken": text, "mode": "direct"}
             else:
@@ -381,50 +381,91 @@ def tool_text_to_speech(text: str, output_path: str = "", lang: str = "tr") -> D
                     "size": target.stat().st_size if target.exists() else 0
                 }
         else:
-            return {"error": "TTS ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "TTS su anda sadece Windows'da destekleniyor"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 # =============================================================================
-# WEBCAM ARAÃ‡LARI
+# WEBCAM ARACLARI
 # =============================================================================
 
 def tool_webcam_capture(output_path: str = "", camera_index: int = 0) -> Dict[str, Any]:
-    """Webcam'den fotoÄŸraf Ã§ek."""
+    """Webcam'den fotograf cek."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
+        logger.info(f"[WEBCAM] Opening camera {camera_index}")
         cap = cv2.VideoCapture(camera_index)
         
         if not cap.isOpened():
-            return {"error": f"Kamera {camera_index} aÃ§Ä±lamadÄ±"}
+            logger.error(f"[WEBCAM] Camera {camera_index} could not be opened")
+            return {"error": f"Kamera {camera_index} acilamadi. Kamera baska bir uygulama tarafindan kullaniliyor olabilir."}
         
-        # BirkaÃ§ kare bekle (oto focus)
-        for _ in range(5):
-            cap.read()
+        # Birkac kare bekle (oto focus)
+        logger.info("[WEBCAM] Warming up camera...")
+        for i in range(10):
+            ret, _ = cap.read()
+            if not ret:
+                logger.warning(f"[WEBCAM] Warmup frame {i} failed")
         
+        # Gercek kareyi yakala
         ret, frame = cap.read()
         cap.release()
         
-        if not ret:
-            return {"error": "Kare yakalanamadÄ±"}
+        if not ret or frame is None or frame.size == 0:
+            logger.error(f"[WEBCAM] Frame capture failed")
+            return {"error": "Kare yakalanamadi. Kamera baska bir uygulama tarafindan kullaniliyor olabilir."}
+        
+        logger.info(f"[WEBCAM] Frame captured: shape={frame.shape}")
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_name = f"capture_{timestamp}.jpg"
         target = _resolve_generated_output_path(output_path, default_name, "media")
+        
+        logger.info(f"[WEBCAM] Target: {target}")
+        
+        # Klasoru olustur
         target.parent.mkdir(parents=True, exist_ok=True)
         
-        cv2.imwrite(str(target), frame)
+        # BGR -> RGB cevir (PIL icin)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame_rgb)
+        
+        # PIL ile kaydet (cv2.imwrite yerine)
+        try:
+            image.save(str(target), "JPEG", quality=95)
+            logger.info(f"[WEBCAM] PIL save success")
+        except Exception as pil_err:
+            logger.error(f"[WEBCAM] PIL save failed: {pil_err}")
+            # PIL basarisiz olursa cv2 dene
+            write_success = cv2.imwrite(str(target), frame)
+            if not write_success:
+                return {"error": f"Fotograf kaydedilemedi: {pil_err}"}
+        
+        # Dosya kontrol
+        if not target.exists():
+            return {"error": "Dosya olusturulamadi"}
+        
+        file_size = target.stat().st_size
+        if file_size == 0:
+            target.unlink()
+            return {"error": "Fotograf bos (0 byte)"}
+        
+        logger.info(f"[WEBCAM] Success! {file_size} bytes")
         
         return {
             "success": True,
             "path": str(target),
-            "size": target.stat().st_size,
+            "size": file_size,
             "resolution": f"{frame.shape[1]}x{frame.shape[0]}"
         }
         
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("[WEBCAM] Exception")
+        return {"error": f"Webcam hatasi: {str(e)}"}
 
 
 def tool_webcam_record_video(duration: int = 10, output_path: str = "", camera_index: int = 0) -> Dict[str, Any]:
@@ -433,9 +474,9 @@ def tool_webcam_record_video(duration: int = 10, output_path: str = "", camera_i
         cap = cv2.VideoCapture(camera_index)
         
         if not cap.isOpened():
-            return {"error": f"Kamera {camera_index} aÃ§Ä±lamadÄ±"}
+            return {"error": f"Kamera {camera_index} acilamadi"}
         
-        # Video Ã¶zellikleri
+        # Video ozellikleri
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = 20.0
@@ -475,11 +516,11 @@ def tool_webcam_record_video(duration: int = 10, output_path: str = "", camera_i
 
 
 def tool_list_cameras() -> Dict[str, Any]:
-    """KullanÄ±labilir kameralarÄ± listele."""
+    """Kullanilabilir kameralari listele."""
     try:
         cameras = []
         
-        for i in range(10):  # Ä°lk 10 kamerayÄ± dene
+        for i in range(10):  # Ilk 10 kamerayi dene
             cap = cv2.VideoCapture(i)
             if cap.isOpened():
                 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -498,11 +539,11 @@ def tool_list_cameras() -> Dict[str, Any]:
 
 
 # =============================================================================
-# USB CÄ°HAZ ARAÃ‡LARI
+# USB CIHAZ ARACLARI
 # =============================================================================
 
 def tool_list_usb_devices() -> Dict[str, Any]:
-    """BaÄŸlÄ± USB cihazlarÄ±nÄ± listele."""
+    """Bagli USB cihazlarini listele."""
     try:
         devices = []
         
@@ -517,7 +558,7 @@ def tool_list_usb_devices() -> Dict[str, Any]:
                     "serial_number": usb.util.get_string(device, device.iSerialNumber) if device.iSerialNumber else None
                 })
             except:
-                # BazÄ± cihazlar string alanlarÄ±nÄ± desteklemez
+                # Bazi cihazlar string alanlarini desteklemez
                 devices.append({
                     "vendor_id": hex(device.idVendor) if device.idVendor else None,
                     "product_id": hex(device.idProduct) if device.idProduct else None,
@@ -550,27 +591,27 @@ def tool_list_usb_devices() -> Dict[str, Any]:
 
 
 def tool_eject_usb_drive(drive_letter: str) -> Dict[str, Any]:
-    """USB sÃ¼rÃ¼cÃ¼sÃ¼nÃ¼ gÃ¼venli Ã§Ä±kar."""
+    """USB surucusunu guvenli cikar."""
     try:
         if platform.system() == "Windows":
-            # PowerShell ile Ã§Ä±kar
+            # PowerShell ile cikar
             ps_command = f"(New-Object -comObject Shell.Application).Namespace(17).ParseName('{drive_letter}:').InvokeVerb('Eject')"
             result = subprocess.run(["powershell", "-Command", ps_command], 
                                   capture_output=True, text=True, timeout=30)
             
             if result.returncode == 0:
-                return {"success": True, "drive": drive_letter, "message": "SÃ¼rÃ¼cÃ¼ gÃ¼venli Ã§Ä±karÄ±ldÄ±"}
+                return {"success": True, "drive": drive_letter, "message": "Surucu guvenli cikarildi"}
             else:
-                return {"error": result.stderr or "Ã‡Ä±karma baÅŸarÄ±sÄ±z"}
+                return {"error": result.stderr or "Cikarma basarisiz"}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 # =============================================================================
-# GELÄ°ÅMÄ°Å OTOMASYON
+# GELIÅMIÅ OTOMASYON
 # =============================================================================
 
 def tool_mouse_position() -> Dict[str, Any]:
@@ -598,7 +639,7 @@ def tool_mouse_move(x: int, y: int, duration: float = 0.5) -> Dict[str, Any]:
 
 
 def tool_drag_to(x: int, y: int, duration: float = 0.5, button: str = "left") -> Dict[str, Any]:
-    """SÃ¼rÃ¼kle-bÄ±rak yap."""
+    """Surukle-birak yap."""
     try:
         pyautogui.dragTo(x, y, duration=duration, button=button)
         return {"success": True, "to_x": x, "to_y": y}
@@ -607,7 +648,7 @@ def tool_drag_to(x: int, y: int, duration: float = 0.5, button: str = "left") ->
 
 
 def tool_scroll(amount: int, x: int = None, y: int = None) -> Dict[str, Any]:
-    """Fare tekerleÄŸi kaydÄ±r."""
+    """Fare tekerlegi kaydir."""
     try:
         if x is not None and y is not None:
             pyautogui.scroll(amount, x=x, y=y)
@@ -638,7 +679,7 @@ def tool_hotkey(*keys: str, keys_list: Optional[List[str]] = None) -> Dict[str, 
 
 
 def tool_alert(message: str, title: str = "OpenWorld Agent") -> Dict[str, Any]:
-    """Ekranda uyarÄ± penceresi gÃ¶ster."""
+    """Ekranda uyari penceresi goster."""
     try:
         pyautogui.alert(text=message, title=title, button='Tamam')
         return {"success": True, "message": message}
@@ -647,16 +688,16 @@ def tool_alert(message: str, title: str = "OpenWorld Agent") -> Dict[str, Any]:
 
 
 def tool_confirm(message: str, title: str = "OpenWorld Agent") -> Dict[str, Any]:
-    """Onay penceresi gÃ¶ster."""
+    """Onay penceresi goster."""
     try:
-        result = pyautogui.confirm(text=message, title=title, buttons=['Evet', 'HayÄ±r'])
+        result = pyautogui.confirm(text=message, title=title, buttons=['Evet', 'Hayir'])
         return {"success": True, "result": result}
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_prompt(message: str, title: str = "OpenWorld Agent", default: str = "") -> Dict[str, Any]:
-    """KullanÄ±cÄ±dan giriÅŸ iste."""
+    """Kullanicidan giris iste."""
     try:
         result = pyautogui.prompt(text=message, title=title, default=default)
         return {"success": True, "result": result}
@@ -665,11 +706,11 @@ def tool_prompt(message: str, title: str = "OpenWorld Agent", default: str = "")
 
 
 # =============================================================================
-# WINDOWS Ã–ZEL ARAÃ‡LAR
+# WINDOWS OZEL ARACLAR
 # =============================================================================
 
 def tool_get_window_list() -> Dict[str, Any]:
-    """AÃ§Ä±k penceleri listele."""
+    """Acik penceleri listele."""
     try:
         if platform.system() == "Windows":
             import win32gui
@@ -697,14 +738,14 @@ def tool_get_window_list() -> Dict[str, Any]:
             win32gui.EnumWindows(callback, None)
             return {"windows": windows, "count": len(windows)}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_activate_window(title_pattern: str) -> Dict[str, Any]:
-    """Belirli bir pencereyi Ã¶ne getir."""
+    """Belirli bir pencereyi one getir."""
     try:
         if platform.system() == "Windows":
             import win32gui
@@ -721,70 +762,70 @@ def tool_activate_window(title_pattern: str) -> Dict[str, Any]:
             found = win32gui.EnumWindows(callback, None)
             return {"success": found, "pattern": title_pattern}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_minimize_all_windows() -> Dict[str, Any]:
-    """TÃ¼m pencereleri simge durumuna kÃ¼Ã§Ã¼lt."""
+    """Tum pencereleri simge durumuna kucult."""
     try:
         if platform.system() == "Windows":
             import win32gui
             win32gui.EnumWindows(lambda hwnd, extra: win32gui.ShowWindow(hwnd, 6) if win32gui.IsWindowVisible(hwnd) else None, None)
-            return {"success": True, "message": "TÃ¼m pencereler simge durumuna kÃ¼Ã§Ã¼ltÃ¼ldÃ¼"}
+            return {"success": True, "message": "Tum pencereler simge durumuna kucultuldu"}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_lock_workstation() -> Dict[str, Any]:
-    """Ä°ÅŸ istasyonunu kilitle."""
+    """Is istasyonunu kilitle."""
     try:
         if platform.system() == "Windows":
             import ctypes
             ctypes.windll.user32.LockWorkStation()
-            return {"success": True, "message": "Ä°ÅŸ istasyonu kilitlendi"}
+            return {"success": True, "message": "Is istasyonu kilitlendi"}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
     except Exception as e:
         return {"error": str(e)}
 
 
 def tool_shutdown_system(action: str = "shutdown", timeout: int = 60) -> Dict[str, Any]:
-    """BilgisayarÄ± kapat/yeniden baÅŸlat."""
+    """Bilgisayari kapat/yeniden baslat."""
     try:
         if action not in ["shutdown", "restart", "logout"]:
-            return {"error": "GeÃ§ersiz action. shutdown/restart/logout kullanÄ±n"}
+            return {"error": "Gecersiz action. shutdown/restart/logout kullanin"}
         
         if platform.system() == "Windows":
             if action == "shutdown":
-                subprocess.run(["shutdown", "/s", "/t", str(timeout), "/c", "OpenWorld Agent tarafÄ±ndan kapatÄ±lÄ±yor"])
+                subprocess.run(["shutdown", "/s", "/t", str(timeout), "/c", "OpenWorld Agent tarafindan kapatiliyor"])
             elif action == "restart":
-                subprocess.run(["shutdown", "/r", "/t", str(timeout), "/c", "OpenWorld Agent tarafÄ±ndan yeniden baÅŸlatÄ±lÄ±yor"])
+                subprocess.run(["shutdown", "/r", "/t", str(timeout), "/c", "OpenWorld Agent tarafindan yeniden baslatiliyor"])
             elif action == "logout":
                 subprocess.run(["shutdown", "/l"])
             
             return {"success": True, "action": action, "timeout": timeout}
         else:
-            return {"error": "Bu Ã¶zellik ÅŸu anda sadece Windows'da destekleniyor"}
+            return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
             
     except Exception as e:
         return {"error": str(e)}
 
 
 # =============================================================================
-# OCR (OPTÄ°K KARAKTER TANIMA)
+# OCR (OPTIK KARAKTER TANIMA)
 # =============================================================================
 
 def tool_ocr_screenshot(region: List[int] = None, lang: str = "tur") -> Dict[str, Any]:
-    """Ekran gÃ¶rÃ¼ntÃ¼sÃ¼nden metin oku."""
+    """Ekran goruntusunden metin oku."""
     try:
         import pytesseract
         
-        # Ekran gÃ¶rÃ¼ntÃ¼sÃ¼ al
+        # Ekran goruntusu al
         if region and len(region) == 4:
             screenshot = pyautogui.screenshot(region=tuple(region))
         else:
@@ -800,11 +841,11 @@ def tool_ocr_screenshot(region: List[int] = None, lang: str = "tur") -> Dict[str
         }
         
     except Exception as e:
-        return {"error": str(e), "note": "Tesseract OCR kurulu olduÄŸundan emin olun"}
+        return {"error": str(e), "note": "Tesseract OCR kurulu oldugundan emin olun"}
 
 
 def tool_ocr_image(image_path: str, lang: str = "tur") -> Dict[str, Any]:
-    """GÃ¶rÃ¼ntÃ¼ dosyasÄ±ndan metin oku."""
+    """Goruntu dosyasindan metin oku."""
     try:
         import pytesseract
         from PIL import Image

@@ -122,11 +122,16 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
     
     # HIZLI ISLEMLER: Direkt calisir, kisa timeout yeterli
-    fast_patterns = ["ekran goruntusu", "screenshot", "webcam", "fotograf cek", 
-                     "masaustu", "desktop", "kamera", "anlik goruntu"]
+    fast_patterns = [
+        "ekran goruntusu", "screenshot", "desktop", "masaustu",
+        "webcam", "web cam", "kamera", "fotograf cek", "fotoğraf çek", 
+        "selfie", "anlik foto", "anılık foto", "camera",
+        "ses kaydet", "ses kaydı", "mikrofon", "audio record", "voice record",
+        "video kaydet", "video çek", "webcam video"
+    ]
     if any(p in text_lower for p in fast_patterns):
-        # Hizli islemler 10sn icinde biter
-        return httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
+        # Hizli islemler (screenshot, webcam, ses) 15sn icinde biter
+        return httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
     
     # NOTEBOOK DEVAM ETME: Cok uzun surebilir (5 dakika)
     if any(p in text_lower for p in ["devam", "not defter", "rapora devam"]):
@@ -412,18 +417,25 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         
         # Timeout hatasi - daha yapici mesaj
         if "timeout" in err_text.lower() or "Timeout" in exc_type or "zaman asimi" in err_text.lower():
-            timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
-            timeout_msg += "Bu tur kapsamli istekler icin:\n"
-            timeout_msg += "1️⃣ Otomatik olarak not defterine kaydedildi\n"
-            timeout_msg += "2️⃣ Bir sonraki mesajinizda kaldigim yerden devam edecegim\n"
-            timeout_msg += "3️⃣ Veya \"rapora devam et\" yazabilirsiniz\n\n"
-            
-            # Yarim kalan notebook kontrolu
+            # Gercekten notebook olusup olusmadigini kontrol et
             notebook_msg = await _check_incomplete_notebooks(session_id)
+            
             if notebook_msg:
+                # Notebook var - gercekten kaydedildi
+                timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
+                timeout_msg += "Bu tur kapsamli istekler icin:\n"
+                timeout_msg += "1️⃣ Not defterine kaydedildi ✅\n"
+                timeout_msg += "2️⃣ Bir sonraki mesajinizda kaldigim yerden devam edecegim\n"
+                timeout_msg += "3️⃣ Veya \"rapora devam et\" yazabilirsiniz\n\n"
                 timeout_msg += notebook_msg
             else:
-                timeout_msg += "\n💡 İpucu: Uzun islemleri parcalara bolerek daha verimli calisabiliriz."
+                # Notebook yok - kaydedilemedi
+                timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
+                timeout_msg += "Maalesef islem cok uzun surdu ve tamamlanamadi.\n"
+                timeout_msg += "Lutfen daha kucuk parcalar halinde istekte bulunun:\n"
+                timeout_msg += "- Once 'Irak-Iran petrolu hakkinda kisa bilgi ver'\n"
+                timeout_msg += "- Sonra 'Petrol fiyatlarina etkisini anlat'\n\n"
+                timeout_msg += "💡 Alternatif: Not defteri olusturup adim adim ilerleyebiliriz."
             
             reply = timeout_msg
         elif "ConnectError" in exc_type or "ConnectionRefused" in exc_type:
@@ -435,17 +447,26 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         media_list = []
 
     # Send media first.
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[TELEGRAM] Sending {len(media_list)} media files")
+    
     base_url = f"http://{settings.host}:{settings.port}"
     for m in media_list:
         media_url = m.get("url", "")
         media_type = m.get("type", "")
         caption = m.get("caption", m.get("filename", ""))
+        logger.info(f"[TELEGRAM] Sending media: type={media_type}, url={media_url}")
+        
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
                 file_resp = await client.get(f"{base_url}{media_url}")
+                logger.info(f"[TELEGRAM] Download response: {file_resp.status_code}")
                 if file_resp.status_code != 200:
+                    logger.error(f"[TELEGRAM] Failed to download media: {file_resp.status_code}")
                     continue
                 file_bytes = file_resp.content
+                logger.info(f"[TELEGRAM] Downloaded {len(file_bytes)} bytes")
 
             filename = m.get("filename", "file")
 

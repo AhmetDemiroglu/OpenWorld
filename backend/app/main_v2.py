@@ -35,6 +35,8 @@ from .core.metrics import (
     timer
 )
 from .core.exceptions import OpenWorldException, ToolExecutionError, LLMError
+from .services.email_monitor import EmailMonitor
+from .services.smart_assistant import SmartAssistant
 
 # Setup structured logging
 logger = setup_logging(
@@ -64,6 +66,11 @@ _MEDIA_TYPE_MAP = {
 }
 
 
+# Background service instances (module-level for status endpoint access)
+_email_monitor = EmailMonitor()
+_smart_assistant = SmartAssistant()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -77,9 +84,17 @@ async def lifespan(app: FastAPI):
     sessions = store.list_sessions()
     chat_sessions_active.set(len(sessions))
     
+    # Start background services
+    if settings.bg_email_monitor:
+        await _email_monitor.start()
+    if settings.bg_smart_assistant:
+        await _smart_assistant.start()
+    
     logger.info(f"OpenWorld started. Sessions: {len(sessions)}")
     yield
     # Shutdown
+    _email_monitor.stop()
+    _smart_assistant.stop()
     logger.info("OpenWorld shutting down...")
 
 
@@ -158,6 +173,15 @@ async def sessions() -> dict:
     sessions_list = store.list_sessions()
     chat_sessions_active.set(len(sessions_list))
     return {"sessions": sessions_list}
+
+
+@app.get("/services/status")
+async def services_status() -> dict:
+    """Background services status."""
+    return {
+        "email_monitor": _email_monitor.status,
+        "smart_assistant": _smart_assistant.status,
+    }
 
 
 @app.get("/tools/audit")

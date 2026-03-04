@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -9,6 +10,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import settings
+
+# Setup logging
+LOGS_DIR = Path(__file__).resolve().parents[2] / "data" / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOGS_DIR / "openworld.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 from .llm import LLMClient, parse_tool_calls
 from .memory import SessionStore
 from .models import ChatMessage
@@ -89,6 +103,10 @@ class AgentService:
                 if nb_name_norm in normalized or nb["name"].lower() in user_message.lower():
                     specific_notebook = nb
                     break
+
+            # Resume niyeti veya belirli notebook adi yoksa mevcut notebook akisini zorla dayatma.
+            if not specific_notebook and not is_resume_request:
+                return None
             
             # 2. Yoksa son aktif (Devam Ediyor) notebook'u bul
             if not specific_notebook:
@@ -125,31 +143,57 @@ class AgentService:
 
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
+        notebook_goal_for_research = ""  # research_and_report icin topic sakla
+        
         if notebook_resume:
             nb_name, nb_status = notebook_resume
             pending = nb_status.get("pending_steps", [])
             completed = nb_status.get("completed_steps", 0)
             total = nb_status.get("total_steps", 0)
             goal = nb_status.get("goal", "")
+            notebook_goal_for_research = goal  # Sonradan kullanmak icin sakla
+
+            fast_resume_reply, fast_resume_tools = self._try_fast_notebook_resume(
+                user_message=user_message,
+                notebook_name=nb_name,
+                notebook_status=nb_status,
+            )
+            if fast_resume_reply:
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=fast_resume_reply))
+                self.store.save(session_id, messages)
+                return fast_resume_reply, 1, fast_resume_tools, []
             
             if pending:
                 next_step = pending[0]
-                # Sistem mesaji olarak baglam ekle
+                # Sistem mesaji olarak baglam ekle - COK AYRINTILI
                 context_msg = (
-                    f"[SISTEM NOTU] '{nb_name}' not defterine devam ediliyor. "
+                    f"[SISTEM NOTU] '{nb_name}' not defterine devam ediliyor.\n"
                     f"Hedef: {goal}\n"
-                    f"İlerleme: {completed}/{total} adim tamamlandi. "
+                    f"İlerleme: {completed}/{total} adim tamamlandi.\n"
                     f"Siradaki adim: {next_step}\n\n"
-                    f"ONEMLI: Arastirma yapacaksan research_and_report kullan ve topic='{goal}' olarak belirt."
+                    f"KURALLAR:\n"
+                    f"1. Kucuk adimlarla ilerle; tek turda tum raporu cikarmaya calisma.\n"
+                    f"2. Her adim sonucunu notebook_add_note ile kaydet.\n"
+                    f"3. Adim bitince notebook_complete_step ile isaretle.\n"
+                    f"4. Bu not defteri hedefi ile tutarli kal."
                 )
                 messages.append(ChatMessage(role="system", content=context_msg))
                 
-                # Kullanici mesajini guncelle
+                # Kullanici mesajini guncelle - hedefi vurgula
                 if "devam" in user_message.lower() or len(user_message) < 30:
                     if goal:
-                        user_message = f"{nb_name} not defterindeki siradaki adimi yap. Hedef: {goal}. Adim: {next_step}"
+                        user_message = f"{nb_name} not defteri icin devam et. Siradaki adim: {next_step}. Sadece bu adimi tamamla, not al ve adimi kapat."
                     else:
                         user_message = f"{nb_name} not defterindeki siradaki adimi yap: {next_step}"
+
+        # Kompleks arastirma isteklerinde ilk adimi deterministic olarak baslat.
+        kickoff_reply, kickoff_tools = self._try_auto_notebook_kickoff(user_message, notebook_resume)
+        if kickoff_reply:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=kickoff_reply))
+            self.store.save(session_id, messages)
+            return kickoff_reply, 1, kickoff_tools, []
 
         messages.append(ChatMessage(role="user", content=user_message))
 
@@ -167,32 +211,62 @@ class AgentService:
         cached_results: Dict[str, Dict[str, Any]] = {}
 
         # === HIZLI MOD: Dusunme gerektirmeyen basit araclar ===
-        # Screenshot, webcam vb. icin direkt calistir, LLM'e sorma
+        # Screenshot, webcam, ses kaydi vb. icin direkt calistir, LLM'e sorma
         fast_fallback = self._fallback_tool_call_from_user_message(user_message)
         if fast_fallback and self._is_fast_tool(fast_fallback.name):
             if fast_fallback.name in allowed_tool_names:
+                import logging
+                logger = logging.getLogger(__name__)
+                
                 try:
+                    logger.info(f"[FAST MODE] Executing: {fast_fallback.name} with args: {fast_fallback.arguments}")
+                    
+                    # SES KAYDI - Ozel mantik: start -> bekle -> stop
+                    if fast_fallback.name == "start_audio_recording":
+                        return await self._handle_audio_recording_fast(session_id, messages, user_message)
+                    
+                    # NORMAL FAST TOOL
                     result = execute_tool(fast_fallback.name, fast_fallback.arguments)
+                    logger.info(f"[FAST MODE] Result: {result}")
+                    
+                    # Hata kontrolü
+                    if isinstance(result, dict) and result.get("error"):
+                        error_msg = f"❌ Hata: {result['error']}"
+                        messages.append(ChatMessage(role="assistant", content=error_msg))
+                        self.store.save(session_id, messages)
+                        return error_msg, 1, [fast_fallback.name], []
+                    
+                    # Medya dosyalarini topla - result'taki path'i kontrol et
+                    if isinstance(result, dict) and result.get("path"):
+                        from pathlib import Path
+                        result_path = Path(result["path"])
+                        logger.info(f"[FAST MODE] Result path: {result_path}, exists: {result_path.exists()}")
+                        
+                        # Dosya gercekten varsa media listesine ekle
+                        if result_path.exists() and result_path.is_file():
+                            abs_path = str(result_path.resolve())
+                            if abs_path not in media_files:
+                                media_files.append(abs_path)
+                                logger.info(f"[FAST MODE] Added to media: {abs_path}")
+                        else:
+                            logger.warning(f"[FAST MODE] File not found: {result_path}")
+                    
                     self._collect_media(result, media_files)
                     
                     # Basari mesaji olustur
-                    success_msg = f"Islem tamamlandi: `{fast_fallback.name}`"
-                    if isinstance(result, dict):
-                        if "path" in result:
-                            success_msg += f"\n📁 Dosya: {result['path']}"
-                        if "resolution" in result:
-                            success_msg += f"\n📐 Cozunurluk: {result['resolution']}"
-                        if "size" in result:
-                            success_msg += f"\n📊 Boyut: {result['size']}"
-                    
+                    success_msg = self._build_success_message(fast_fallback.name, result)
                     messages.append(ChatMessage(role="assistant", content=success_msg))
                     self.store.save(session_id, messages)
+                    
+                    logger.info(f"[FAST MODE] Success! Media files: {media_files}")
                     return success_msg, 1, [fast_fallback.name], media_files
+                    
                 except Exception as exc:
-                    error_msg = f"Hata: {fast_fallback.name} calistirilamadi: {exc}"
+                    logger.error(f"[FAST MODE] Exception: {exc}")
+                    error_msg = f"❌ Hata: {fast_fallback.name} calistirilamadi: {exc}"
                     messages.append(ChatMessage(role="assistant", content=error_msg))
                     self.store.save(session_id, messages)
-                    return error_msg, 1, [fast_fallback.name], media_files
+                    return error_msg, 1, [fast_fallback.name], []
 
         while steps < settings.ollama_max_steps:
             steps += 1
@@ -294,30 +368,68 @@ class AgentService:
 
                 args = self._normalize_tool_call_arguments(raw_arguments)
                 
-                # research_and_report icin topic kontrolu
+                # research_and_report icin topic kontrolu - COK KATIL
                 if call_name == "research_and_report" and not args.get("topic"):
-                    # Notebook'tan goal bilgisini almaya calis
-                    try:
-                        from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
-                        list_result = tool_notebook_list()
-                        notebooks = list_result.get("notebooks", [])
-                        if notebooks:
-                            # Son aktif notebook'u bul
-                            incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
-                            if incomplete:
-                                nb_name = incomplete[0]["name"]
-                                status = tool_notebook_status(nb_name)
-                                goal = status.get("goal", "")
-                                if goal:
-                                    args["topic"] = goal
+                    # 1. Once notebook resume'tan gelen goal'i kullan
+                    topic_set = False
+                    
+                    # Notebook resume context'inden al
+                    for msg in reversed(messages):
+                        if msg.role == "system" and "[SISTEM NOTU]" in msg.content:
+                            if "Hedef:" in msg.content:
+                                lines = msg.content.split("\n")
+                                for line in lines:
+                                    if line.strip().startswith("Hedef:"):
+                                        goal = line.replace("Hedef:", "").strip()
+                                        if goal and goal != "":
+                                            args["topic"] = goal
+                                            topic_set = True
+                                            import logging
+                                            logging.getLogger(__name__).info(f"[TOPIC FIXED] From notebook context: {goal}")
+                                            break
+                            break
+                    
+                    # 2. Hala yoksa aktif notebook'lara bak
+                    if not topic_set:
+                        try:
+                            from .tools.notebook_tools import tool_notebook_list, tool_notebook_status
+                            list_result = tool_notebook_list()
+                            notebooks = list_result.get("notebooks", [])
+                            if notebooks:
+                                incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
+                                if incomplete:
+                                    nb_name = incomplete[0]["name"]
+                                    status = tool_notebook_status(nb_name)
+                                    goal = status.get("goal", "")
+                                    if goal:
+                                        args["topic"] = goal
+                                        topic_set = True
+                                    else:
+                                        args["topic"] = nb_name.replace("_", " ")
+                                        topic_set = True
                                 else:
-                                    args["topic"] = nb_name.replace("_", " ")
+                                    args["topic"] = notebooks[0]["name"].replace("_", " ")
+                                    topic_set = True
+                        except Exception:
+                            pass
+                    
+                    # 3. Hala yoksa kullanici mesajindan cikarsamaya calis
+                    if not topic_set and not args.get("topic"):
+                        user_msg = ""
+                        for msg in reversed(messages):
+                            if msg.role == "user":
+                                user_msg = msg.content
+                                break
+                        # Mesajdan konu cikar
+                        if user_msg:
+                            if "hakkinda" in user_msg.lower():
+                                args["topic"] = user_msg.lower().split("hakkinda")[0].strip()
+                            elif "icin" in user_msg.lower():
+                                args["topic"] = user_msg.lower().split("icin")[0].strip()
                             else:
-                                args["topic"] = notebooks[0]["name"].replace("_", " ")
+                                args["topic"] = user_msg[:100]
                         else:
                             args["topic"] = "Genel arastirma"
-                    except Exception:
-                        args["topic"] = "Genel arastirma"
                 signature = self._call_signature(call_name, args)
                 call_counts[signature] = call_counts.get(signature, 0) + 1
                 used_tools.append(call_name)
@@ -631,12 +743,40 @@ class AgentService:
         return clean.strip()
 
     def _is_fast_tool(self, tool_name: str) -> bool:
-        """Hizli calisacak, dusunme gerektirmeyen araclar."""
+        """Hizli calisacak, dusunme gerektirmeyen araclar.
+        
+        Bu araçlar LLM'in 'dusunme' asamasini atlayarak dogrudan calistirilir.
+        Sonuc aninda dondurulur (~1-2 saniye).
+        """
         # NOT: Notebook araçları HIZLI MODDA YOK çünkü devam eden iş akışı gerektirir
         fast_tools = {
-            "screenshot_desktop", "screenshot_webpage", "webcam_capture",
-            "webcam_record_video", "mouse_position", "get_system_info",
-            "list_directory", "read_file", "list_processes"
+            # Ekran - Anlık görüntü
+            "screenshot_desktop", "screenshot_webpage",
+            
+            # Webcam - Anlık fotoğraf/video
+            "webcam_capture", "webcam_record_video", "list_cameras",
+            
+            # Ses - Kayıt ve çalma
+            "start_audio_recording", "stop_audio_recording", 
+            "play_audio", "text_to_speech",
+            
+            # OCR - Anlık metin okuma
+            "ocr_screenshot", "ocr_image",
+            
+            # Sistem - Bilgi sorgulama
+            "get_system_info", "list_processes", "network_info", "ping_host",
+            
+            # Dosya - Okuma ve listeleme (yazma/silme hariç)
+            "list_directory", "read_file", "search_files",
+            
+            # USB - Liste görüntüleme
+            "list_usb_devices",
+            
+            # Fare - Pozisyon sorgulama (hareket hariç)
+            "mouse_position",
+            
+            # Pencere - Liste görüntüleme
+            "get_window_list",
         }
         return tool_name in fast_tools
 
@@ -645,7 +785,6 @@ class AgentService:
         if not text:
             return None
 
-        lower = text.lower()
         normalized = self._normalize_text_for_match(text)
 
         for tool_name in sorted(self._known_tool_names, key=len, reverse=True):
@@ -784,13 +923,35 @@ class AgentService:
                 arguments={"query": text},
             )
         
-        # WEBCAM FOTOĞRAF ÇEKME
+        # WEBCAM FOTOĞRAF ÇEKME - Geliştirilmiş pattern matching
         if "webcam_capture" in self._known_tool_names and any(
-            k in normalized for k in ("webcam", "kamera", "fotograf cek", "selfie", "anlik foto")
-        ) and any(k in normalized for k in ("cek", "al", "gonder", "fotograf")):
+            k in normalized for k in ("webcam", "kamera", "fotograf cek", "fotograf cek", "selfie", 
+                                      "anlik foto", "kamerani ac", "cam ac", "beni goster")
+        ) and any(k in normalized for k in ("cek", "al", "gonder", "fotograf", "ac", "goster")):
             return ParsedTextToolCall(
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
                 name="webcam_capture",
+                arguments={},
+            )
+        
+        # WEBCAM VIDEO KAYDETME
+        if "webcam_record_video" in self._known_tool_names and any(
+            k in normalized for k in ("webcam video", "kamera video", "video kaydet", "video cek")
+        ):
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="webcam_record_video",
+                arguments={"duration": 5},
+            )
+        
+        # SES KAYDI - Yeni eklendi
+        if "start_audio_recording" in self._known_tool_names and any(
+            k in normalized for k in ("ses kaydet", "ses kaydi", "mikrofon", "audio record", 
+                                      "voice record", "sesini kaydet", "konus")
+        ) and any(k in normalized for k in ("kaydet", "kaydi", "ac", "baslat", "konus")):
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="start_audio_recording",
                 arguments={},
             )
 
@@ -845,6 +1006,237 @@ class AgentService:
             "kullanilabilir arac",
         )
         return any(marker in lower for marker in blocked_markers)
+
+    def _try_fast_notebook_resume(
+        self,
+        user_message: str,
+        notebook_name: str,
+        notebook_status: Dict[str, Any],
+    ) -> Tuple[str, List[str]]:
+        normalized = self._normalize_text_for_match(user_message)
+        status_only_markers = ("durum", "status", "ilerleme", "kac adim")
+        if any(marker in normalized for marker in status_only_markers):
+            return "", []
+
+        pending = notebook_status.get("pending_steps", []) or []
+        if not pending:
+            return "", []
+
+        next_step = str(pending[0]).strip()
+        if not next_step:
+            return "", []
+
+        tools_used: List[str] = []
+        goal = str(notebook_status.get("goal", "")).strip()
+        step_norm = self._normalize_text_for_match(next_step)
+
+        try:
+            note_parts: List[str] = [f"Otomatik devam: {next_step}"]
+            finding = "Adim tamamlandi."
+
+            if any(k in step_norm for k in ("haber", "kaynak", "gelisme", "topla", "tara")):
+                query = self._derive_news_query(goal or next_step)
+                news_result = execute_tool("search_news", {"query": query, "limit": 6})
+                tools_used.append("search_news")
+                count = int(news_result.get("count", 0) or 0)
+                finding = f"{count} kaynak listelendi."
+                if count > 0:
+                    titles: List[str] = []
+                    for item in (news_result.get("results") or [])[:3]:
+                        title = str((item or {}).get("title", "")).strip()
+                        if title:
+                            titles.append(title)
+                    if titles:
+                        note_parts.append("Ilk basliklar: " + " | ".join(titles))
+                else:
+                    warn = str(news_result.get("error", "")).strip()
+                    if warn:
+                        note_parts.append(f"Kaynak toplama uyari: {warn}")
+
+            note_text = " ".join(part for part in note_parts if part).strip()
+            execute_tool("notebook_add_note", {"name": notebook_name, "note": note_text})
+            tools_used.append("notebook_add_note")
+
+            step_keyword = self._step_keyword(next_step)
+            complete_result = execute_tool(
+                "notebook_complete_step",
+                {"name": notebook_name, "step_keyword": step_keyword, "finding": finding},
+            )
+            tools_used.append("notebook_complete_step")
+
+            if isinstance(complete_result, dict) and complete_result.get("error"):
+                return "", []
+
+            status_after = execute_tool("notebook_status", {"name": notebook_name})
+            tools_used.append("notebook_status")
+            done = int(status_after.get("completed_steps", 0) or 0)
+            total = int(status_after.get("total_steps", 0) or 0)
+            upcoming = status_after.get("next_step", "")
+
+            if upcoming:
+                reply = (
+                    f"Not defteri guncellendi: `{notebook_name}`\n"
+                    f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
+                    f"Tamamlanan adim: {next_step}\n"
+                    f"Siradaki adim: {upcoming}\n\n"
+                    f"Devam etmek icin \"devam et\" yazabilirsiniz."
+                )
+            else:
+                reply = (
+                    f"Not defteri tamamlandi: `{notebook_name}`\n"
+                    f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi."
+                )
+            return reply, tools_used
+        except Exception:
+            return "", []
+
+    @staticmethod
+    def _derive_news_query(goal: str) -> str:
+        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", goal)
+        filtered = [w for w in words if len(w) > 2][:8]
+        if not filtered:
+            return "dunya gundem"
+        return " ".join(filtered)
+
+    def _try_auto_notebook_kickoff(
+        self,
+        user_message: str,
+        notebook_resume: Optional[Tuple[str, Dict[str, Any]]],
+    ) -> Tuple[str, List[str]]:
+        if not self._should_auto_kickoff_notebook(user_message, notebook_resume):
+            return "", []
+
+        tools_used: List[str] = []
+        goal = (user_message or "").strip()
+        if not goal:
+            return "", []
+
+        try:
+            notebook_name = self._suggest_notebook_name(goal)
+            steps = self._default_notebook_steps(goal)
+            first_step = steps[0] if steps else "Kapsam ve metodoloji planini olustur"
+
+            create_result = execute_tool(
+                "notebook_create",
+                {
+                    "name": notebook_name,
+                    "goal": goal,
+                    "steps": "\n".join(steps),
+                },
+            )
+            tools_used.append("notebook_create")
+            if isinstance(create_result, dict) and create_result.get("error"):
+                return "", []
+
+            kickoff_note = (
+                "Kickoff tamamlandi: gorev kapsami alindi, adimlar olusturuldu ve "
+                "ilk adim (planlama) otomatik tamamlandi."
+            )
+            execute_tool("notebook_add_note", {"name": notebook_name, "note": kickoff_note})
+            tools_used.append("notebook_add_note")
+
+            step_keyword = self._step_keyword(first_step)
+            complete_result = execute_tool(
+                "notebook_complete_step",
+                {
+                    "name": notebook_name,
+                    "step_keyword": step_keyword,
+                    "finding": "Plan ve is akisi hazirlandi.",
+                },
+            )
+            tools_used.append("notebook_complete_step")
+
+            status_result = execute_tool("notebook_status", {"name": notebook_name})
+            tools_used.append("notebook_status")
+        except Exception:
+            return "", []
+
+        total = int(status_result.get("total_steps", len(steps)) or len(steps))
+        done = int(status_result.get("completed_steps", 1) or 1)
+        next_step = status_result.get("next_step", "Kaynak toplama")
+
+        if isinstance(complete_result, dict) and complete_result.get("error"):
+            # Adim anahtar kelimesi eslesmediyse fallback: ilerlemeyi yansitmadan devam mesaji ver.
+            done = max(done, 0)
+
+        reply = (
+            f"Not defteri olusturuldu: `{notebook_name}`\n"
+            f"Ilerleme: {done}/{max(total, 1)} adim tamamlandi.\n"
+            f"Siradaki adim: {next_step}\n\n"
+            f"Devam etmek icin: \"{notebook_name} raporuna devam et\" yazabilirsiniz."
+        )
+        return reply, tools_used
+
+    def _should_auto_kickoff_notebook(
+        self,
+        user_message: str,
+        notebook_resume: Optional[Tuple[str, Dict[str, Any]]],
+    ) -> bool:
+        if notebook_resume:
+            return False
+        text = (user_message or "").strip()
+        if len(text) < 80:
+            return False
+
+        normalized = self._normalize_text_for_match(text)
+
+        skip_markers = (
+            "devam et",
+            "rapora devam",
+            "not defter",
+            "siradaki adim",
+            "webcam",
+            "ekran goruntusu",
+            "screenshot",
+        )
+        if any(marker in normalized for marker in skip_markers):
+            return False
+
+        complex_markers = (
+            "arastir",
+            "detayli",
+            "analiz",
+            "rapor",
+            "tum gelisme",
+            "karsilastir",
+            "etkisi",
+        )
+        domain_markers = (
+            "iran",
+            "abd",
+            "amerika",
+            "savas",
+            "piyasa",
+            "ekonomi",
+            "haber",
+            "dunya",
+            "world",
+        )
+        return any(k in normalized for k in complex_markers) and any(k in normalized for k in domain_markers)
+
+    @staticmethod
+    def _default_notebook_steps(goal: str) -> List[str]:
+        return [
+            "Kapsam ve metodoloji planini olustur",
+            "Son 48 saatin kritik haber kaynaklarini topla",
+            "Kaynaklari tarih ve guvenilirlik bazinda dogrula",
+            "Finansal ve kuresel etkileri siniflandir",
+            "Rapor taslagini olustur",
+            "Nihai dosyalari (txt/docx/pdf) hazirla",
+        ]
+
+    @staticmethod
+    def _suggest_notebook_name(goal: str) -> str:
+        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", goal)
+        keep = [w for w in words if len(w) > 2][:4]
+        name = "_".join(keep) if keep else "Arastirma_Notu"
+        return name[:60]
+
+    @staticmethod
+    def _step_keyword(step_text: str) -> str:
+        words = re.findall(r"[A-Za-z0-9ÇĞİÖŞÜçğıöşü]+", step_text)
+        key = " ".join(words[:4]).strip()
+        return key or step_text[:24]
 
     @staticmethod
     def _build_tool_summary(step_results: List[Tuple[str, Dict[str, Any]]]) -> str:
@@ -969,3 +1361,98 @@ class AgentService:
             rf"\b(?:kullanma|kullanmadan|olmadan|haric|disinda|except|without)\s+\b{re.escape(tool_norm)}\b",
         )
         return any(re.search(pattern, normalized) for pattern in negative_patterns)
+
+    async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:
+        """Ses kaydı için fast mode handler - start, bekle, stop yapar."""
+        import logging
+        import asyncio
+        import re
+        logger = logging.getLogger(__name__)
+        
+        # Kullanıcıdan süre al (varsayılan 5 saniye)
+        duration = 5
+        duration_match = re.search(r'(\d+)\s*(?:sn|saniye|sec|dk|dakika|min)', user_message.lower())
+        if duration_match:
+            duration = int(duration_match.group(1))
+            if 'dk' in user_message.lower() or 'dakika' in user_message.lower() or 'min' in user_message.lower():
+                duration *= 60
+            # Max 60 saniye
+            duration = min(duration, 60)
+        
+        logger.info(f"[AUDIO FAST] Starting recording for {duration} seconds")
+        
+        try:
+            # 1. Kaydı başlat
+            from .tools.registry import execute_tool
+            start_result = execute_tool("start_audio_recording", {})
+            logger.info(f"[AUDIO FAST] Start result: {start_result}")
+            
+            if isinstance(start_result, dict) and start_result.get("error"):
+                error_msg = f"❌ Ses kaydı başlatılamadı: {start_result['error']}"
+                messages.append(ChatMessage(role="assistant", content=error_msg))
+                self.store.save(session_id, messages)
+                return error_msg, 1, ["start_audio_recording"], []
+            
+            # 2. Kullanıcıya bilgi ver
+            info_msg = f"🎙️ Ses kaydı başladı ({duration} saniye)..."
+            messages.append(ChatMessage(role="assistant", content=info_msg))
+            self.store.save(session_id, messages)
+            
+            # 3. Bekle
+            await asyncio.sleep(duration)
+            
+            # 4. Kaydı durdur
+            stop_result = execute_tool("stop_audio_recording", {})
+            logger.info(f"[AUDIO FAST] Stop result: {stop_result}")
+            
+            # 5. Hata kontrolü
+            if isinstance(stop_result, dict) and stop_result.get("error"):
+                error_msg = f"❌ Ses kaydı kaydedilemedi: {stop_result['error']}"
+                messages.append(ChatMessage(role="assistant", content=error_msg))
+                self.store.save(session_id, messages)
+                return error_msg, 1, ["start_audio_recording", "stop_audio_recording"], []
+            
+            # 6. Medya dosyasını topla
+            media_files: List[str] = []
+            self._collect_media(stop_result, media_files)
+            
+            # 7. Başarı mesajı
+            success_msg = self._build_success_message("stop_audio_recording", stop_result)
+            messages.append(ChatMessage(role="assistant", content=success_msg))
+            self.store.save(session_id, messages)
+            
+            logger.info(f"[AUDIO FAST] Success! Media: {media_files}")
+            return success_msg, 2, ["start_audio_recording", "stop_audio_recording"], media_files
+            
+        except Exception as exc:
+            logger.error(f"[AUDIO FAST] Exception: {exc}")
+            error_msg = f"❌ Ses kaydı hatası: {exc}"
+            messages.append(ChatMessage(role="assistant", content=error_msg))
+            self.store.save(session_id, messages)
+            return error_msg, 1, ["start_audio_recording"], []
+
+    @staticmethod
+    def _build_success_message(tool_name: str, result: Dict[str, Any]) -> str:
+        """Başarı mesajı oluştur."""
+        success_msg = f"✅ Islem tamamlandi: `{tool_name}`"
+        
+        if isinstance(result, dict):
+            if "path" in result:
+                success_msg += f"\n📁 Dosya: {result['path']}"
+            if "resolution" in result:
+                success_msg += f"\n📐 Cozunurluk: {result['resolution']}"
+            if "size" in result:
+                size = result['size']
+                if isinstance(size, int):
+                    if size > 1024 * 1024:
+                        success_msg += f"\n📊 Boyut: {size / (1024 * 1024):.2f} MB"
+                    elif size > 1024:
+                        success_msg += f"\n📊 Boyut: {size / 1024:.2f} KB"
+                    else:
+                        success_msg += f"\n📊 Boyut: {size} bytes"
+            if "duration" in result:
+                success_msg += f"\n⏱️ Sure: {result['duration']} sn"
+            if "text" in result and len(result['text']) < 100:
+                success_msg += f"\n📝 Metin: {result['text']}"
+        
+        return success_msg

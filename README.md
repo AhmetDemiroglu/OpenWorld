@@ -53,8 +53,9 @@ OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajandır**. 4 katm
 | **Web & Araştırma** | 5 | Haber arama, web sayfası çekme, detaylı araştırma raporu |
 | **Not Defteri** | 6 | Karmaşık görevleri adımlara bölme, checkpoint'lerle devam etme |
 | **Hafıza** | 3 | Uzun süreli hafıza, kullanıcı tercihleri hatırlama |
+| **Arka Plan Servisleri** | 5 | Email monitör, hava durumu, GitHub trending, teknoloji haberleri, özel uyarılar |
 
-**Toplam: 95+ Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
+**Toplam: 100+ Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
 
 ### 📸 Medya Otomatik Teslimi
 
@@ -698,6 +699,55 @@ Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüle
 ```
 
 **Kurulum:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_ALLOWED_USER_ID` ayarlanmalı
+
+---
+
+### 🤖 20. ARKA PLAN SERVİSLERİ (Smart Life Assistant)
+
+Uygulama çalıştığı sürece arka planda aktif olan akıllı asistan servisleri. Hiçbir mesaj göndermenize gerek yok — otomatik çalışır ve önemli durumları Telegram'dan bildirir.
+
+#### 📧 E-posta Monitör
+
+Her 15 dakikada bir Gmail'deki **okunmamış** mailleri tarar, Ollama LLM ile önem derecesi belirler:
+
+| Derece | Açıklama | Bildirim |
+|--------|----------|----------|
+| 🔴 **KRİTİK** | İş ilanı (Frontend/İzmir/remote), AI model deprecation, güvenlik | ✅ Telegram |
+| 🟡 **ÖNEMLİ** | Kişisel yazışmalar, proje güncellemeleri | ✅ Telegram |
+| ⚪ **NORMAL** | Bültenler, düzenli güncellemeler | Sessiz |
+| 🔇 **SPAM** | Reklam, pazarlama, tekrar eden ilanlar | Sessiz |
+
+**Duplicate Filtreleme:** Aynı mail ID + %85+ konu benzerliği olan mailler otomatik elenir. 7 gün boyunca hatırlar.
+
+#### 🌤 Hava Durumu
+
+Her sabah (07:00-09:00) şehrinizin hava durumunu ve giyim önerisini Telegram'dan gönderir.
+
+#### 🔥 GitHub Trending
+
+6 saatte bir JavaScript, TypeScript ve Python'daki trending repoları izler, yenilerini bildirir.
+
+#### 📰 Teknoloji Haberleri
+
+4 saatte bir AI model değişiklikleri, framework güncellemeleri, breaking change'leri takip eder.
+
+#### 🔔 Özel Uyarılar
+
+30 dakikada bir `.env`'deki `BG_CUSTOM_ALERTS` terimleriyle haber arar (ör: `izmir frontend,gemini api`).
+
+**Konfigürasyon (`.env`):**
+```
+BG_EMAIL_MONITOR=true          # Email monitör aktif/pasif
+BG_EMAIL_INTERVAL_MIN=15       # Tarama aralığı (dakika)
+BG_SMART_ASSISTANT=true        # Hava durumu, GitHub, teknoloji haberleri
+BG_WEATHER_CITY=Izmir          # Hava durumu şehri
+BG_CUSTOM_ALERTS=              # Özel aramalar (virgülle ayrılmış)
+```
+
+**Durum Kontrolü:**
+```
+GET http://127.0.0.1:8000/services/status
+```
 
 ---
 

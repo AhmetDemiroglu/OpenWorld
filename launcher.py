@@ -927,7 +927,27 @@ print("ok")
                                 if line.strip():
                                     self._append_status("  > " + line.strip()[:100])
                         else:
-                            self._append_status("Log dosyas\u0131 bo\u015f. Python hatas\u0131 olabilir.")
+                            out_log = LOG_DIR / "backend.out.log"
+                            out_content = ""
+                            if out_log.exists():
+                                out_content = out_log.read_text(encoding="utf-8", errors="ignore").strip()
+
+                            rc = self.backend_proc.poll() if self.backend_proc else None
+                            if out_content:
+                                self._append_status("backend.err.log bos. backend.out.log son satirlari:")
+                                for line in out_content[-500:].split("\n"):
+                                    if line.strip():
+                                        self._append_status("  > " + line.strip()[:100])
+                            elif rc is None:
+                                self._append_status(
+                                    "Loglar henuz olusmamis olabilir. Backend gec aciliyor olabilir, "
+                                    "biraz bekleyip tekrar deneyin."
+                                )
+                            else:
+                                self._append_status(
+                                    f"Backend erken sonlandi (cikis kodu: {rc}). "
+                                    "Loglar bos; Python/venv yolunu kontrol edin."
+                                )
                     else:
                         self._append_status("Log dosyas\u0131 bulunamad\u0131.")
                 except Exception as e:
