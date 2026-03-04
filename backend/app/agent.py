@@ -569,6 +569,28 @@ class AgentService:
                 arguments=args,
             )
 
+        # EKRAN GÖRÜNTÜSÜ ALMA - Fallback kuralları
+        if "screenshot_desktop" in self._known_tool_names and any(
+            k in normalized for k in ("ekran goruntusu", "screenshot", "desktop", "masaustu", "anlik goruntu", "fotograf cek")
+        ) and any(k in normalized for k in ("al", "cek", "gonder", "kaydet", "goster")):
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="screenshot_desktop",
+                arguments={},
+            )
+        
+        if "screenshot_webpage" in self._known_tool_names and any(
+            k in normalized for k in ("web sayfa", "website", "site", "url", "http")
+        ) and any(k in normalized for k in ("ekran goruntusu", "screenshot", "goruntu", "al", "cek")):
+            # URL'yi bul
+            url_match = re.search(r"https?://\S+", text)
+            if url_match:
+                return ParsedTextToolCall(
+                    id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                    name="screenshot_webpage",
+                    arguments={"url": url_match.group(0).rstrip(".,)")},
+                )
+
         # Kapsamlı görev algılama -> notebook_create öner
         if "notebook_create" in self._known_tool_names and any(
             k in normalized for k in ("kapsamli", "detayli", "adim adim", "parcala", "tum", "karsilastir")
@@ -593,6 +615,16 @@ class AgentService:
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
                 name="search_news",
                 arguments={"query": text},
+            )
+        
+        # WEBCAM FOTOĞRAF ÇEKME
+        if "webcam_capture" in self._known_tool_names and any(
+            k in normalized for k in ("webcam", "kamera", "fotograf cek", "selfie", "anlik foto")
+        ) and any(k in normalized for k in ("cek", "al", "gonder", "fotograf")):
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="webcam_capture",
+                arguments={},
             )
 
         if "create_markdown_report" in self._known_tool_names and any(

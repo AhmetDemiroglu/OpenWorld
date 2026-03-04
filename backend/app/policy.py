@@ -4,44 +4,53 @@ from typing import Any, Dict, Iterable, Set
 
 
 FINANCIAL_BLOCK_TERMS = [
-    "kredi kart",
-    "kart numara",
-    "cvv",
-    "son kullanma",
-    "iban",
-    "havale",
-    "eft",
-    "odeme yap",
-    "odeme al",
-    "para gonder",
-    "para transfer",
-    "banka transfer",
-    "wire transfer tl",
-    "swift",
-    "bitcoin gonder",
-    "crypto gonder",
-    "kripto gonder",
-    "wallet transfer",
-    "cuzdan gonder",
-    "credit card",
-    "card number",
-    "cvv code",
-    "expiry date",
-    "make payment",
-    "send payment",
-    "wire transfer",
-    "bank transfer",
-    "send money",
-    "transfer money",
-    "payment processing",
-    "purchase order",
-    "buy now pay",
-    "crypto transfer",
-    "bitcoin transfer",
-    "ethereum send",
-    "wallet send",
-    "paypal send",
-    "venmo pay",
+    # Kesinlikle engellenecek - finansal işlem fiilleri
+    ("odeme yap", True),
+    ("odeme al", True),
+    ("para gonder", True),
+    ("para transfer", True),
+    ("havale", True),
+    ("eft", True),
+    ("banka transfer", True),
+    ("wire transfer tl", True),
+    ("bitcoin gonder", True),
+    ("crypto gonder", True),
+    ("kripto gonder", True),
+    ("wallet transfer", True),
+    ("cuzdan gonder", True),
+    ("make payment", True),
+    ("send payment", True),
+    ("send money", True),
+    ("transfer money", True),
+    ("payment processing", True),
+    ("purchase order", True),
+    ("buy now pay", True),
+    ("crypto transfer", True),
+    ("bitcoin transfer", True),
+    ("ethereum send", True),
+    ("wallet send", True),
+    ("paypal send", True),
+    ("venmo pay", True),
+    # Hassas finansal veriler
+    ("kredi kart", True),
+    ("kart numara", True),
+    ("cvv", True),
+    ("son kullanma", True),
+    ("iban", True),
+    ("swift", True),
+    ("credit card", True),
+    ("card number", True),
+    ("cvv code", True),
+    ("expiry date", True),
+    ("wire transfer", True),
+    ("bank transfer", True),
+]
+
+# İzin verilen bağlamlar (beyaz liste)
+ALLOWED_FINANCIAL_CONTEXTS = [
+    "etki", "analiz", "rapor", "arastirma", "inceleme", "etkileri",
+    "piyasalar", "borsa", "ekonomi", "finansal piyasa",
+    "impact", "analysis", "report", "research", "effect", "markets"
 ]
 
 UNTRUSTED_CONTENT_TOOLS: Set[str] = {
@@ -97,10 +106,28 @@ TOOL_INTENT_KEYWORDS: Dict[str, Set[str]] = {
 
 
 def contains_forbidden_financial_intent(text: str) -> bool:
+    """Finansal işlem niyeti içeriyor mu? Bağlam duyarlı kontrol.
+    
+    - Sadece finansal TERİMLER değil, İŞLEM fiilleri engellenir
+    - Araştırma/analiz/rapor bağlamlarına izin verilir
+    """
     if not text:
         return False
+    
     t = text.lower()
-    return any(term in t for term in FINANCIAL_BLOCK_TERMS)
+    
+    # Önce bağlam kontrolü - analiz/araştırma/rapor bağlamı mı?
+    is_analysis_context = any(ctx in t for ctx in ALLOWED_FINANCIAL_CONTEXTS)
+    
+    for term, strict in FINANCIAL_BLOCK_TERMS:
+        if term in t:
+            # Eğer analiz/araştırma bağlamındaysa ve strict değilse, izin ver
+            if is_analysis_context and not strict:
+                continue
+            # Aksi halde engelle
+            return True
+    
+    return False
 
 
 

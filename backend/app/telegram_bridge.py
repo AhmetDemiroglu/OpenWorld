@@ -116,8 +116,20 @@ async def call_agent(session_id: str, text: str) -> dict:
     """Call agent API and return full response payload."""
     url = f"http://{settings.host}:{settings.port}/chat"
     payload = {"session_id": session_id, "message": text, "source": "telegram"}
+    
+    # Dinamik timeout - mesaj uzunluguna ve icerigine gore
+    base_timeout = 60.0  # Temel timeout
+    
+    # Karmasik istekler icin daha uzun timeout
+    text_lower = text.lower()
+    if any(k in text_lower for k in ["arastir", "rapor", "detayli", "tum kaynak", "haber tara"]):
+        base_timeout = 90.0  # Arastirma istekleri icin 90 saniye
+    if any(k in text_lower for k in ["pdf", "word", "docx", "excel", "xlsx"]):
+        base_timeout = 120.0  # Dosya olusturma icin 120 saniye
+    
     try:
-        timeout = httpx.Timeout(420.0, connect=20.0)
+        # (connect, read, write, pool) timeout'lari
+        timeout = httpx.Timeout(base_timeout, connect=10.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)
             if resp.is_error:
@@ -132,7 +144,12 @@ async def call_agent(session_id: str, text: str) -> dict:
                 raise RuntimeError(detail)
             return resp.json()
     except httpx.TimeoutException as exc:
-        raise RuntimeError("Agent timeout: islem zaman asimina ugradi (420 sn).") from exc
+        timeout_int = int(base_timeout)
+        raise RuntimeError(
+            f"Islem zaman asimina ugradi ({timeout_int}sn). "
+            f"Bu istek turu icin maksimum sure: {timeout_int} saniye. "
+            f"Daha kisa ve oz bir istek deneyin veya istegi parcalara bolun."
+        ) from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(str(exc).strip() or exc.__class__.__name__) from exc
 

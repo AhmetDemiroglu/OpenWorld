@@ -618,11 +618,21 @@ def tool_scroll(amount: int, x: int = None, y: int = None) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-def tool_hotkey(*keys: str) -> Dict[str, Any]:
-    """Klavye kÄ±sayolu Ã§alÄ±ÅŸtÄ±r."""
+def tool_hotkey(*keys: str, keys_list: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Klavye kisayolu calistir.
+    
+    Args:
+        *keys: Pozisyonel tuş argümanlari (ornegin: "ctrl", "c")
+        keys_list: Alternatif olarak tuş listesi (ornegin: ["ctrl", "c"])
+    """
     try:
-        pyautogui.hotkey(*keys)
-        return {"success": True, "keys": keys}
+        # Eger keys_list verilmisse onu kullan, yoksa *keys'i kullan
+        key_sequence = keys_list if keys_list else list(keys)
+        if not key_sequence:
+            return {"error": "En az bir tuş belirtilmeli. Ornek: hotkey('ctrl', 'c') veya hotkey(keys_list=['ctrl', 'c'])"}
+        
+        pyautogui.hotkey(*key_sequence)
+        return {"success": True, "keys": key_sequence}
     except Exception as e:
         return {"error": str(e)}
 

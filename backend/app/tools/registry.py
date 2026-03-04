@@ -1352,18 +1352,23 @@ def _generate_research_queries(topic: str) -> List[str]:
 
     return queries[:3]
 
-def tool_research_and_report(topic: str, max_sources: int = 10, out_path: str = "", report_style: str = "standard") -> Dict[str, Any]:
-    """Detayli arastirma yap.
+def tool_research_and_report(topic: str, max_sources: int = 5, out_path: str = "", report_style: str = "standard") -> Dict[str, Any]:
+    """Detayli arastirma yap - optimize edilmis, hizli versiyon.
 
     Args:
         topic: Arastirilacak konu
-        max_sources: Maksimum kaynak sayisi (varsayilan: 10, maks: 15)
+        max_sources: Maksimum kaynak sayisi (varsayilan: 5, maks: 10)
         out_path: Rapor dosya yolu
         report_style: standard, technical, academic, brief
     """
+    import time
+    
     if not topic.strip():
         return {"error": "Topic is required.", "partial": False}
 
+    start_time = time.time()
+    MAX_TOTAL_TIME = 60  # Toplam 60 saniye limit (420sn timeout'un cok altinda)
+    
     entries: List[Dict[str, Any]] = []
     failed_sources: List[Dict[str, str]] = []
     scratchpad_lines: List[str] = [
@@ -1384,27 +1389,40 @@ def tool_research_and_report(topic: str, max_sources: int = 10, out_path: str = 
             scratchpad_path.write_text("\n".join(scratchpad_lines), encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
+    
+    def _check_timeout() -> bool:
+        """Zaman asimi kontrolu - kısmi sonuc dondurmek icin"""
+        elapsed = time.time() - start_time
+        return elapsed > MAX_TOTAL_TIME
 
     try:
-        limit = max(1, min(max_sources, 15))
+        limit = max(1, min(max_sources, 10))  # Maks 10 kaynak
         queries = _generate_research_queries(topic)
         scratchpad_lines.append(f"Sorgular ({len(queries)}): {queries}")
         scratchpad_lines.append("")
         _save_scratchpad()
 
-        # Coklu sorgu ile haber topla
+        # Coklu sorgu ile haber topla - zaman asimi kontrollu
         all_news: List[Dict[str, Any]] = []
         seen_links: set[str] = set()
 
         for qi, query in enumerate(queries):
+            if _check_timeout():
+                scratchpad_lines.append(f"[ZAMAN ASIMI] Sorgu asamasinda zaman limitine ulasildi. Mevcut sonuclarla devam ediliyor.")
+                _save_scratchpad()
+                break
+            
             scratchpad_lines.append(f"[SORGU {qi+1}/{len(queries)}] \"{query}\"")
             _save_scratchpad()
 
             try:
-                news = tool_search_news(query, limit=limit)
+                # Her sorgu icin az limit - hizli sonuc
+                news = tool_search_news(query, limit=min(limit, 5))
                 items = news.get("results", [])
                 added = 0
                 for item in items:
+                    if _check_timeout():
+                        break
                     link = str(item.get("link", "")).strip()
                     title = str(item.get("title", "")).strip().lower()
                     key = link or title
@@ -1413,37 +1431,53 @@ def tool_research_and_report(topic: str, max_sources: int = 10, out_path: str = 
                     seen_links.add(key)
                     all_news.append(item)
                     added += 1
-                scratchpad_lines.append(f"  -> {added} yeni sonuc ({len(items)} toplam, {len(news.get('feed_warnings', []))} uyari)")
-                if news.get("feed_warnings"):
-                    for fw in news["feed_warnings"]:
-                        scratchpad_lines.append(f"  UYARI: {fw}")
+                    if len(all_news) >= limit * 2:  # Yeterli kaynak toplandi
+                        break
+                scratchpad_lines.append(f"  -> {added} yeni sonuc ({len(items)} toplam)")
             except Exception as exc:  # noqa: BLE001
-                scratchpad_lines.append(f"  -> HATA: {type(exc).__name__}: {str(exc)[:150]}")
+                scratchpad_lines.append(f"  -> HATA: {type(exc).__name__}: {str(exc)[:80]}")
             _save_scratchpad()
+            
+            if len(all_news) >= limit * 2:
+                break
 
         scratchpad_lines.append(f"\nToplam benzersiz kaynak: {len(all_news)}")
         scratchpad_lines.append(f"Icerik cekilecek: {min(len(all_news), limit)} kaynak\n")
         _save_scratchpad()
 
-        # Her kaynak icin icerik cek
+        # Her kaynak icin icerik cek - hizli mod, zaman asimi kontrollu
         fetch_count = min(len(all_news), limit)
         for fi, item in enumerate(all_news[:fetch_count]):
+            if _check_timeout():
+                scratchpad_lines.append(f"[ZAMAN ASIMI] Icerik cekme asamasinda durduruldu. {fi}/{fetch_count} kaynak islemdi.")
+                _save_scratchpad()
+                # Islenmeyen kaynaklari da listeye ekle (basliklariyla)
+                for remaining_item in all_news[fi:fetch_count]:
+                    entries.append({
+                        "title": remaining_item.get("title", ""),
+                        "link": remaining_item.get("link", ""),
+                        "pub_date": remaining_item.get("pub_date", ""),
+                        "source": remaining_item.get("source", ""),
+                        "excerpt": "[Zaman asimi nedeniyle icerik cekilemedi]",
+                    })
+                break
+            
             link = item.get("link", "")
             title = item.get("title", "")
             excerpt = ""
 
             if link:
-                scratchpad_lines.append(f"[FETCH {fi+1}/{fetch_count}] {link[:70]}")
+                scratchpad_lines.append(f"[FETCH {fi+1}/{fetch_count}] {link[:50]}...")
                 _save_scratchpad()
                 try:
-                    page = tool_fetch_web_page(link, max_chars=6000)
-                    excerpt = page.get("content", "")[:2000]
-                    scratchpad_lines.append(f"  -> OK ({len(excerpt)} karakter)")
+                    # Hizli mod - az karakter, timeout korumali
+                    page = tool_fetch_web_page(link, max_chars=2000)
+                    excerpt = page.get("content", "")[:800]  # Kisa ozet
+                    scratchpad_lines.append(f"  -> OK ({len(excerpt)} chars)")
                 except Exception as exc:  # noqa: BLE001
-                    err_msg = f"{type(exc).__name__}: {str(exc)[:100]}"
-                    scratchpad_lines.append(f"  -> BASARISIZ: {err_msg}")
+                    err_msg = f"{type(exc).__name__}: {str(exc)[:60]}"
+                    scratchpad_lines.append(f"  -> FAIL: {err_msg}")
                     failed_sources.append({"title": title, "link": link, "error": err_msg})
-                _save_scratchpad()
 
             entries.append({
                 "title": title,
