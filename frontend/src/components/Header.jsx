@@ -1,9 +1,10 @@
 import { OpenWorldLogo } from "./OpenWorldLogo";
 
-export function Header({ sessionId, onSessionChange }) {
+export function Header({ sessionId, onSessionChange, children }) {
   return (
     <header className="header">
       <div className="header-brand">
+        {children}
         <OpenWorldLogo size={34} />
         <h1>OpenWorld</h1>
         <span className="header-badge">Yerel Ajan</span>

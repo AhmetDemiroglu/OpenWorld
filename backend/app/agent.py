@@ -26,6 +26,7 @@ _MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
     ".wav", ".mp3", ".ogg", ".m4a", ".flac",
     ".mp4", ".avi", ".mkv", ".mov", ".webm",
+    ".pdf", ".docx", ".xlsx", ".pptx", ".zip", ".tar", ".gz",
 }
 
 
@@ -566,6 +567,25 @@ class AgentService:
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
                 name="research_and_report",
                 arguments=args,
+            )
+
+        # Kapsamlı görev algılama -> notebook_create öner
+        if "notebook_create" in self._known_tool_names and any(
+            k in normalized for k in ("kapsamli", "detayli", "adim adim", "parcala", "tum", "karsilastir")
+        ) and any(
+            k in normalized for k in ("arastir", "analiz", "rapor", "incele", "haber", "research")
+        ):
+            # Not defteri adı oluştur
+            topic_words = [w for w in text.split()[:5] if len(w) > 2]
+            nb_name = "_".join(topic_words[:3]) or "arastirma"
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="notebook_create",
+                arguments={
+                    "name": nb_name,
+                    "goal": text,
+                    "steps": "Haber ve kaynak ara\nKaynaklari oku ve not al\nBulgulari carpraz kontrol et\nRapor olustur",
+                },
             )
 
         if "search_news" in self._known_tool_names and any(k in normalized for k in ("haber", "news", "gundem")):

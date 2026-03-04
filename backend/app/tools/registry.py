@@ -64,6 +64,34 @@ from .super_agent import (
     tool_ocr_image,
 )
 
+# VERİTABANI VE HAFIZA
+from ..database import memory_store, memory_recall, get_tool_stats
+
+# KOD YARDIMCISI ARAÇLARI
+from .code_tools import (
+    tool_git_status,
+    tool_git_diff,
+    tool_git_log,
+    tool_git_commit,
+    tool_git_branch,
+    tool_find_symbols,
+    tool_code_search,
+    tool_refactor_rename,
+    tool_run_tests,
+    tool_vscode_command,
+    tool_claude_code_ask,
+)
+
+# NOT DEFTERİ ARAÇLARI
+from .notebook_tools import (
+    tool_notebook_create,
+    tool_notebook_add_note,
+    tool_notebook_complete_step,
+    tool_notebook_status,
+    tool_notebook_list,
+    tool_notebook_add_step,
+)
+
 # OFÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°S ve ARÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°V ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
 from .office_tools import (
     # ZIP/ArÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸iv
@@ -995,15 +1023,44 @@ def _normalize_news_query(query: str) -> str:
     return safe_query
 
 
-def _parse_news_items_from_rss(xml_text: str, limit: int) -> List[Dict[str, Any]]:
+def _parse_rss_date(date_str: str) -> Optional[datetime]:
+    """RSS pubDate alanını parse et."""
+    for fmt in (
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ):
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _parse_news_items_from_rss(xml_text: str, limit: int, max_age_hours: int = 48) -> List[Dict[str, Any]]:
     root = ET.fromstring(xml_text)
     parsed: List[Dict[str, Any]] = []
-    for it in root.findall(".//item")[:limit]:
+    now = datetime.utcnow()
+    for it in root.findall(".//item"):
+        if len(parsed) >= limit:
+            break
+        pub_date_str = it.findtext("pubDate", default="")
+        # Tarih filtresi: max_age_hours saatten eski haberleri atla
+        if pub_date_str and max_age_hours > 0:
+            pub_dt = _parse_rss_date(pub_date_str)
+            if pub_dt is not None:
+                # timezone-aware ise naive'e cevir
+                if pub_dt.tzinfo is not None:
+                    pub_dt = pub_dt.replace(tzinfo=None)
+                age = now - pub_dt
+                if age.total_seconds() > max_age_hours * 3600:
+                    continue
         parsed.append(
             {
                 "title": it.findtext("title", default=""),
                 "link": it.findtext("link", default=""),
-                "pub_date": it.findtext("pubDate", default=""),
+                "pub_date": pub_date_str,
                 "source": it.findtext("source", default=""),
             }
         )
@@ -1014,12 +1071,14 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
     safe_query = _normalize_news_query(query)
     lim = max(1, min(limit, 20))
 
+    # Google News'e "when:2d" ekleyerek son 2 günün haberlerini iste
+    timed_query = f"{safe_query} when:2d"
     feed_urls = [
-        f"https://news.google.com/rss/search?q={quote_plus(safe_query)}&hl=tr&gl=TR&ceid=TR:tr",
+        f"https://news.google.com/rss/search?q={quote_plus(timed_query)}&hl=tr&gl=TR&ceid=TR:tr",
     ]
     if any(k in safe_query.lower() for k in ("dunya", "world", "iran", "abd", "savas", "war")):
         feed_urls.append(
-            f"https://news.google.com/rss/search?q={quote_plus(safe_query)}&hl=en-US&gl=US&ceid=US:en"
+            f"https://news.google.com/rss/search?q={quote_plus(timed_query)}&hl=en-US&gl=US&ceid=US:en"
         )
 
     merged: List[Dict[str, Any]] = []
@@ -1293,7 +1352,15 @@ def _generate_research_queries(topic: str) -> List[str]:
 
     return queries[:3]
 
-def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "") -> Dict[str, Any]:
+def tool_research_and_report(topic: str, max_sources: int = 10, out_path: str = "", report_style: str = "standard") -> Dict[str, Any]:
+    """Detayli arastirma yap.
+
+    Args:
+        topic: Arastirilacak konu
+        max_sources: Maksimum kaynak sayisi (varsayilan: 10, maks: 15)
+        out_path: Rapor dosya yolu
+        report_style: standard, technical, academic, brief
+    """
     if not topic.strip():
         return {"error": "Topic is required.", "partial": False}
 
@@ -1402,6 +1469,42 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
         successful = [e for e in entries if e.get("excerpt")]
         out_ext = requested_target.suffix.lower()
 
+        # Kaynak güvenilirlik skorlaması - tekrar eden bilgilere yüksek skor
+        _source_scores: Dict[int, float] = {}
+        for i, entry in enumerate(successful):
+            score = 1.0
+            excerpt_lower = entry.get("excerpt", "").lower()
+            # Diğer kaynaklarla örtüşme kontrolü
+            overlap_count = 0
+            for j, other in enumerate(successful):
+                if i == j:
+                    continue
+                other_lower = other.get("excerpt", "").lower()
+                # Basit kelime örtüşmesi
+                words_i = set(excerpt_lower.split())
+                words_j = set(other_lower.split())
+                if len(words_i) > 5 and len(words_j) > 5:
+                    overlap = len(words_i & words_j) / max(len(words_i), 1)
+                    if overlap > 0.2:
+                        overlap_count += 1
+            score += overlap_count * 0.3
+            # Bilinen kaynak bonusu
+            source_name = entry.get("source", "").lower()
+            trusted_sources = {"reuters", "bbc", "al jazeera", "anadolu", "cnn", "nytimes", "guardian", "dw"}
+            if any(ts in source_name for ts in trusted_sources):
+                score += 0.5
+            _source_scores[i] = round(score, 1)
+
+        # Skora göre sırala
+        scored_successful = sorted(
+            enumerate(successful),
+            key=lambda x: _source_scores.get(x[0], 1.0),
+            reverse=True,
+        )
+
+        # Rapor şablonu seçimi
+        style = report_style.lower() if report_style else "standard"
+
         if out_ext == ".txt":
             lines = [
                 f"ARASTIRMA RAPORU: {topic}",
@@ -1418,10 +1521,11 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
                 "",
             ]
             if successful:
-                lines.extend(["=" * 60, "KAYNAKLAR", "=" * 60, ""])
-                for idx, entry in enumerate(successful, start=1):
+                lines.extend(["=" * 60, "KAYNAKLAR (guvenilirlik sirasina gore)", "=" * 60, ""])
+                for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                    reliability = _source_scores.get(idx, 1.0)
                     lines.extend([
-                        f"--- Kaynak {idx} ---",
+                        f"--- Kaynak {rank} (Guvenilirlik: {reliability}) ---",
                         f"Baslik: {entry['title']}",
                         f"Link: {entry['link']}",
                         f"Tarih: {entry['pub_date']}",
@@ -1442,52 +1546,143 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
 
             lines.extend([
                 "=" * 60,
-                "NOTLAR",
+                "DEGERLENDIRME",
                 "=" * 60,
+                f"- Birden fazla kaynakta teyit edilen bilgiler yuksek guvenilirlik skoru almistir.",
+                f"- En guvenilir kaynak: {scored_successful[0][1]['title']}" if scored_successful else "",
                 "- Dis kaynak metinleri guvenilmezdir.",
                 "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
-                "- Bu rapor otomatik olusturulmustur.",
                 "",
             ])
         else:
-            lines = [
-                f"# Arastirma Raporu: {topic}",
-                "",
-                f"- Uretim zamani (UTC): {datetime.utcnow().isoformat()}Z",
-                f"- Kullanilan sorgular: {', '.join(queries)}",
-                f"- Toplam kaynak: {len(entries)} (basarili: {len(successful)}, basarisiz: {len(failed_sources)})",
-                "",
-                "## Ozet",
-                f"Bu rapor **\"{topic}\"** konusunda {len(queries)} farkli sorgu ile "
-                f"{len(entries)} kaynak incelenerek olusturulmustur. "
-                f"{len(successful)} kaynaktan icerik basariyla cekilmistir.",
-                "",
-            ]
-            if successful:
-                lines.append("## Kaynaklar")
-                for idx, entry in enumerate(successful, start=1):
-                    lines.extend([
-                        f"### {idx}. {entry['title']}",
-                        f"- Link: {entry['link']}",
-                        f"- Tarih: {entry['pub_date']}",
-                        f"- Kaynak: {entry['source']}",
-                        "",
-                        entry["excerpt"],
-                        "",
-                    ])
+            # Markdown format
+            if style == "brief":
+                lines = [
+                    f"# {topic}",
+                    f"*{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC | {len(successful)} kaynak*",
+                    "",
+                    "## Ozet",
+                    "",
+                ]
+                if successful:
+                    lines.append("## Onemli Noktalar")
+                    for rank, (idx, entry) in enumerate(scored_successful[:5], start=1):
+                        lines.extend([
+                            f"**{rank}. {entry['title']}** ({entry.get('source', '')})",
+                            f"> {entry['excerpt'][:300]}...",
+                            "",
+                        ])
+            elif style == "technical":
+                lines = [
+                    f"# Teknik Analiz: {topic}",
+                    "",
+                    "| Parametre | Deger |",
+                    "|---|---|",
+                    f"| Tarih | {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC |",
+                    f"| Sorgular | {', '.join(queries)} |",
+                    f"| Kaynak Sayisi | {len(entries)} (basarili: {len(successful)}) |",
+                    f"| Rapor Stili | Teknik |",
+                    "",
+                    "## Analiz",
+                    "",
+                ]
+                if successful:
+                    lines.append("## Kaynaklar ve Guvenilirlik")
+                    lines.extend(["", "| # | Kaynak | Guvenilirlik | Baslik |", "|---|---|---|---|"])
+                    for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                        rel = _source_scores.get(idx, 1.0)
+                        lines.append(f"| {rank} | {entry.get('source', '?')} | {rel} | {entry['title'][:50]} |")
+                    lines.append("")
+                    for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                        lines.extend([
+                            f"### {rank}. {entry['title']}",
+                            f"- Kaynak: {entry.get('source', '')} | Tarih: {entry['pub_date']}",
+                            f"- Guvenilirlik Skoru: **{_source_scores.get(idx, 1.0)}**",
+                            f"- Link: {entry['link']}",
+                            "",
+                            entry["excerpt"],
+                            "",
+                        ])
+            elif style == "academic":
+                lines = [
+                    f"# {topic}",
+                    "",
+                    "## Giris",
+                    f"Bu calismada \"{topic}\" konusu {len(queries)} farkli arama sorgusu ile "
+                    f"sistematik olarak arastirilmistir. Toplam {len(entries)} kaynak incelenmis, "
+                    f"{len(successful)} kaynaktan veri elde edilmistir.",
+                    "",
+                    "## Yontem",
+                    f"- Arama Sorgulari: {', '.join(queries)}",
+                    f"- Kaynak Havuzu: Google Haberler RSS",
+                    f"- Analiz Tarihi: {datetime.utcnow().strftime('%Y-%m-%d')}",
+                    "",
+                    "## Bulgular",
+                    "",
+                ]
+                if successful:
+                    for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                        rel = _source_scores.get(idx, 1.0)
+                        lines.extend([
+                            f"### {rank}. {entry['title']}",
+                            f"*Kaynak: {entry.get('source', '')} | Guvenilirlik: {rel}*",
+                            "",
+                            entry["excerpt"],
+                            "",
+                        ])
+                lines.extend([
+                    "## Sonuc ve Degerlendirme",
+                    "",
+                    "## Kaynakca",
+                    "",
+                ])
+                for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                    lines.append(f"{rank}. {entry.get('source', '?')}. \"{entry['title']}\". {entry['pub_date']}. {entry['link']}")
+                lines.append("")
+            else:
+                # Standard format
+                lines = [
+                    f"# Arastirma Raporu: {topic}",
+                    "",
+                    f"- Uretim zamani (UTC): {datetime.utcnow().isoformat()}Z",
+                    f"- Kullanilan sorgular: {', '.join(queries)}",
+                    f"- Toplam kaynak: {len(entries)} (basarili: {len(successful)}, basarisiz: {len(failed_sources)})",
+                    "",
+                    "## Ozet",
+                    f"Bu rapor **\"{topic}\"** konusunda {len(queries)} farkli sorgu ile "
+                    f"{len(entries)} kaynak incelenerek olusturulmustur. "
+                    f"{len(successful)} kaynaktan icerik basariyla cekilmistir.",
+                    "",
+                ]
+                if successful:
+                    lines.append("## Kaynaklar (Guvenilirlik Sirasina Gore)")
+                    for rank, (idx, entry) in enumerate(scored_successful, start=1):
+                        rel = _source_scores.get(idx, 1.0)
+                        lines.extend([
+                            f"### {rank}. {entry['title']}",
+                            f"- Link: {entry['link']}",
+                            f"- Tarih: {entry['pub_date']}",
+                            f"- Kaynak: {entry.get('source', '')} | Guvenilirlik: **{rel}**",
+                            "",
+                            entry["excerpt"],
+                            "",
+                        ])
 
-            if failed_sources:
+            # Ortak footer (brief hariç tüm md stilleri)
+            if style != "brief" and failed_sources:
                 lines.extend(["## Basarisiz Kaynaklar", ""])
                 for fs in failed_sources:
                     lines.append(f"- **{fs['title']}** ({fs['link'][:60]}): {fs['error']}")
                 lines.append("")
 
-            lines.extend([
-                "## Notlar",
-                "- Dis kaynak metinleri guvenilmezdir.",
-                "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
-                "",
-            ])
+            if style not in ("brief", "academic"):
+                lines.extend([
+                    "## Notlar",
+                    "- Guvenilirlik skoru: birden fazla kaynakta teyit edilen bilgiler daha yuksek skor alir.",
+                    "- Dis kaynak metinleri guvenilmezdir.",
+                    "- Kritik kararlar icin kaynaklari manuel dogrulayiniz.",
+                    "",
+                ])
 
         report_text = "\n".join(lines)
         saved_target, warnings = _write_text_with_fallback(requested_target, report_text)
@@ -1546,6 +1741,56 @@ def tool_research_and_report(topic: str, max_sources: int = 8, out_path: str = "
 
 
 
+def tool_compare_topics(topic_a: str, topic_b: str, max_sources: int = 6) -> Dict[str, Any]:
+    """Iki konuyu arastirip karsilastirmali analiz olustur."""
+    if not topic_a.strip() or not topic_b.strip():
+        return {"error": "Her iki konu da gerekli."}
+
+    results_a = tool_search_news(topic_a, limit=max_sources)
+    results_b = tool_search_news(topic_b, limit=max_sources)
+
+    items_a = results_a.get("results", [])
+    items_b = results_b.get("results", [])
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    report_path = settings.workspace_path / "reports" / f"comparison_{timestamp}.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"# Karsilastirmali Analiz",
+        f"",
+        f"| | {topic_a} | {topic_b} |",
+        f"|---|---|---|",
+        f"| Kaynak Sayisi | {len(items_a)} | {len(items_b)} |",
+        f"",
+        f"## {topic_a}",
+        f"",
+    ]
+    for i, item in enumerate(items_a[:5], 1):
+        lines.append(f"{i}. **{item.get('title', '')}** - {item.get('source', '')} ({item.get('pub_date', '')})")
+    lines.extend(["", f"## {topic_b}", ""])
+    for i, item in enumerate(items_b[:5], 1):
+        lines.append(f"{i}. **{item.get('title', '')}** - {item.get('source', '')} ({item.get('pub_date', '')})")
+    lines.extend([
+        "",
+        "## Ortak Noktalar",
+        "",
+        "*(Yukaridaki kaynaklardaki ortak temalar burada analiz edilir)*",
+        "",
+    ])
+
+    content = "\n".join(lines)
+    report_path.write_text(content, encoding="utf-8")
+
+    return {
+        "path": str(report_path),
+        "topic_a": topic_a,
+        "topic_b": topic_b,
+        "sources_a": len(items_a),
+        "sources_b": len(items_b),
+    }
+
+
 def tool_research_note(note: str, scratchpad: str = "research/scratchpad.txt") -> Dict[str, Any]:
     """Arastirma surecinde not ekle. Her cagri dosyaya eklenir."""
     if not note.strip():
@@ -1568,6 +1813,21 @@ def tool_research_note(note: str, scratchpad: str = "research/scratchpad.txt") -
         }
     except Exception as exc:  # noqa: BLE001
         return {"error": f"Not yazma basarisiz: {type(exc).__name__}: {exc}"}
+
+
+def tool_memory_store(fact: str, source: str = "conversation", category: str = "general") -> Dict[str, Any]:
+    """Uzun sureli hafizaya bilgi kaydet. Kullanicinin tercihlerini, onemli bilgileri hatirla."""
+    return memory_store(fact=fact, source=source, category=category)
+
+
+def tool_memory_recall(query: str = "", category: str = "", limit: int = 10) -> Dict[str, Any]:
+    """Hafizadan bilgi hatirla. Onceki konusmalardan ogrenilenler."""
+    return memory_recall(query=query, category=category, limit=limit)
+
+
+def tool_memory_stats() -> Dict[str, Any]:
+    """Arac kullanim istatistikleri ve hafiza durumu."""
+    return get_tool_stats(days=7)
 
 
 # =============================================================================
@@ -2029,8 +2289,27 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "research_and_report",
-                "description": "Detayli arastirma yap: coklu sorgu ile haber topla, kaynaklari oku, rapor olustur. Uzun surabilir.",
-                "parameters": {"type": "object", "properties": {"topic": {"type": "string", "description": "Arastirilacak konu"}, "max_sources": {"type": "integer", "description": "Maksimum kaynak sayisi (varsayilan: 8)"}, "out_path": {"type": "string", "description": "Rapor dosya yolu (orn: Desktop\\rapor.txt)"}}}
+                "description": "Detayli arastirma yap: coklu sorgu ile haber topla, kaynaklari oku, guvenilirlik skorla, rapor olustur. Uzun surabilir.",
+                "parameters": {"type": "object", "properties": {"topic": {"type": "string", "description": "Arastirilacak konu"}, "max_sources": {"type": "integer", "description": "Maksimum kaynak sayisi (varsayilan: 10, maks: 15)"}, "out_path": {"type": "string", "description": "Rapor dosya yolu (orn: Desktop\\rapor.txt)"}, "report_style": {"type": "string", "description": "Rapor stili: standard, technical, academic, brief", "enum": ["standard", "technical", "academic", "brief"]}}}
+            }
+        }
+    ),
+    "compare_topics": (
+        tool_compare_topics,
+        {
+            "type": "function",
+            "function": {
+                "name": "compare_topics",
+                "description": "Iki konuyu arastirip karsilastirmali analiz olustur (X vs Y).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic_a": {"type": "string", "description": "Birinci konu"},
+                        "topic_b": {"type": "string", "description": "Ikinci konu"},
+                        "max_sources": {"type": "integer", "description": "Her konu icin maks kaynak (varsayilan: 6)"}
+                    },
+                    "required": ["topic_a", "topic_b"]
+                }
             }
         }
     ),
@@ -2932,6 +3211,362 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             }
         }
     ),
+
+    # ============================================================
+    # KOD YARDIMCISI ARAÇLARI
+    # ============================================================
+    "git_status": (
+        tool_git_status,
+        {
+            "type": "function",
+            "function": {
+                "name": "git_status",
+                "description": "Git durumunu goster - branch, degismis dosyalar, staged dosyalar.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"}
+                    }
+                }
+            }
+        }
+    ),
+    "git_diff": (
+        tool_git_diff,
+        {
+            "type": "function",
+            "function": {
+                "name": "git_diff",
+                "description": "Git diff - dosya degisikliklerini goster.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "staged": {"type": "boolean", "description": "Staged degisiklikleri goster"},
+                        "file_path": {"type": "string", "description": "Belirli dosyanin diff'i"}
+                    }
+                }
+            }
+        }
+    ),
+    "git_log": (
+        tool_git_log,
+        {
+            "type": "function",
+            "function": {
+                "name": "git_log",
+                "description": "Git commit gecmisi.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "count": {"type": "integer", "description": "Kac commit gosterilsin (maks 50)"}
+                    }
+                }
+            }
+        }
+    ),
+    "git_commit": (
+        tool_git_commit,
+        {
+            "type": "function",
+            "function": {
+                "name": "git_commit",
+                "description": "Git commit yap.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "message": {"type": "string", "description": "Commit mesaji"},
+                        "add_all": {"type": "boolean", "description": "Tum degisiklikleri stage'e al"}
+                    },
+                    "required": ["message"]
+                }
+            }
+        }
+    ),
+    "git_branch": (
+        tool_git_branch,
+        {
+            "type": "function",
+            "function": {
+                "name": "git_branch",
+                "description": "Git branch islemleri: list, create, switch, delete.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "action": {"type": "string", "description": "list/create/switch/delete", "enum": ["list", "create", "switch", "delete"]},
+                        "name": {"type": "string", "description": "Branch adi"}
+                    }
+                }
+            }
+        }
+    ),
+    "find_symbols": (
+        tool_find_symbols,
+        {
+            "type": "function",
+            "function": {
+                "name": "find_symbols",
+                "description": "Projede sembol ara - fonksiyon, class, degisken tanimlari.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "symbol": {"type": "string", "description": "Aranacak sembol (regex)"},
+                        "symbol_type": {"type": "string", "description": "all/function/class/variable", "enum": ["all", "function", "class", "variable"]}
+                    },
+                    "required": ["path"]
+                }
+            }
+        }
+    ),
+    "code_search": (
+        tool_code_search,
+        {
+            "type": "function",
+            "function": {
+                "name": "code_search",
+                "description": "Projede regex tabanli kod arama.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "pattern": {"type": "string", "description": "Regex pattern"},
+                        "file_types": {"type": "string", "description": "Dosya turleri (orn: py,js,ts)"}
+                    },
+                    "required": ["path", "pattern"]
+                }
+            }
+        }
+    ),
+    "refactor_rename": (
+        tool_refactor_rename,
+        {
+            "type": "function",
+            "function": {
+                "name": "refactor_rename",
+                "description": "Projede isim degistir (fonksiyon, degisken, class) - tum dosyalarda.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "old_name": {"type": "string", "description": "Eski isim"},
+                        "new_name": {"type": "string", "description": "Yeni isim"},
+                        "file_types": {"type": "string", "description": "Dosya turleri (varsayilan: py,js,jsx,ts,tsx)"},
+                        "dry_run": {"type": "boolean", "description": "true: sadece goster, false: uygula"}
+                    },
+                    "required": ["path", "old_name", "new_name"]
+                }
+            }
+        }
+    ),
+    "run_tests": (
+        tool_run_tests,
+        {
+            "type": "function",
+            "function": {
+                "name": "run_tests",
+                "description": "Test calistir (pytest, npm test, cargo test, go test - otomatik algilama).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Proje dizini"},
+                        "command": {"type": "string", "description": "Ozel test komutu (bos ise otomatik)"},
+                        "timeout": {"type": "integer", "description": "Timeout (saniye, maks 300)"}
+                    }
+                }
+            }
+        }
+    ),
+    "vscode_command": (
+        tool_vscode_command,
+        {
+            "type": "function",
+            "function": {
+                "name": "vscode_command",
+                "description": "VS Code'da gelismis islemler: dosya ac, satira git, terminal komutu, diff goruntule.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Dosya veya klasor yolu"},
+                        "command": {"type": "string", "description": "Terminal komutu veya diff icin ikinci dosya"},
+                        "goto_line": {"type": "integer", "description": "Satir numarasi"},
+                        "action": {"type": "string", "description": "open/terminal/diff", "enum": ["open", "terminal", "diff"]}
+                    },
+                    "required": ["path"]
+                }
+            }
+        }
+    ),
+    "claude_code_ask": (
+        tool_claude_code_ask,
+        {
+            "type": "function",
+            "function": {
+                "name": "claude_code_ask",
+                "description": "Claude Code CLI'ya talimat gonder ve sonucu al. Kod analizi, refactoring, hata ayiklama icin.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "project_path": {"type": "string", "description": "Proje dizini"},
+                        "instruction": {"type": "string", "description": "Claude Code'a verilecek talimat"},
+                        "timeout": {"type": "integer", "description": "Timeout saniye (maks 600)"}
+                    },
+                    "required": ["project_path", "instruction"]
+                }
+            }
+        }
+    ),
+
+    # ============================================================
+    # NOT DEFTERİ ARAÇLARI
+    # ============================================================
+    "notebook_create": (
+        tool_notebook_create,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_create",
+                "description": "Yeni arastirma/gorev not defteri olustur. Karmasik gorevleri adimlara bol ve takip et. Her kapsamli gorev icin bir not defteri ac.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Not defteri adi (orn: Iran_ABD_Arastirma)"},
+                        "goal": {"type": "string", "description": "Ana hedef/gorev aciklamasi"},
+                        "steps": {"type": "string", "description": "Adimlar (her satir bir adim)"}
+                    },
+                    "required": ["name"]
+                }
+            }
+        }
+    ),
+    "notebook_add_note": (
+        tool_notebook_add_note,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_add_note",
+                "description": "Not defterine bulgu/not ekle. Her arastirma adiminda kullan, baglami koru.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Not defteri adi"},
+                        "note": {"type": "string", "description": "Eklenecek not/bulgu"},
+                        "section": {"type": "string", "description": "Bolum adi (varsayilan: Notlar)"}
+                    },
+                    "required": ["name", "note"]
+                }
+            }
+        }
+    ),
+    "notebook_complete_step": (
+        tool_notebook_complete_step,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_complete_step",
+                "description": "Bir adimi tamamlandi olarak isaretle ve bulgusunu kaydet.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Not defteri adi"},
+                        "step_keyword": {"type": "string", "description": "Tamamlanan adimdaki anahtar kelime"},
+                        "finding": {"type": "string", "description": "Bu adimdan elde edilen bulgu/sonuc"}
+                    },
+                    "required": ["name", "step_keyword"]
+                }
+            }
+        }
+    ),
+    "notebook_status": (
+        tool_notebook_status,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_status",
+                "description": "Not defterinin mevcut durumunu oku - nerede kaldigini hatirla. Her yeni turda baglami yenilemek icin cagir.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Not defteri adi"}
+                    },
+                    "required": ["name"]
+                }
+            }
+        }
+    ),
+    "notebook_list": (
+        tool_notebook_list,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_list",
+                "description": "Mevcut tum not defterlerini listele.",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        }
+    ),
+    "notebook_add_step": (
+        tool_notebook_add_step,
+        {
+            "type": "function",
+            "function": {
+                "name": "notebook_add_step",
+                "description": "Not defterine yeni adim ekle (gorev genisletme).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Not defteri adi"},
+                        "step": {"type": "string", "description": "Yeni adim aciklamasi"}
+                    },
+                    "required": ["name", "step"]
+                }
+            }
+        }
+    ),
+
+    # ============================================================
+    # HAFIZA ARAÇLARI
+    # ============================================================
+    "memory_store": (
+        tool_memory_store,
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_store",
+                "description": "Uzun sureli hafizaya bilgi kaydet. Kullanicinin tercihlerini, onemli bilgileri hatirla.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "fact": {"type": "string", "description": "Kaydedilecek bilgi"},
+                        "source": {"type": "string", "description": "Kaynak (conversation, research, user_preference)"},
+                        "category": {"type": "string", "description": "Kategori (general, preference, knowledge, person)"}
+                    },
+                    "required": ["fact"]
+                }
+            }
+        }
+    ),
+    "memory_recall": (
+        tool_memory_recall,
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_recall",
+                "description": "Hafizadan bilgi hatirla. Onceki konusmalardan ogrenilenleri ara.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Aranacak kelimeler"},
+                        "category": {"type": "string", "description": "Kategori filtresi"},
+                        "limit": {"type": "integer", "description": "Maks sonuc sayisi"}
+                    }
+                }
+            }
+        }
+    ),
 }
 
 
@@ -2962,7 +3597,9 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     ],
     "web": [
         "fetch_web_page", "search_news", "screenshot_webpage",
-        "research_and_report", "research_note",
+        "research_and_report", "research_note", "compare_topics",
+        "notebook_create", "notebook_add_note", "notebook_complete_step",
+        "notebook_status",
     ],
     "email": [
         "check_gmail_messages", "check_outlook_messages", "create_email_draft",
@@ -2989,6 +3626,9 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     "code": [
         "analyze_code", "find_code_patterns",
         "analyze_project_code", "open_in_vscode",
+        "git_status", "git_diff", "git_log", "git_commit", "git_branch",
+        "find_symbols", "code_search", "refactor_rename", "run_tests",
+        "vscode_command", "claude_code_ask",
     ],
     "planner": [
         "add_task", "list_tasks", "complete_task",
@@ -3002,6 +3642,13 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     ],
     "dialog": [
         "alert", "confirm", "prompt",
+    ],
+    "notebook": [
+        "notebook_create", "notebook_add_note", "notebook_complete_step",
+        "notebook_status", "notebook_list", "notebook_add_step",
+    ],
+    "memory": [
+        "memory_store", "memory_recall",
     ],
 }
 
@@ -3063,6 +3710,9 @@ CATEGORY_KEYWORDS: Dict[str, set] = {
         "kod", "code", "analiz", "analyze", "analysis", "pattern",
         "fonksiyon", "function", "class", "sinif", "sÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±f", "import",
         "proje", "project", "vscode", "debug",
+        "git", "commit", "branch", "diff", "merge", "push", "pull",
+        "test", "pytest", "unittest", "refactor", "rename",
+        "sembol", "symbol",
     },
     "planner": {
         "gorev", "gÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¶rev", "task", "takvim", "calendar", "etkinlik",
@@ -3078,6 +3728,11 @@ CATEGORY_KEYWORDS: Dict[str, set] = {
     },
     "dialog": {
         "uyar", "uyarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "onay", "confirm", "popup", "dialog",
+    },
+    "notebook": {
+        "not defteri", "notebook", "adim", "takip",
+        "arastirma", "detayli", "kapsamli",
+        "analiz", "rapor", "research", "analyze", "detailed",
     },
 }
 
@@ -3101,6 +3756,13 @@ DEFAULT_TOOL_NAMES: List[str] = [
     "analyze_project_code",
     "add_task",
     "list_tasks",
+    "notebook_create",
+    "notebook_add_note",
+    "notebook_complete_step",
+    "notebook_status",
+    "notebook_list",
+    "memory_store",
+    "memory_recall",
 ]
 
 _TRANSIENT_ARGUMENT_KEYS = {
@@ -3133,6 +3795,9 @@ _TOOL_ARGUMENT_ALIASES: Dict[str, Dict[str, str]] = {
     "check_gmail_messages": {"limit": "max_results"},
     "check_outlook_messages": {"limit": "max_results"},
     "research_and_report": {"path": "out_path", "file_path": "out_path", "query": "topic"},
+    "notebook_create": {"title": "name", "topic": "goal"},
+    "notebook_add_note": {"text": "note", "content": "note"},
+    "notebook_complete_step": {"keyword": "step_keyword", "step": "step_keyword"},
 }
 
 

@@ -227,50 +227,156 @@ def tool_read_pdf(pdf_path: str, page_start: int = 0, page_end: int = None) -> D
 
 
 def tool_create_pdf(output_path: str, title: str = "", content: str = "") -> Dict[str, Any]:
-    """Basit PDF oluştur."""
+    """Türkçe destekli, düzgün formatlı PDF oluştur."""
     try:
-        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm
         from reportlab.pdfgen import canvas
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
-        
+
         target = _resolve_path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        
-        c = canvas.Canvas(str(target), pagesize=letter)
-        width, height = letter
-        
-        # Türkçe karakter desteği için font
-        try:
-            pdfmetrics.registerFont(TTFont('Arial', 'C:/Windows/Fonts/arial.ttf'))
-            c.setFont("Arial", 12)
-        except:
-            c.setFont("Helvetica", 12)
-        
+
+        c = canvas.Canvas(str(target), pagesize=A4)
+        width, height = A4
+        margin_left = 2 * cm
+        margin_right = 2 * cm
+        margin_top = 2.5 * cm
+        margin_bottom = 2 * cm
+        usable_width = width - margin_left - margin_right
+
+        # Türkçe karakter desteği - Arial kullan, yoksa fallback
+        font_name = "Helvetica"
+        font_name_bold = "Helvetica-Bold"
+        for font_path in [
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/Arial.ttf",
+            "C:/Windows/Fonts/calibri.ttf",
+        ]:
+            try:
+                pdfmetrics.registerFont(TTFont("TRFont", font_path))
+                bold_path = font_path.replace("arial", "arialbd").replace("calibri", "calibrib")
+                try:
+                    pdfmetrics.registerFont(TTFont("TRFontBold", bold_path))
+                    font_name_bold = "TRFontBold"
+                except Exception:
+                    font_name_bold = "TRFont"
+                font_name = "TRFont"
+                break
+            except Exception:
+                continue
+
+        def _wrap_text(text: str, font: str, size: int, max_w: float) -> List[str]:
+            """Metni satır genişliğine göre sar."""
+            words = text.split()
+            if not words:
+                return [""]
+            wrapped: List[str] = []
+            current = words[0]
+            for word in words[1:]:
+                test = current + " " + word
+                tw = c.stringWidth(test, font, size)
+                if tw <= max_w:
+                    current = test
+                else:
+                    wrapped.append(current)
+                    current = word
+            wrapped.append(current)
+            return wrapped
+
+        page_count = 1
+        y = height - margin_top
+
+        # Başlık
         if title:
-            c.setFont("Helvetica-Bold", 16)
-            c.drawString(72, height - 72, title)
-            y = height - 100
-        else:
-            y = height - 72
-        
-        c.setFont("Helvetica", 12)
-        lines = content.split('\n')
-        
-        for line in lines:
-            if y < 72:  # Yeni sayfa
-                c.showPage()
-                y = height - 72
-            c.drawString(72, y, line[:80])
-            y -= 14
-        
+            c.setFont(font_name_bold, 16)
+            title_lines = _wrap_text(title, font_name_bold, 16, usable_width)
+            for tl in title_lines:
+                if y < margin_bottom:
+                    c.showPage()
+                    page_count += 1
+                    y = height - margin_top
+                c.setFont(font_name_bold, 16)
+                c.drawString(margin_left, y, tl)
+                y -= 22
+            # Başlık altı boşluk
+            y -= 10
+            # Alt çizgi
+            c.setStrokeColorRGB(0.7, 0.7, 0.7)
+            c.line(margin_left, y + 5, width - margin_right, y + 5)
+            y -= 15
+
+        # İçerik
+        font_size = 11
+        line_height = 15
+        c.setFont(font_name, font_size)
+        paragraphs = content.split('\n')
+
+        for para in paragraphs:
+            para = para.rstrip()
+            if not para:
+                y -= line_height * 0.6
+                if y < margin_bottom:
+                    c.showPage()
+                    page_count += 1
+                    y = height - margin_top
+                    c.setFont(font_name, font_size)
+                continue
+
+            # Markdown-tarzı başlık desteği
+            is_heading = False
+            if para.startswith("### "):
+                c.setFont(font_name_bold, 12)
+                para = para[4:]
+                is_heading = True
+            elif para.startswith("## "):
+                c.setFont(font_name_bold, 13)
+                para = para[3:]
+                is_heading = True
+                y -= 5
+            elif para.startswith("# "):
+                c.setFont(font_name_bold, 14)
+                para = para[2:]
+                is_heading = True
+                y -= 8
+
+            active_font = font_name_bold if is_heading else font_name
+            active_size = 14 if (is_heading and para.startswith("# ")) else (13 if is_heading else font_size)
+
+            wrapped = _wrap_text(para, active_font, active_size, usable_width)
+            for wl in wrapped:
+                if y < margin_bottom:
+                    c.showPage()
+                    page_count += 1
+                    y = height - margin_top
+                    c.setFont(active_font, active_size)
+                c.drawString(margin_left, y, wl)
+                y -= line_height
+
+            if is_heading:
+                y -= 4
+                c.setFont(font_name, font_size)
+
+        # Sayfa numaraları
+        total = page_count
+        for i in range(1, total + 1):
+            if i > 1:
+                # İlk sayfa zaten açık, diğerleri showPage ile oluşturuldu
+                pass
+        # Sayfa numarası ekleme (basit - son sayfaya)
+        c.setFont(font_name, 8)
+        c.drawCentredString(width / 2, margin_bottom - 15,
+                            f"Sayfa {page_count} / {page_count}")
+
         c.save()
-        
+
         return {
             "success": True,
             "path": str(target),
             "title": title,
-            "pages": 1
+            "pages": page_count,
+            "language": "Türkçe"
         }
     except Exception as e:
         return {"error": str(e)}

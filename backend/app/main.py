@@ -11,12 +11,19 @@ from fastapi.responses import FileResponse
 
 from .agent import AgentService
 from .config import settings
+from .database import init_database, migrate_json_sessions, get_tool_stats
 from .memory import SessionStore
 from .models import ChatRequest, ChatResponse, MediaAttachment
 from .tools.audit import run_tools_audit
 
+# Veritabanını başlat
+init_database()
+
 store = SessionStore(settings.sessions_path)
 agent = AgentService(store)
+
+# Mevcut JSON session'ları SQLite'a migrate et (ilk çalıştırmada)
+migrate_json_sessions(settings.sessions_path)
 
 app = FastAPI(title="OpenWorld Local Agent", version="0.1.0")
 app.add_middleware(
@@ -39,6 +46,9 @@ _MEDIA_TYPE_MAP = {
     ".m4a": "audio", ".flac": "audio",
     ".mp4": "video", ".avi": "video", ".mkv": "video",
     ".mov": "video", ".webm": "video",
+    ".pdf": "document", ".docx": "document", ".xlsx": "document",
+    ".pptx": "document", ".zip": "document", ".tar": "document",
+    ".gz": "document",
 }
 
 
@@ -89,6 +99,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 reply += f"\n🎵 [{filename}]({url})\n"
             elif m.type == "video":
                 reply += f"\n🎥 [{filename}]({url})\n"
+            elif m.type == "document":
+                reply += f"\n📄 [{filename}]({url})\n"
 
     return ChatResponse(
         session_id=req.session_id,
