@@ -750,19 +750,53 @@ def tool_activate_window(title_pattern: str) -> Dict[str, Any]:
     """Belirli bir pencereyi one getir."""
     try:
         if platform.system() == "Windows":
-            import win32gui
             import re
-            
-            def callback(hwnd, extra):
-                if win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
+
+            try:
+                import win32gui
+
+                matched: Dict[str, Any] = {"hwnd": None, "title": ""}
+
+                def callback(hwnd, extra):
+                    if matched["hwnd"] is not None:
+                        return
+                    if not win32gui.IsWindowVisible(hwnd):
+                        return
+                    title = win32gui.GetWindowText(hwnd) or ""
+                    if not title:
+                        return
                     if re.search(title_pattern, title, re.IGNORECASE):
-                        win32gui.SetForegroundWindow(hwnd)
-                        return True
-                return False
-            
-            found = win32gui.EnumWindows(callback, None)
-            return {"success": found, "pattern": title_pattern}
+                        matched["hwnd"] = hwnd
+                        matched["title"] = title
+
+                win32gui.EnumWindows(callback, None)
+
+                hwnd = matched.get("hwnd")
+                if hwnd is None:
+                    return {"success": False, "pattern": title_pattern, "error": "Pencere bulunamadi"}
+
+                if win32gui.IsIconic(hwnd):
+                    win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+                win32gui.SetForegroundWindow(hwnd)
+                return {"success": True, "pattern": title_pattern, "title": matched.get("title", "")}
+            except Exception:
+                # pywin32 olmayan ortamlarda pygetwindow fallback'i kullan.
+                import pygetwindow as gw
+
+                windows = gw.getAllWindows()
+                for win in windows:
+                    title = getattr(win, "title", "") or ""
+                    if not title:
+                        continue
+                    if re.search(title_pattern, title, re.IGNORECASE):
+                        try:
+                            if hasattr(win, "isMinimized") and win.isMinimized:
+                                win.restore()
+                            win.activate()
+                            return {"success": True, "pattern": title_pattern, "title": title}
+                        except Exception as exc:
+                            return {"success": False, "pattern": title_pattern, "error": str(exc)}
+                return {"success": False, "pattern": title_pattern, "error": "Pencere bulunamadi"}
         else:
             return {"error": "Bu ozellik su anda sadece Windows'da destekleniyor"}
             

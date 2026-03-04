@@ -245,13 +245,13 @@ class LauncherApp:
                       "relief": "flat", "highlightthickness": 1, "highlightbackground": "#475569",
                       "highlightcolor": ACCENT, "font": ("Segoe UI", 9)}
 
-        # â”€â”€ BaÅŸlÄ±k â”€â”€
+        # --- Baslik ---
         title_bar = tk.Frame(self.root, bg=BG)
         title_bar.pack(fill="x", padx=14, pady=(10, 0))
         tk.Label(title_bar, text="\u25c6 OpenWorld Launcher", fg="#f9fafb", bg=BG,
                  font=("Segoe UI", 13, "bold")).pack(side="left")
 
-        # â”€â”€ KaydÄ±rÄ±labilir alan â”€â”€
+        # --- Kaydirilabilir alan ---
         container = tk.Frame(self.root, bg=BG)
         container.pack(fill="both", expand=True, padx=0, pady=0)
 
@@ -276,7 +276,7 @@ class LauncherApp:
 
         sf = self._scroll_frame  # shorthand
 
-        # â”€â”€ Collapsible section helper â”€â”€
+        # --- Collapsible section helper ---
         def _collapsible(parent, title, expanded=True):
             outer = tk.Frame(parent, bg=BG)
             outer.pack(fill="x", padx=12, pady=(6, 2))
@@ -314,7 +314,7 @@ class LauncherApp:
             inner.columnconfigure(1, weight=1)
             return inner
 
-        # â”€â”€ Field helper with optional hint below entry â”€â”€
+        # --- Field helper with optional hint below entry ---
         def _field(parent, row, label, var, hint="", show=""):
             r = row * 2  # double rows: even=field, odd=hint
             tk.Label(parent, text=label, fg=LABEL_FG, bg=CARD_BG,
@@ -370,37 +370,37 @@ class LauncherApp:
         _field(tg, 0, "Bot Token", self.token_var, show="*")
         _field(tg, 1, "Kullan\u0131c\u0131 ID", self.user_id_var)
 
-        # â•â•â• WEB GÃœVENLÄ°ÄÄ° (Gmail'in Ã¼zerine taÅŸÄ±ndÄ±) â•â•â•
-        sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=False)
-        _field(sec, 0, "\u0130zin Verilen Domainler", self.web_domains_var, hint="Bo\u015f b\u0131rak\u0131rsan\u0131z t\u00fcm internete ula\u015fabilir (Örn: github.com)")
+        # â•â•â• WEB GÃœVENLÄ°ÄÄ° (Gmail'in Ã¼zerine tasindi) â•â•â•
+        sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=True)
+        _field(sec, 0, "\u0130zin Verilen Domainler", self.web_domains_var, hint="Bo\u015f: T\u00fcm internet serbest. K\u0131s\u0131tlamak i\u00e7in: github.com, python.org (https:// eklemeyin)")
         tk.Checkbutton(
             sec,
-            text="\u0130nternete Ba\u011flan (\u0130\u015faretli de\u011filse ajan tamamen \u00c7evrimd\u0131\u015f\u0131/Offline \u00e7al\u0131\u015f\u0131r, hi\u00e7bir a\u011f \u00e7a\u011fr\u0131s\u0131 yapamaz)",
+            text="\u0130nternete Ba\u011flan (\u0130\u015faretli de\u011filse ajan tamamen \u00c7evrimd\u0131\u015f\u0131 / \u0130nternetsiz \u00e7al\u0131\u015f\u0131r)",
             variable=self.web_allow_internet_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9, "bold"),
-        ).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
+        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
 
         tk.Checkbutton(
             sec,
-            text="Yerel A\u011f / Modem Korumas\u0131 (Ajan\u0131n modem aray\u00fcz\u00fcne veya yerel a\u011f cihazlar\u0131na eri\u015fmesini engeller)",
+            text="Yerel A\u011f / Modem Korumas\u0131 (Ajan\u0131n 192.168.x.x gibi yerel cihazlara eri\u015fmesini engeller)",
             variable=self.web_block_private_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9),
-        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+        ).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
 
         tk.Checkbutton(
             sec,
-            text="Shell/Terminal Komut Arac\u0131 (\u0130\u015faretli de\u011filse ajan bilgisayar\u0131nda powershell/cmd komutlar\u0131 \u00e7al\u0131\u015ft\u0131ramaz)",
+            text="Shell/Terminal Komut Arac\u0131 (\u0130\u015faretli de\u011filse ajan powershell/cmd \u00e7al\u0131\u015ft\u0131ramaz)",
             variable=self.enable_shell_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9),
-        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+        ).grid(row=4, column=0, columnspan=2, sticky="w", **pad)
 
-        # â•â•â• GMAIL (varsayÄ±lan kapalÄ±) â•â•â•
+        # â•â•â• GMAIL (varsayilan kapali) â•â•â•
         gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
         _field(gm, 1, "Client Secret", self.gmail_client_secret_var, show="*")
@@ -413,7 +413,7 @@ class LauncherApp:
         self.gmail_conn_label = tk.Label(gm, textvariable=self.gmail_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
         self.gmail_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
-        # â•â•â• OUTLOOK (varsayÄ±lan kapalÄ±) â•â•â•
+        # â•â•â• OUTLOOK (varsayilan kapali) â•â•â•
         ol = _collapsible(sf, "Outlook Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(ol, 0, "Client ID", self.outlook_client_id_var, hint="Application (client) ID GUID")
         _field(ol, 1, "Tenant ID", self.outlook_tenant_var, hint="common|organizations|consumers|tenant GUID")

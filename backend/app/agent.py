@@ -67,6 +67,7 @@ class AgentService:
         self._session_running_tasks: Dict[str, asyncio.Task] = {}
         self._session_locks_guard = asyncio.Lock()
         self._known_tool_names = self._extract_tool_names()
+        self._vscode_extension_presence_cache: Dict[str, bool] = {}
 
     async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
         lock = await self._get_session_lock(session_id)
@@ -258,6 +259,13 @@ class AgentService:
             messages.append(ChatMessage(role="assistant", content=list_reply))
             self.store.save(session_id, messages)
             return list_reply, 1, list_tools, []
+
+        vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(user_message)
+        if vscode_chat_reply:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=vscode_chat_reply))
+            self.store.save(session_id, messages)
+            return vscode_chat_reply, 1, vscode_chat_tools, []
 
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
@@ -975,10 +983,10 @@ class AgentService:
             # USB - Liste goruntuleme
             "list_usb_devices",
             
-            # Fare - Pozisyon sorgulama (hareket hariÃ§)
+            # Fare - Pozisyon sorgulama (hareket haric)
             "mouse_position",
             
-            # Pencere - Liste gÃ¶rÃ¼ntÃ¼leme
+            # Pencere - Liste goruntuleme
             "get_window_list",
         }
         return tool_name in fast_tools
@@ -1056,8 +1064,8 @@ class AgentService:
                 arguments=args,
             )
 
-        # EKRAN GÃ–RÃœNTÃœSÃœ ALMA - Fallback kurallarÄ±
-        # NOT: "masaustu" tek baÅŸÄ±na tetiklemez â€“ "masaÃ¼stÃ¼nde X'i aÃ§" automation, screenshot deÄŸil
+        # EKRAN GORUNTUSU ALMA - Fallback kurallari
+        # NOT: "masaustu" tek basina tetiklemez - "masaustunde X'i ac" automation, screenshot degil
         screenshot_keywords = {"ekran goruntusu", "screenshot", "anlik goruntu", "fotograf cek"}
         screenshot_actions = {"al", "cek", "gonder", "kaydet", "goster"}
         automation_overrides = {"ac", "yaz", "bul", "tikla", "git", "gir"}
@@ -1065,7 +1073,7 @@ class AgentService:
         if "screenshot_desktop" in self._known_tool_names and any(
             k in normalized for k in screenshot_keywords | {"desktop", "masaustu"}
         ) and any(k in normalized for k in screenshot_actions):
-            # "masaÃ¼stÃ¼nde X'i aÃ§" gibi ifadelerde screenshot'a deÄŸil, automasyona yÃ¶nlendir
+            # "masaustunde X'i ac" gibi ifadelerde screenshot'a degil, automasyona yonlendir
             is_desktop_only = not any(k in normalized for k in screenshot_keywords)
             has_automation_intent = any(k in normalized for k in automation_overrides)
             if not (is_desktop_only and has_automation_intent):
@@ -1109,13 +1117,13 @@ class AgentService:
             except:
                 pass
 
-        # KapsamlÄ± gÃ¶rev algÄ±lama -> notebook_create Ã¶ner
+        # Kapsamli gorev algilama -> notebook_create oner
         if "notebook_create" in self._known_tool_names and any(
             k in normalized for k in ("kapsamli", "detayli", "adim adim", "parcala", "tum", "karsilastir")
         ) and any(
             k in normalized for k in ("arastir", "analiz", "rapor", "incele", "haber", "research")
         ):
-            # Not defteri adÄ± oluÅŸtur
+            # Not defteri adi olustur
             topic_words = [w for w in text.split()[:5] if len(w) > 2]
             nb_name = "_".join(topic_words[:3]) or "arastirma"
             return ParsedTextToolCall(
@@ -1162,7 +1170,7 @@ class AgentService:
                 arguments={"query": text},
             )
         
-        # WEBCAM FOTOÄRAF Ã‡EKME - GeliÅŸtirilmiÅŸ pattern matching
+        # WEBCAM FOTOGRAF CEKME - Gelistirilmis pattern matching
         if "webcam_capture" in self._known_tool_names and any(
             k in normalized for k in ("webcam", "kamera", "fotograf cek", "fotograf cek", "selfie", 
                                       "anlik foto", "kamerani ac", "cam ac", "beni goster")
@@ -1774,7 +1782,7 @@ class AgentService:
 
         title_blob = " ".join(source_rows).lower()
         signal_lines: List[str] = []
-        if any(k in title_blob for k in ("petrol", "enerji", "hormuz", "boğaz", "bogaz", "gaz", "arz")):
+        if any(k in title_blob for k in ("petrol", "enerji", "hormuz", "bogaz", "gaz", "arz")):
             signal_lines.append("- Enerji akisi ve lojistik hatlara dair haber yogunlugu yuksek; fiyat oynakligi kanali guclu.")
         if any(k in title_blob for k in ("ateskes", "muzakere", "diplomasi", "gorusme", "anlasma")):
             signal_lines.append("- Diplomasi/ateskes basliklari kisa vadede risk primini yumusatabilecek bir kanal olusturuyor.")
@@ -2237,6 +2245,212 @@ class AgentService:
             rf"\b(?:kullanma|kullanmadan|olmadan|haric|disinda|except|without)\s+\b{re.escape(tool_norm)}\b",
         )
         return any(re.search(pattern, normalized) for pattern in negative_patterns)
+
+    @staticmethod
+    def _detect_vscode_agent_targets(normalized: str) -> List[str]:
+        targets: List[str] = []
+        if re.search(r"\b(?:kimicode|kimi\s*code)\b", normalized):
+            targets.append("kimicode")
+        if re.search(r"\bcodex\b", normalized):
+            targets.append("codex")
+        if re.search(r"\b(?:claudecode|claude\s*code)\b", normalized):
+            targets.append("claudecode")
+        return list(dict.fromkeys(targets))
+
+    @staticmethod
+    def _vscode_extension_roots() -> List[Path]:
+        home = Path.home()
+        return [
+            home / ".vscode" / "extensions",
+            home / ".vscode-insiders" / "extensions",
+        ]
+
+    def _is_vscode_extension_installed(self, prefixes: List[str], cache_key: str) -> bool:
+        if cache_key in self._vscode_extension_presence_cache:
+            return self._vscode_extension_presence_cache[cache_key]
+
+        lowered_prefixes = tuple((p or "").strip().lower() for p in prefixes if p)
+        if not lowered_prefixes:
+            self._vscode_extension_presence_cache[cache_key] = False
+            return False
+
+        found = False
+        for root in self._vscode_extension_roots():
+            if not root.exists():
+                continue
+            try:
+                for child in root.iterdir():
+                    if not child.is_dir():
+                        continue
+                    name = child.name.lower()
+                    if any(name.startswith(prefix) for prefix in lowered_prefixes):
+                        found = True
+                        break
+            except Exception:
+                continue
+            if found:
+                break
+
+        self._vscode_extension_presence_cache[cache_key] = found
+        return found
+
+    @staticmethod
+    def _extract_vscode_agent_write_request(user_message: str) -> Optional[Dict[str, Any]]:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        targets = AgentService._detect_vscode_agent_targets(normalized)
+
+        has_vscode_hint = any(
+            k in normalized for k in ("vscode", "vs code", "visual studio code", "code ile")
+        ) or bool(targets)
+        has_open_intent = any(k in normalized for k in ("ac", "open", "baslat", "calistir"))
+        has_session_intent = any(
+            k in normalized for k in ("session", "oturum", "conversation", "thread", "sohbet")
+        )
+
+        if not has_vscode_hint or not has_open_intent or not has_session_intent:
+            return None
+        if "yaz" not in normalized:
+            return None
+        if not targets:
+            return None
+        if len(targets) > 1:
+            return {"error": "ambiguous_target", "targets": targets}
+
+        target = targets[0]
+
+        path = ".."
+        if any(k in normalized for k in ("masaustu", "desktop")):
+            path = "desktop"
+        if any(k in normalized for k in ("openworld", "proje", "project")):
+            path = ".."
+
+        write_markers = (
+            r"(?is)(?:sunu|su metni|mesaji|promptu)\s+yaz\s*[:\-]?\s*(.+)$",
+            r"(?is)ona\s+sunu\s+yaz\s*[:\-]?\s*(.+)$",
+            r"(?is)metin\s*[:\-]\s*(.+)$",
+        )
+
+        prompt_text = ""
+        for pattern in write_markers:
+            m = re.search(pattern, user_message, flags=re.IGNORECASE)
+            if m:
+                prompt_text = m.group(1).strip()
+                break
+
+        quoted = re.findall(r'"([^"]{4,4000})"', user_message, flags=re.DOTALL)
+        if quoted:
+            candidate = max(quoted, key=len).strip()
+            if len(candidate) >= len(prompt_text):
+                prompt_text = candidate
+
+        prompt_text = prompt_text.strip().strip("'").strip('"').strip()
+        if not prompt_text:
+            return None
+
+        return {"target": target, "path": path, "prompt": prompt_text}
+
+    def _try_fast_vscode_agent_chat_write(self, user_message: str) -> Tuple[str, List[str]]:
+        request = self._extract_vscode_agent_write_request(user_message)
+        if not request:
+            return "", []
+
+        if request.get("error") == "ambiguous_target":
+            targets = request.get("targets", [])
+            options = ", ".join(str(t) for t in targets) if targets else "kimicode/codex/claudecode"
+            return (
+                f"Hedef asistan belirsiz ({options}). Lutfen sadece birini secin ve tekrar yazin.",
+                [],
+            )
+
+        required_tools = {"open_in_vscode", "activate_window", "hotkey", "type_text", "press_key"}
+        if not required_tools.issubset(self._known_tool_names):
+            return (
+                "Bu islem icin gereken otomasyon araclari eksik: "
+                "open_in_vscode, activate_window, hotkey, type_text, press_key."
+            ), []
+
+        target = str(request["target"])
+        path = str(request["path"])
+        prompt = str(request["prompt"])
+        tools_used: List[str] = []
+
+        target_extensions = {
+            "kimicode": ["moonshot-ai.kimi-code-"],
+            "codex": ["openai.chatgpt-"],
+            "claudecode": ["anthropic.claude-code-", "andrepimenta.claude-code-chat-"],
+        }
+        extension_ok = self._is_vscode_extension_installed(
+            target_extensions.get(target, []),
+            cache_key=f"ext:{target}",
+        )
+        if not extension_ok:
+            return (
+                f"Hata: `{target}` icin VS Code eklentisi bulunamadi. "
+                "Yanlis komut acilip web/Copilot'a kaymamak icin otomasyon durduruldu."
+            ), []
+
+        target_command_sequences = {
+            "kimicode": [
+                "Kimi Code: Open in Side Panel",
+                "Kimi Code: New Conversation",
+                "Kimi Code: Focus Input",
+            ],
+            "codex": [
+                "New Codex Agent",
+            ],
+            "claudecode": [
+                "Claude Code: Open in Side Bar",
+                "Claude Code: New Conversation",
+                "Claude Code: Focus input",
+            ],
+        }
+        command_sequence = target_command_sequences.get(target, [])
+        if not command_sequence:
+            return f"Hata: `{target}` icin komut akisi tanimli degil.", []
+
+        def _run_gui_tool(name: str, args: Dict[str, Any], *, require_success: bool = True) -> Dict[str, Any]:
+            result = execute_tool(name, args)
+            if name not in tools_used:
+                tools_used.append(name)
+            if isinstance(result, dict):
+                if result.get("error"):
+                    raise RuntimeError(str(result.get("error")))
+                if require_success and "success" in result and result.get("success") is False:
+                    raise RuntimeError(f"{name} basarisiz")
+            return result if isinstance(result, dict) else {}
+
+        try:
+            _run_gui_tool("open_in_vscode", {"path": path})
+            time.sleep(0.9)
+
+            _run_gui_tool(
+                "activate_window",
+                {"title_pattern": "Visual Studio Code|Code - Insiders"},
+                require_success=True,
+            )
+            time.sleep(0.2)
+
+            _run_gui_tool("press_key", {"key": "esc"}, require_success=False)
+            time.sleep(0.08)
+
+            for command_text in command_sequence:
+                _run_gui_tool("hotkey", {"keys_list": ["ctrl", "shift", "p"]})
+                time.sleep(0.22)
+                _run_gui_tool("type_text", {"text": command_text, "interval": 0.004})
+                _run_gui_tool("press_key", {"key": "enter"})
+                time.sleep(0.45)
+
+            safe_prompt = prompt[:3500]
+            _run_gui_tool("type_text", {"text": safe_prompt, "interval": 0.0035})
+            _run_gui_tool("press_key", {"key": "enter"})
+        except RuntimeError as exc:
+            return f"Hata: {exc}", list(dict.fromkeys(tools_used))
+
+        tools_used = list(dict.fromkeys(tools_used))
+        return (
+            f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi.",
+            tools_used,
+        )
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:
         """Ses kaydi icin fast mode handler - start, bekle, stop yapar."""
