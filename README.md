@@ -443,7 +443,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 💻 9. KOD ve PROJE ANALİZİ (Git Dahil)
+### 💻 9. KOD ve PROJE ANALİZİ (Git + Uzaktan AI Kodlama)
 
 **Git İşlemleri:**
 ```
@@ -473,14 +473,52 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "pytest ile testleri koş"
 ```
 
+#### 🚀 Uzaktan AI Kodlama (Remote AI Coding)
+
+OpenWorld'ün en güçlü özelliklerinden biri: **dışarıdayken bile bilgisayarınızdaki VS Code'u açıp, AI kod asistanlarını (KimiCode, Claude Code, Codex, Copilot) uzaktan komutlandırabilirsiniz.**
+
+**Nasıl Çalışır?**
+
+Telegram'dan tek bir mesajla:
+1. VS Code belirttiğiniz proje klasörüyle açılır
+2. Seçtiğiniz AI extension'ın chat paneli otomatik açılır
+3. Mesajınız (Türkçe dahil) yazılır ve gönderilir
+4. Ekran görüntüsü ile sonucu takip edersiniz
+
+**Desteklenen AI Extension'lar:**
+
+| Extension | Kısayol | Kullanım |
+|-----------|---------|----------|
+| **KimiCode** | `Ctrl+Shift+K` | `extension="kimicode"` |
+| **GitHub Copilot** | `Ctrl+Shift+I` | `extension="copilot"` |
+| **Claude Code** | Command Palette | `extension="claudecode"` |
+| **Codex** | Command Palette | `extension="codex"` |
+
+**Kullanım Örnekleri (Telegram'dan):**
+```
+"OpenWorld klasörünü VS Code ile aç, KimiCode'a 'auth modülünü refactor et' yaz"
+"Projeyi VS Code'da aç, Claude Code'a 'bug var, login çalışmıyor' sor"
+"Masaüstündeki projeyi VS Code ile aç, Codex'e 'testleri çalıştır ve düzelt' de"
+```
+
+**Tam Uzaktan Kontrol Akışı:**
+```
+1. Telegram: "VS Code'da projeyi aç, KimiCode'a 'API endpoint ekle' yaz"
+2. Ajan: VS Code'u açar → KimiCode panelini açar → mesajı yazar
+3. Telegram: "Ekran görüntüsü al" → Sonucu görürsünüz
+4. Telegram: "Devam et, şimdi test yaz" → Yeni talimat gönderir
+```
+
+> **Not:** AI extension'lar ilk açılışta 30-40 saniye başlatma süresi olabilir. Sonraki kullanımlarda ~8 saniyede hazır olur.
+
 **Araçlar:**
 - `git_status`, `git_diff`, `git_log`, `git_commit`, `git_branch`
 - `find_symbols` - Sembol bul
 - `code_search` - Kodda ara
 - `refactor_rename` - Refactor
 - `run_tests` - Test çalıştır
-- `vscode_command` - VS Code komutu
-- `claude_code_ask` - Claude Code entegrasyonu
+- `vscode_command` - VS Code komutu (dosya aç, terminal, diff, **AI extension chat**)
+- `claude_code_ask` - Claude Code CLI entegrasyonu
 - `analyze_code` - Kod analizi
 - `find_code_patterns` - Pattern ara
 - `analyze_project_code` - Proje analizi

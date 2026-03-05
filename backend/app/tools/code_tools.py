@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -538,6 +539,23 @@ def tool_run_tests(path: str = ".", command: str = "", timeout: int = 120) -> Di
 # =============================================================================
 
 
+def _find_code_executable() -> str:
+    """VS Code executable'ini bul (PATH veya standart kurulum yolları)."""
+    code_cmd = shutil.which("code") or shutil.which("code-insiders")
+    if code_cmd:
+        return code_cmd
+    candidates = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code", "Code.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
+        os.path.join(os.environ.get("ProgramFiles", ""), "Microsoft VS Code", "Code.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Microsoft VS Code", "Code.exe"),
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+    return ""
+
+
 def tool_vscode_command(
     path: str,
     command: str = "",
@@ -556,10 +574,13 @@ def tool_vscode_command(
     """
     cwd = _resolve_project_path(path)
     p = Path(cwd)
+    code_exe = _find_code_executable()
+    if not code_exe:
+        return {"error": "VS Code bulunamadi. Kurulumu veya PATH ayarini kontrol edin."}
 
     try:
         if action == "open":
-            cmd = ["code"]
+            cmd = [code_exe]
             if goto_line > 0 and p.is_file():
                 cmd.extend(["--goto", f"{cwd}:{goto_line}"])
             else:
@@ -577,7 +598,7 @@ def tool_vscode_command(
                 return {"error": "Terminal action icin 'command' parametresi gerekli."}
             # VS Code entegre terminal'de komut çalıştır
             # --command sendSequence ile terminal'e yazı gönder
-            subprocess.Popen(["code", cwd], shell=False)
+            subprocess.Popen([code_exe, cwd], shell=False)
             # Kısa bekleme sonra terminal komutu
             import time
             time.sleep(1)
@@ -603,7 +624,7 @@ def tool_vscode_command(
             # İki dosya arasında diff
             if not command.strip():
                 return {"error": "Diff action icin ikinci dosya yolunu 'command' parametresinde belirt."}
-            subprocess.Popen(["code", "--diff", cwd, command.strip()], shell=False)
+            subprocess.Popen([code_exe, "--diff", cwd, command.strip()], shell=False)
             return {
                 "success": True,
                 "action": "diff",
@@ -634,8 +655,8 @@ def tool_vscode_command(
             info = ext_shortcuts[ext]
 
             # 1) VS Code'u ac
-            subprocess.Popen(["code", cwd], shell=False)
-            time.sleep(2.5)
+            subprocess.Popen([code_exe, cwd], shell=False)
+            time.sleep(3)
 
             # 2) VS Code'u on plana getir
             try:
@@ -668,21 +689,23 @@ def tool_vscode_command(
             if "palette_cmd" in info:
                 # Command palette ile ac
                 pyautogui.hotkey(*info["keys"])
-                time.sleep(0.8)
-                # Palette'e komutu yaz
+                time.sleep(1)
                 _type_unicode(info["palette_cmd"])
                 time.sleep(0.5)
                 pyautogui.press("enter")
-                time.sleep(1.5)
+                time.sleep(10)  # Extension ilk yuklenmesi uzun surebilir
             else:
                 # Direkt shortcut ile ac
                 pyautogui.hotkey(*info["keys"])
-                time.sleep(1.5)
+                time.sleep(8)  # Extension paneli acilana kadar bekle
 
-            # 4) Mesaj yaz
+            # 4) Mesaj yaz - input alanina tikla ve yaz
             if command.strip():
-                _type_unicode(command.strip())
+                # Input alanina odaklanmak icin kisa bir tab/click denemesi
+                pyautogui.press("tab")
                 time.sleep(0.3)
+                _type_unicode(command.strip())
+                time.sleep(0.5)
                 pyautogui.press("enter")
 
             return {

@@ -1158,10 +1158,10 @@ class AgentService:
             if any(k in normalized for k in ("masaustu", "desktop")):
                 path = "desktop"
 
-            if any(k in normalized for k in ("openworld", "kimicode", "codex", "kodex", "proje", "project")):
+            if any(k in normalized for k in ("openworld", "proje", "project")):
                 path = ".."
 
-            quoted = re.search(r'["\']([^"\']{1,260})["\']', text)
+            quoted = re.search(r'["\'"]([^"\']{1,260})["\'"]', text)
             if quoted:
                 candidate = quoted.group(1).strip()
                 if candidate:
@@ -1170,6 +1170,36 @@ class AgentService:
             if re.search(r"\bopenworld\b", normalized):
                 path = ".."
 
+            # AI Extension chat intent kontrolu
+            _ai_ext_map = {
+                "kimicode": "kimicode", "kimi code": "kimicode", "kimi": "kimicode",
+                "copilot": "copilot",
+                "claude code": "claudecode", "claudecode": "claudecode",
+                "codex": "codex",
+            }
+            detected_ext = ""
+            for kw, ext_name in _ai_ext_map.items():
+                if kw in normalized:
+                    detected_ext = ext_name
+                    break
+
+            # Chat intent: "yaz", "sor", "gonder", "mesaj" gibi kelimeler
+            has_chat_intent = any(k in normalized for k in ("yaz", "sor", "gonder", "mesaj", "session", "sohbet"))
+
+            if detected_ext and has_chat_intent and "vscode_command" in self._known_tool_names:
+                # Mesaji cikar: tirnak icindeki metin veya AI extension'dan sonraki kisim
+                chat_msg = ""
+                # Tirnak icindeki mesaji bul
+                msg_match = re.search(r"['\u2018\u2019\u201c\u201d\"](.*?)['\u2018\u2019\u201c\u201d\"]", text)
+                if msg_match:
+                    chat_msg = msg_match.group(1).strip()
+                return ParsedTextToolCall(
+                    id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                    name="vscode_command",
+                    arguments={"path": path, "action": "chat", "extension": detected_ext, "command": chat_msg},
+                )
+
+            # Sadece VS Code ac (AI extension intent yok)
             return ParsedTextToolCall(
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
                 name="open_in_vscode",
