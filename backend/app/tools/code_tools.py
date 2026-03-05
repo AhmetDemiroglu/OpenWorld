@@ -567,7 +567,7 @@ def tool_vscode_command(
 
     Args:
         path: Dosya veya klasör yolu
-        command: Terminal komutu (action=terminal), diff dosyası, veya chat mesajı (action=chat)
+        command: Terminal komutu (action=terminal), diff dosyası, veya chat mesajı (action=chat). EGER action=chat ise, BURAYA SADECE KULLANICININ İLETTİĞİ MESAJI YAZIN. Örneğin kullanıcı "KimiCode'a 'Merhaba Dünya' yaz" derse command parametresi sadece "Merhaba Dünya" olmalıdır. Aksi takdirde AI yanlış mesajı yazar!
         goto_line: Belirli satıra git (opsiyonel)
         action: open (dosya aç), terminal (komut çalıştır), diff (diff görüntüle), chat (AI extension'a mesaj gönder)
         extension: AI extension adı (action=chat için): kimicode, copilot, claudecode, codex
