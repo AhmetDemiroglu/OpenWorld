@@ -15,6 +15,7 @@ import tempfile
 import time
 import socket
 import ipaddress
+import unicodedata
 import usb.core
 import usb.util
 from datetime import datetime
@@ -35,6 +36,44 @@ _WORKSPACE_ROOT = settings.workspace_path.resolve()
 _VIRTUAL_DESKTOP = (_WORKSPACE_ROOT / "desktop").resolve()
 _USER_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\[^\\]+\\desktop(?:\\(?P<tail>.*))?$", re.IGNORECASE)
 _PUBLIC_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\public\\desktop(?:\\(?P<tail>.*))?$", re.IGNORECASE)
+
+_TR_TRANSLATION = str.maketrans({
+    "ç": "c",
+    "ğ": "g",
+    "ı": "i",
+    "ö": "o",
+    "ş": "s",
+    "ü": "u",
+    "Ç": "c",
+    "Ğ": "g",
+    "İ": "i",
+    "Ö": "o",
+    "Ş": "s",
+    "Ü": "u",
+})
+
+_DEFAULT_APPROVAL_CONTEXT_TERMS = {
+    "permission", "permissions", "approve", "allow", "authorize", "access",
+    "trust", "secure", "safety", "agent", "extension", "run", "execute",
+    "onay", "izin", "guven", "yetki", "erisim", "calistir",
+}
+
+_DEFAULT_APPROVAL_BUTTON_TERMS = {
+    "approve", "allow", "accept", "authorize", "grant", "continue", "yes", "ok",
+    "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
+    "run", "proceed",
+}
+
+_DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
+    "allow access",
+    "run anyway",
+    "allow anyway",
+    "yes continue",
+    "izin ver",
+    "kabul et",
+    "devam et",
+    "onay ver",
+}
 
 
 def _map_desktop_tail_to_workspace(tail: str) -> Optional[Path]:
@@ -872,6 +911,240 @@ def tool_shutdown_system(action: str = "shutdown", timeout: int = 60) -> Dict[st
             
     except Exception as e:
         return {"error": str(e)}
+
+
+# =============================================================================
+# IDE ONAY BEKLEME VE KABUL
+# =============================================================================
+
+def _normalize_for_ocr_match(text: str) -> str:
+    normalized = (text or "").translate(_TR_TRANSLATION).lower()
+    normalized = unicodedata.normalize("NFKD", normalized)
+    normalized = "".join(ch for ch in normalized if ch.isalnum() or ch.isspace())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _get_window_region(title_pattern: str) -> Optional[Tuple[int, int, int, int]]:
+    if platform.system() != "Windows" or not title_pattern:
+        return None
+    try:
+        import win32gui
+
+        matched: Dict[str, Tuple[int, int, int, int]] = {}
+
+        def callback(hwnd, _):
+            if matched:
+                return
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd) or ""
+            if not title:
+                return
+            if not re.search(title_pattern, title, re.IGNORECASE):
+                return
+            rect = win32gui.GetWindowRect(hwnd)
+            left, top, right, bottom = rect
+            width = max(1, right - left)
+            height = max(1, bottom - top)
+            if width < 200 or height < 120:
+                return
+            matched["region"] = (max(0, left), max(0, top), width, height)
+
+        win32gui.EnumWindows(callback, None)
+        return matched.get("region")
+    except Exception:
+        return None
+
+
+def tool_wait_and_accept_approval(
+    window_pattern: str = "Visual Studio Code|Code - Insiders",
+    timeout: int = 25,
+    interval: float = 0.8,
+    min_confidence: float = 40.0,
+    lang: str = "tur+eng",
+    allow_keyboard_fallback: bool = False,
+) -> Dict[str, Any]:
+    """Bekleyen IDE onay penceresini OCR ile bulup kabul etmeye calis."""
+    try:
+        import pytesseract
+        from pytesseract import Output
+    except Exception as exc:
+        if allow_keyboard_fallback:
+            try:
+                if window_pattern:
+                    activation = tool_activate_window(window_pattern)
+                    if isinstance(activation, dict) and not activation.get("success"):
+                        return {
+                            "success": False,
+                            "window_pattern": window_pattern,
+                            "method": "keyboard_fallback",
+                            "note": "OCR yok; fallback denemesi yapilmadi cunku hedef pencere bulunamadi.",
+                        }
+                pyautogui.hotkey("alt", "y")
+                time.sleep(0.1)
+                pyautogui.press("enter")
+                return {
+                    "success": True,
+                    "window_pattern": window_pattern,
+                    "method": "keyboard_fallback",
+                    "note": "OCR yoktu, Alt+Y + Enter denendi.",
+                }
+            except Exception as fallback_exc:
+                return {"error": str(fallback_exc)}
+        return {
+            "error": str(exc),
+            "note": "pytesseract kurulu olmadan onay otomasyonu calismaz.",
+        }
+
+    timeout = max(2, min(int(timeout), 180))
+    interval = max(0.25, min(float(interval), 3.0))
+    min_confidence = max(0.0, min(float(min_confidence), 100.0))
+
+    context_terms = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_CONTEXT_TERMS}
+    button_terms_single = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS}
+    button_terms_multi = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI}
+
+    end_time = time.time() + timeout
+    checks = 0
+    last_blob = ""
+    region = None
+
+    while time.time() < end_time:
+        checks += 1
+
+        if window_pattern:
+            tool_activate_window(window_pattern)
+            region = _get_window_region(window_pattern)
+
+        screenshot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+        try:
+            data = pytesseract.image_to_data(screenshot, lang=lang, output_type=Output.DICT)
+        except Exception as exc:
+            if allow_keyboard_fallback:
+                try:
+                    if window_pattern:
+                        activation = tool_activate_window(window_pattern)
+                        if isinstance(activation, dict) and not activation.get("success"):
+                            return {
+                                "success": False,
+                                "checks": checks,
+                                "window_pattern": window_pattern,
+                                "method": "keyboard_fallback",
+                                "note": "OCR calismadi; fallback denemesi yapilmadi cunku hedef pencere bulunamadi.",
+                            }
+                    pyautogui.hotkey("alt", "y")
+                    time.sleep(0.1)
+                    pyautogui.press("enter")
+                    return {
+                        "success": True,
+                        "checks": checks,
+                        "window_pattern": window_pattern,
+                        "method": "keyboard_fallback",
+                        "note": "OCR calismadigi icin klavye fallback denendi.",
+                    }
+                except Exception as fallback_exc:
+                    return {"error": str(fallback_exc)}
+            return {
+                "error": str(exc),
+                "note": "Tesseract OCR bulunamadi veya calismiyor. Onay otomasyonu devre disi.",
+            }
+
+        words: List[Dict[str, Any]] = []
+        blob_parts: List[str] = []
+        count = len(data.get("text", []))
+        for i in range(count):
+            raw = str(data["text"][i] or "").strip()
+            if not raw:
+                continue
+            norm = _normalize_for_ocr_match(raw)
+            if not norm:
+                continue
+            try:
+                conf = float(data["conf"][i])
+            except Exception:
+                conf = -1.0
+            if conf < min_confidence:
+                continue
+            words.append(
+                {
+                    "norm": norm,
+                    "raw": raw,
+                    "left": int(data["left"][i]),
+                    "top": int(data["top"][i]),
+                    "width": int(data["width"][i]),
+                    "height": int(data["height"][i]),
+                    "conf": conf,
+                }
+            )
+            blob_parts.append(norm)
+
+        blob = " ".join(blob_parts)
+        last_blob = blob[:500]
+        has_context = any(term in blob for term in context_terms)
+        if not words:
+            time.sleep(interval)
+            continue
+
+        candidates: List[Dict[str, Any]] = []
+        for i, current in enumerate(words):
+            token = current["norm"]
+            if token in button_terms_single:
+                candidates.append(current)
+
+            if i + 1 < len(words):
+                pair = f"{token} {words[i + 1]['norm']}"
+                if pair in button_terms_multi:
+                    left = min(current["left"], words[i + 1]["left"])
+                    top = min(current["top"], words[i + 1]["top"])
+                    right = max(current["left"] + current["width"], words[i + 1]["left"] + words[i + 1]["width"])
+                    bottom = max(current["top"] + current["height"], words[i + 1]["top"] + words[i + 1]["height"])
+                    candidates.append(
+                        {
+                            "norm": pair,
+                            "raw": f"{current['raw']} {words[i + 1]['raw']}",
+                            "left": left,
+                            "top": top,
+                            "width": max(1, right - left),
+                            "height": max(1, bottom - top),
+                            "conf": min(current["conf"], words[i + 1]["conf"]),
+                        }
+                    )
+
+        if has_context and candidates:
+            # Dialog buttons generally appear in the lower-right area.
+            best = sorted(
+                candidates,
+                key=lambda c: (c["top"], c["left"], c["conf"]),
+                reverse=True,
+            )[0]
+
+            click_x = int(best["left"] + (best["width"] / 2))
+            click_y = int(best["top"] + (best["height"] / 2))
+            if region:
+                click_x += int(region[0])
+                click_y += int(region[1])
+
+            pyautogui.click(click_x, click_y)
+            return {
+                "success": True,
+                "checks": checks,
+                "window_pattern": window_pattern,
+                "clicked_text": best["raw"],
+                "x": click_x,
+                "y": click_y,
+                "method": "ocr_click",
+            }
+
+        time.sleep(interval)
+
+    return {
+        "success": False,
+        "checks": checks,
+        "window_pattern": window_pattern,
+        "message": "Onay penceresi tespit edilmedi.",
+        "last_seen_text": last_blob,
+    }
 
 
 # =============================================================================

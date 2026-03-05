@@ -141,6 +141,10 @@ class AgentService:
         normalized = self._normalize_text_for_match(user_message)
         if any(k in normalized for k in ("screenshot", "ekran goruntusu", "webcam", "kamera", "ses kaydi")):
             return 25.0
+        if any(k in normalized for k in ("vscode", "vs code", "kimicode", "kimi code", "codex", "claude code", "claudecode")) and any(
+            k in normalized for k in ("yaz", "session", "oturum", "onay", "kabul", "izin", "approve", "allow")
+        ):
+            return 95.0
         if self._is_resume_like_request(user_message):
             return 60.0
         if any(k in normalized for k in ("arastir", "detayli", "analiz", "rapor")):
@@ -266,6 +270,13 @@ class AgentService:
             messages.append(ChatMessage(role="assistant", content=vscode_chat_reply))
             self.store.save(session_id, messages)
             return vscode_chat_reply, 1, vscode_chat_tools, []
+
+        ide_approval_reply, ide_approval_tools = self._try_fast_ide_approval_unblock(user_message)
+        if ide_approval_reply:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=ide_approval_reply))
+            self.store.save(session_id, messages)
+            return ide_approval_reply, 1, ide_approval_tools, []
 
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
@@ -2392,6 +2403,51 @@ class AgentService:
 
         return {"target": target, "path": path, "prompt": prompt_text}
 
+    @staticmethod
+    def _is_ide_approval_help_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        ide_markers = ("vscode", "vs code", "visual studio code", "kimicode", "kimi code", "codex", "claude code", "claudecode")
+        approval_markers = ("onay", "kabul", "izin", "approve", "allow", "accept", "authorize")
+        action_markers = ("ver", "et", "click", "tikla", "kabul et", "onayla", "izin ver")
+        return any(k in normalized for k in ide_markers) and any(k in normalized for k in approval_markers) and any(k in normalized for k in action_markers)
+
+    @staticmethod
+    def _watch_and_accept_ide_prompt(timeout: int = 25, allow_keyboard_fallback: bool = False) -> Dict[str, Any]:
+        try:
+            from .tools.super_agent import tool_wait_and_accept_approval
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        try:
+            return tool_wait_and_accept_approval(
+                window_pattern="Visual Studio Code|Code - Insiders",
+                timeout=max(5, min(int(timeout), 90)),
+                interval=0.8,
+                min_confidence=40.0,
+                lang="tur+eng",
+                allow_keyboard_fallback=bool(allow_keyboard_fallback),
+            )
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _try_fast_ide_approval_unblock(self, user_message: str) -> Tuple[str, List[str]]:
+        if not self._is_ide_approval_help_request(user_message):
+            return "", []
+
+        result = self._watch_and_accept_ide_prompt(timeout=35, allow_keyboard_fallback=True)
+        if result.get("error"):
+            return f"Hata: IDE onay kontrolu basarisiz: {result['error']}", []
+        if result.get("success"):
+            return (
+                "Onay penceresi bulundu ve kabul edildi. Islem devam edebilir.",
+                ["wait_and_accept_approval"],
+            )
+        return (
+            "Su an gorunen bir IDE onay penceresi tespit edilemedi. "
+            "Isterseniz tekrar denemem icin \"vscode onay penceresini kabul et\" yazin.",
+            ["wait_and_accept_approval"],
+        )
+
     def _try_fast_vscode_agent_chat_write(self, user_message: str) -> Tuple[str, List[str]]:
         request = self._extract_vscode_agent_write_request(user_message)
         if not request:
@@ -2489,11 +2545,15 @@ class AgentService:
         except RuntimeError as exc:
             return f"Hata: {exc}", list(dict.fromkeys(tools_used))
 
+        approval_result = self._watch_and_accept_ide_prompt(timeout=30, allow_keyboard_fallback=False)
+        if approval_result.get("success"):
+            tools_used.append("wait_and_accept_approval")
+
         tools_used = list(dict.fromkeys(tools_used))
-        return (
-            f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi.",
-            tools_used,
-        )
+        reply = f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi."
+        if approval_result.get("success"):
+            reply += "\nNot: IDE onay penceresi otomatik tespit edilip kabul edildi."
+        return (reply, tools_used)
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:
         """Ses kaydi icin fast mode handler - start, bekle, stop yapar."""

@@ -489,7 +489,7 @@ Telegram'dan tek bir mesajla:
 
 | Extension | Kısayol | Kullanım |
 |-----------|---------|----------|
-| **KimiCode** | `Ctrl+Shift+K` | `extension="kimicode"` |
+| **KimiCode** | Command Palette | `extension="kimicode"` |
 | **GitHub Copilot** | `Ctrl+Shift+I` | `extension="copilot"` |
 | **Claude Code** | Command Palette | `extension="claudecode"` |
 | **Codex** | Command Palette | `extension="codex"` |

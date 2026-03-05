@@ -634,6 +634,7 @@ def tool_vscode_command(
 
         elif action == "chat":
             import time
+            import threading
             try:
                 import pyautogui
             except ImportError:
@@ -641,85 +642,86 @@ def tool_vscode_command(
 
             ext = (extension or "copilot").lower().strip()
 
-            # Extension shortcut mapping
-            # NOT: Kisayollar VS Code varsayilanlariyla cakisabilir!
-            # Command Palette (Ctrl+Shift+P) en guvenilir yontemdir.
+            # Extension command palette mapping (VS Code Command Palette komutlari)
+            # "Focus Input" komutlari paneli acar VE input'a odaklanir — direkt yazilabilir
             ext_shortcuts = {
-                "kimicode":   {"keys": ["ctrl", "shift", "p"], "name": "KimiCode", "palette_cmd": "Kimi Code: Open Chat"},
-                "copilot":    {"keys": ["ctrl", "shift", "i"], "name": "GitHub Copilot"},
-                "claudecode": {"keys": ["ctrl", "shift", "p"], "name": "Claude Code", "palette_cmd": "Claude: Open"},
-                "codex":      {"keys": ["ctrl", "shift", "p"], "name": "Codex", "palette_cmd": "Codex: Start Session"},
+                "kimicode":   {"name": "KimiCode", "palette_cmd": "Kimi Code: Focus Input"},
+                "copilot":    {"name": "GitHub Copilot", "shortcut": ["ctrl", "shift", "i"]},
+                "claudecode": {"name": "Claude Code", "palette_cmd": "Claude Code: Focus input"},
+                "codex":      {"name": "Codex", "palette_cmd": "Codex: Open Codex Sidebar"},
             }
 
             if ext not in ext_shortcuts:
                 return {"error": f"Bilinmeyen extension: {ext}. Desteklenen: {', '.join(ext_shortcuts.keys())}"}
 
             info = ext_shortcuts[ext]
+            msg = command.strip() if command else ""
 
-            # 1) VS Code'u ac ve extension'larin yuklenmesini bekle
-            subprocess.Popen([code_exe, cwd], shell=False)
-            time.sleep(5)  # VS Code acilmasi
+            def _run_chat_in_background():
+                """Arka planda VS Code ac, extension baslat, mesaj yaz."""
+                try:
+                    # 1) VS Code'u ac
+                    subprocess.Popen([code_exe, cwd], shell=False)
+                    time.sleep(5)
 
-            # 2) VS Code'u on plana getir
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
+                    # 2) VS Code'u on plana getir (Windows)
+                    try:
+                        import ctypes
+                        user32 = ctypes.windll.user32
+                        result = []
+                        def callback(hwnd, _):
+                            if user32.IsWindowVisible(hwnd):
+                                length = user32.GetWindowTextLengthW(hwnd)
+                                if length > 0:
+                                    title = ctypes.create_unicode_buffer(length + 1)
+                                    user32.GetWindowTextW(hwnd, title, length + 1)
+                                    if "Visual Studio Code" in title.value:
+                                        result.append(hwnd)
+                            return True
+                        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+                        user32.EnumWindows(WNDENUMPROC(callback), 0)
+                        if result:
+                            user32.SetForegroundWindow(result[0])
+                            time.sleep(0.5)
+                    except Exception:
+                        pass
 
-                def _find_vscode_window():
-                    result = []
-                    def callback(hwnd, _):
-                        if user32.IsWindowVisible(hwnd):
-                            length = user32.GetWindowTextLengthW(hwnd)
-                            if length > 0:
-                                title = ctypes.create_unicode_buffer(length + 1)
-                                user32.GetWindowTextW(hwnd, title, length + 1)
-                                if "Visual Studio Code" in title.value:
-                                    result.append(hwnd)
-                        return True
-                    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-                    user32.EnumWindows(WNDENUMPROC(callback), 0)
-                    return result[0] if result else None
+                    # 3) Extension'larin yuklenmesini bekle (30-40sn surebilir)
+                    time.sleep(30)
 
-                hwnd = _find_vscode_window()
-                if hwnd:
-                    user32.SetForegroundWindow(hwnd)
-                    time.sleep(0.5)
-            except Exception:
-                pass
+                    # 4) Extension panelini ac
+                    if "palette_cmd" in info:
+                        pyautogui.hotkey("ctrl", "shift", "p")
+                        time.sleep(1)
+                        _type_unicode(info["palette_cmd"])
+                        time.sleep(1)
+                        pyautogui.press("enter")
+                        time.sleep(5)
+                    elif "shortcut" in info:
+                        pyautogui.hotkey(*info["shortcut"])
+                        time.sleep(5)
 
-            # 3) Extension'larin tam yuklenmesini bekle (ilk acilista 30-40sn surebilir)
-            time.sleep(30)
+                    # 5) Mesaj yaz ("Focus Input" cursor'i zaten input alanina koyar)
+                    if msg:
+                        time.sleep(0.5)
+                        _type_unicode(msg)
+                        time.sleep(0.5)
+                        pyautogui.press("enter")
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"vscode_command chat error: {e}")
 
-            # 4) Extension panelini ac
-            if "palette_cmd" in info:
-                # Command palette ile ac (en guvenilir yontem)
-                pyautogui.hotkey("ctrl", "shift", "p")
-                time.sleep(1)
-                _type_unicode(info["palette_cmd"])
-                time.sleep(1)
-                pyautogui.press("enter")
-                time.sleep(5)  # Panel acilmasi
-            else:
-                # Direkt shortcut (sadece Copilot icin)
-                pyautogui.hotkey(*info["keys"])
-                time.sleep(5)
-
-            # 5) Mesaj yaz
-            if command.strip():
-                # Once Escape ile olasi overlay'leri kapat
-                pyautogui.press("escape")
-                time.sleep(0.5)
-                # Input alanina tikla (KimiCode input genelde panel altinda)
-                _type_unicode(command.strip())
-                time.sleep(0.5)
-                pyautogui.press("enter")
+            # Arka plan thread'i baslat ve aninda don
+            thread = threading.Thread(target=_run_chat_in_background, daemon=True)
+            thread.start()
 
             return {
                 "success": True,
                 "action": "chat",
                 "extension": info["name"],
-                "message": command.strip() if command.strip() else "(panel acildi, mesaj yok)",
+                "message": msg if msg else "(panel acildi, mesaj yok)",
                 "path": cwd,
+                "note": f"Arka planda calisiyor (~45sn). VS Code aciliyor, {info['name']} baslatiliyor, mesaj yazilacak.",
             }
 
         else:
