@@ -145,14 +145,14 @@ NEDEN ONEMLI:
 === ARASTIRMA METODOLOJISI (SADECE INTERNET ARASMASI ICIN) ===
 Kullanici ACIKCA "internet'te ara", "haber bul", "web'de arastir", "kaynak bul" dediginde:
 
-1. NOT DEFTERI AC: notebook_create ile gorev plani olustur
-2. KONUYU PARCALA: Ana konuyu 2-3 alt sorguya bol
-3. COKLU ARAMA: Her alt sorgu icin search_news kullan (TR + EN varyantlar)
-4. KAYNAKLARI OKU: fetch_web_page ile detay cek
-5. HER ADIMDA NOT AL: notebook_add_note ile bulgulari kaydet
-6. ADIMI TAMAMLA: notebook_complete_step ile isaretle
-7. CARPRAZ KONTROL: Birden fazla kaynakta tekrarlanan bilgilere guven
-8. SENTEZ: Bulgulari birlestir, rapor olustur (research_and_report veya write_file)
+ONEMLI: MUTLAKA research_async aracini kullan. research_and_report KULLANMA.
+research_async aninda "Arastirma basladi" yaniti verir ve arka planda calisir.
+Bitince Telegram'a otomatik bildirim gonderir. Timeout olmaz.
+
+Ornek:
+  Kullanici: "OpenWorld projesini incele, mimari onerilerde bulun"
+  Sen: research_async(topic="OpenWorld projesi mimari analiz ve oneriler", report_style="technical") cagirir
+  Sonra: Kullaniciya "Arastirma arka planda basladi, bitince haber vereceğim." dersin
 
 DIKKAT: Kullanici AI extension veya VS Code'a bir sey yaptirmak istiyorsa,
 bu metodoloji DOGRUDAN DEVREYE GIRMEZ. vscode_command aracini kullan.

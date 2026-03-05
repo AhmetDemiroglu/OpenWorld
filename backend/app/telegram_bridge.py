@@ -551,6 +551,17 @@ async def main() -> None:
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+
+        # Arka plan thread'lerinin Telegram'a bildirim gondermesini sagla
+        try:
+            allowed_chat_id = settings.telegram_allowed_user_id.strip()
+            if allowed_chat_id:
+                from .notifier import set_context as _notifier_set_context
+                _notifier_set_context(app.bot, allowed_chat_id, asyncio.get_event_loop())
+        except Exception as _ne:
+            import logging as _log2
+            _log2.getLogger(__name__).warning("[TelegramBridge] Notifier baslatılamadi: %s", _ne)
+
         await asyncio.Event().wait()
     finally:
         _release_single_instance_lock()

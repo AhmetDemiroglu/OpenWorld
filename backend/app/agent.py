@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,8 +72,12 @@ class AgentService:
         self._pending_watcher_confirmation: Dict[str, Dict[str, Any]] = {}
 
     async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
-        lock = await self._get_session_lock(session_id)
         current_task = asyncio.current_task()
+        emergency = await self._try_handle_emergency_stop(session_id, user_message, current_task)
+        if emergency is not None:
+            return emergency
+
+        lock = await self._get_session_lock(session_id)
 
         if lock.locked():
             quick_stop_reply, quick_stop_tools = self._try_force_watcher_stop_while_busy(user_message)
@@ -159,6 +164,65 @@ class AgentService:
             if message:
                 return message, ["stop_approval_watcher"]
         return "Onay izleyici kapatildi.", ["stop_approval_watcher"]
+
+    @staticmethod
+    def _is_global_stop_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if not normalized:
+            return False
+        stop_verbs = ("iptal", "durdur", "cancel", "stop", "vazgec", "yarida birak", "birak", "kes")
+        scope_markers = ("islem", "gorev", "rapor", "ajan", "hepsi", "tum", "tamamen", "calismayi")
+        if any(v in normalized for v in stop_verbs) and any(s in normalized for s in scope_markers):
+            return True
+        # Kisa ve net komutlari da kabul et.
+        compact = normalized.replace(" ", "")
+        return compact in {"iptalet", "islemiiptalet", "gorevidurdur", "hepsinidurdur", "stopeverything"}
+
+    async def _try_handle_emergency_stop(self, session_id: str, user_message: str, requester_task: Optional[asyncio.Task]) -> Tuple[str, int, List[str], List[str]] | None:
+        watcher_action = self._extract_approval_watcher_action(user_message)
+        is_global_stop = self._is_global_stop_request(user_message)
+        if watcher_action != "stop" and not is_global_stop:
+            return None
+
+        used_tools: List[str] = []
+        running_cancelled = False
+
+        # Session task'ini lock beklemeden kesmeyi dene.
+        async with self._session_locks_guard:
+            running = self._session_running_tasks.get(session_id)
+        if running is not None and running is not requester_task and not running.done():
+            running.cancel()
+            running_cancelled = True
+
+        watcher_reply = ""
+        if "stop_approval_watcher" in self._known_tool_names:
+            try:
+                stop_result = execute_tool("stop_approval_watcher", {})
+                used_tools.append("stop_approval_watcher")
+                if isinstance(stop_result, dict):
+                    watcher_reply = str(stop_result.get("message", "")).strip()
+                    if stop_result.get("error"):
+                        watcher_reply = f"Hata: {stop_result.get('error')}"
+            except Exception as exc:
+                watcher_reply = f"Hata: onay izleyici durdurulamadi: {exc}"
+        else:
+            watcher_reply = "Onay izleyici araci aktif degil."
+
+        # Bekleyen onay state'lerini temizle.
+        self._pending_watcher_confirmation.pop(session_id, None)
+
+        lines: List[str] = []
+        if is_global_stop:
+            if running_cancelled:
+                lines.append("Aktif isleme iptal sinyali gonderildi.")
+            else:
+                lines.append("Aktif uzun islem bulunmuyor.")
+        if watcher_reply:
+            lines.append(watcher_reply)
+        if not lines:
+            lines.append("Durdurma komutu uygulandi.")
+        reply = "\n".join(lines)
+        return reply, 1, list(dict.fromkeys(used_tools)), []
 
     def _request_timeout_seconds(self, user_message: str) -> float:
         normalized = self._normalize_text_for_match(user_message)
@@ -1332,7 +1396,11 @@ class AgentService:
             0x015E: "s",  # S-cedilla
             0x00DC: "u",  # U-umlaut
         }
-        return (text or "").lower().translate(turkish_map)
+        lowered = (text or "").lower().translate(turkish_map)
+        normalized = unicodedata.normalize("NFKD", lowered)
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
 
     @staticmethod
     def _clean_text_for_report(text: str) -> str:

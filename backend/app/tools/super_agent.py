@@ -111,6 +111,12 @@ _CONTEXT_FREE_HINT_TERMS = {
     "onay",
     "izin",
 }
+_RUN_PROMPT_CONTEXT_TERMS = {
+    "1 step requires input",
+    "step requires input",
+    "requires input",
+    "run command",
+}
 
 _IDE_COMPLETION_TERMS = (
     "done", "completed", "finished", "all done", "all set", "task completed",
@@ -1264,6 +1270,7 @@ def tool_wait_and_accept_approval(
     button_terms_multi = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI}
     context_free_action_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_ACTION_TERMS}
     context_free_hint_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_HINT_TERMS}
+    run_prompt_context_terms = {_normalize_for_ocr_match(x) for x in _RUN_PROMPT_CONTEXT_TERMS}
     button_terms_multi_compact = {_compact_normalized(x) for x in button_terms_multi}
     button_terms_compact = {_compact_normalized(x) for x in (button_terms_single | context_free_action_terms | button_terms_multi)}
     button_hint_confidence = max(18.0, min_confidence - 15.0)
@@ -1397,6 +1404,9 @@ def tool_wait_and_accept_approval(
                     )
 
         should_click = bool(has_context and candidates)
+        hint_hit = False
+        action_hit = False
+        run_prompt_context_hit = any(term in blob for term in run_prompt_context_terms)
         if not should_click and candidates:
             hint_hit = any(h in blob for h in context_free_hint_terms)
             action_hit = any(c.get("norm", "") in context_free_action_terms for c in candidates)
@@ -1426,6 +1436,53 @@ def tool_wait_and_accept_approval(
                 "y": click_y,
                 "method": "ocr_click",
             }
+
+        # VS Code "1 Step Requires Input" modalinda Run butonu OCR'da kacinabiliyor.
+        # Reject butonunu okuyabilirsek, Run butonu genellikle hemen sagindadir.
+        if run_prompt_context_hit and words:
+            reject_tokens = {"reject", "reddet", "iptal"}
+            reject_candidates = [w for w in words if w.get("norm", "") in reject_tokens]
+            if reject_candidates:
+                rej = sorted(reject_candidates, key=lambda c: (c["conf"], c["top"], c["left"]), reverse=True)[0]
+                rej_right = int(rej["left"] + rej["width"])
+                click_x = int(rej_right + max(55, rej["width"] * 1.35))
+                click_y = int(rej["top"] + (rej["height"] / 2))
+                if region:
+                    click_x += int(region[0])
+                    click_y += int(region[1])
+                try:
+                    pyautogui.click(click_x, click_y)
+                    return {
+                        "success": True,
+                        "checks": checks,
+                        "window_pattern": window_pattern,
+                        "method": "reject_offset_click",
+                        "x": click_x,
+                        "y": click_y,
+                        "note": "Run butonu Reject referansi ile tahmini tiklandi.",
+                    }
+                except Exception:
+                    pass
+
+        # Ozellikle VS Code "Run Alt+J" akisinda OCR buton koordinati kacarsa,
+        # gorunen kisayolu klavyeden deneyelim.
+        compact_blob = re.sub(r"\s+", "", blob)
+        if (
+            ("runaltj" in compact_blob or "runaltj" in compact_blob.replace("+", ""))
+            or run_prompt_context_hit
+        ) and (has_context or hint_hit or "debug" in compact_blob or run_prompt_context_hit):
+            try:
+                pyautogui.hotkey("alt", "j")
+                return {
+                    "success": True,
+                    "checks": checks,
+                    "window_pattern": window_pattern,
+                    "method": "keyboard_shortcut",
+                    "shortcut": "alt+j",
+                    "note": "OCR metninden Run Alt+J kisayolu algilandi.",
+                }
+            except Exception:
+                pass
 
         time.sleep(interval)
 
