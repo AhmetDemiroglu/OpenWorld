@@ -75,6 +75,9 @@ class AgentService:
         current_task = asyncio.current_task()
 
         if lock.locked():
+            quick_stop_reply, quick_stop_tools = self._try_force_watcher_stop_while_busy(user_message)
+            if quick_stop_reply:
+                return quick_stop_reply, 1, quick_stop_tools, []
             if self._should_interrupt_running_task(user_message):
                 await self._cancel_running_task(session_id, current_task)
             try:
@@ -134,9 +137,28 @@ class AgentService:
         normalized = self._normalize_text_for_match(user_message)
         if any(k in normalized for k in ("screenshot", "ekran goruntusu", "webcam", "kamera", "ses kaydi")):
             return 1.5
+        if self._extract_approval_watcher_action(user_message) == "stop":
+            return 1.2
         if self._is_resume_like_request(user_message):
             return 3.0
         return 4.0
+
+    def _try_force_watcher_stop_while_busy(self, user_message: str) -> Tuple[str, List[str]]:
+        if self._extract_approval_watcher_action(user_message) != "stop":
+            return "", []
+        if "stop_approval_watcher" not in self._known_tool_names:
+            return "Onay izleyici araci aktif degil.", []
+        try:
+            result = execute_tool("stop_approval_watcher", {})
+        except Exception as exc:
+            return f"Hata: onay izleyici durdurulamadi: {exc}", ["stop_approval_watcher"]
+        if isinstance(result, dict) and result.get("error"):
+            return f"Hata: {result.get('error')}", ["stop_approval_watcher"]
+        if isinstance(result, dict):
+            message = str(result.get("message", "")).strip()
+            if message:
+                return message, ["stop_approval_watcher"]
+        return "Onay izleyici kapatildi.", ["stop_approval_watcher"]
 
     def _request_timeout_seconds(self, user_message: str) -> float:
         normalized = self._normalize_text_for_match(user_message)
@@ -1102,7 +1124,7 @@ class AgentService:
                 arguments={"max_results": 10},
             )
 
-        if "research_and_report" in self._known_tool_names and any(
+        if "research_and_report" in self._known_tool_names and not _has_ide_intent and any(
             k in normalized for k in ("detay", "analiz", "tum kaynak", "tum haber", "rapor")
         ) and any(k in normalized for k in ("haber", "news", "gundem", "savas", "iran", "dunya", "world")):
             args: Dict[str, Any] = {"topic": text, "max_sources": 8}
@@ -2383,13 +2405,12 @@ class AgentService:
             k in normalized for k in ("vscode", "vs code", "visual studio code", "code ile")
         ) or bool(targets)
         has_open_intent = any(k in normalized for k in ("ac", "open", "baslat", "calistir"))
-        has_session_intent = any(
-            k in normalized for k in ("session", "oturum", "conversation", "thread", "sohbet")
-        )
+        has_write_intent = any(k in normalized for k in ("yaz", "gonder", "sor", "de")) or ('"' in user_message)
 
-        if not has_vscode_hint or not has_open_intent or not has_session_intent:
+        # Session/oturum kelimesi zorunlu degil; kullanici dogrudan "X'e sunu yaz" diyebilir.
+        if not has_vscode_hint or not has_open_intent:
             return None
-        if "yaz" not in normalized:
+        if not has_write_intent:
             return None
         if not targets:
             return None
@@ -2449,7 +2470,7 @@ class AgentService:
                 window_pattern="Visual Studio Code|Code - Insiders",
                 timeout=max(5, min(int(timeout), 90)),
                 interval=0.8,
-                min_confidence=40.0,
+                min_confidence=30.0,
                 lang="tur+eng",
                 allow_keyboard_fallback=bool(allow_keyboard_fallback),
             )

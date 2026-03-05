@@ -89,6 +89,8 @@ from .code_tools import (
 )
 
 # NOT DEFTERI ARACLARI
+from .async_research import tool_research_async
+
 from .notebook_tools import (
     tool_notebook_create,
     tool_notebook_add_note,
@@ -2364,6 +2366,26 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "name": "check_outlook_messages",
                 "description": "Outlook mesajlarini oku (varsayilan: sadece bugun).",
                 "parameters": {"type": "object", "properties": {"max_results": {"type": "integer"}, "unread_only": {"type": "boolean"}, "today_only": {"type": "boolean"}}}
+            }
+        }
+    ),
+    "research_async": (
+        tool_research_async,
+        {
+            "type": "function",
+            "function": {
+                "name": "research_async",
+                "description": "Arastirmayi ARKA PLANDA baslatir ve ANINDA onay mesaji don. Kullanici arastirma, analiz, inceleme, rapor istediginde BU ARACI KULLAN. Bitince Telegram bildirimi ve rapor dosyasi gonderilir. research_and_report yerine bunu kullan.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "Arastirilacak konu (detayli belirtin)"},
+                        "report_style": {"type": "string", "enum": ["standard", "technical", "academic", "brief"]},
+                        "max_sources": {"type": "integer", "description": "Max kaynak sayisi (varsayilan: 10)"},
+                        "out_path": {"type": "string", "description": "Cikti dosyasi yolu (opsiyonel)"}
+                    },
+                    "required": ["topic"]
+                }
             }
         }
     ),

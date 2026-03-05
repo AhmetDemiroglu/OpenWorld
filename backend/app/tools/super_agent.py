@@ -60,13 +60,14 @@ _TR_TRANSLATION = str.maketrans({
 _DEFAULT_APPROVAL_CONTEXT_TERMS = {
     "permission", "permissions", "approve", "allow", "authorize", "access",
     "trust", "secure", "safety", "agent", "extension", "run", "execute",
-    "onay", "izin", "guven", "yetki", "erisim", "calistir",
+    "debug", "breakpoint", "continue",
+    "onay", "izin", "guven", "yetki", "erisim", "calistir", "surdur",
 }
 
 _DEFAULT_APPROVAL_BUTTON_TERMS = {
     "approve", "allow", "accept", "authorize", "grant", "continue", "yes", "ok",
     "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
-    "run", "proceed",
+    "run", "proceed", "expand",
 }
 
 _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
@@ -74,16 +75,47 @@ _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
     "run anyway",
     "allow anyway",
     "yes continue",
+    "accept all",
+    "accept changes",
+    "run without debugging",
+    "continue without debugging",
     "izin ver",
     "kabul et",
     "devam et",
     "onay ver",
 }
 
+_CONTEXT_FREE_ACTION_TERMS = {
+    "continue",
+    "run",
+    "accept",
+    "accept all",
+    "accept changes",
+    "expand",
+    "devam et",
+    "kabul et",
+    "onayla",
+}
+_CONTEXT_FREE_HINT_TERMS = {
+    "run",
+    "debug",
+    "breakpoint",
+    "permission",
+    "approve",
+    "allow",
+    "agent",
+    "extension",
+    "codex",
+    "claude",
+    "kimi",
+    "onay",
+    "izin",
+}
+
 _IDE_COMPLETION_TERMS = (
     "done", "completed", "finished", "all done", "all set", "task completed",
     "islem tamamlandi", "gorev tamamlandi", "tamamlandi", "bitti", "sonuc",
-    "result ready", "response complete",
+    "result ready", "response complete", "good bad", "thumbs up",
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "running", "in progress",
@@ -965,6 +997,55 @@ def _normalize_for_ocr_match(text: str) -> str:
     return normalized
 
 
+def _compact_normalized(text: str) -> str:
+    return re.sub(r"\s+", "", _normalize_for_ocr_match(text or ""))
+
+
+def _is_button_like_token(
+    token: str,
+    button_terms_single: set[str],
+    context_free_action_terms: set[str],
+    button_terms_compact: set[str],
+) -> bool:
+    if not token:
+        return False
+    if token in button_terms_single or token in context_free_action_terms:
+        return True
+
+    compact = re.sub(r"\s+", "", token)
+    if compact in button_terms_compact:
+        return True
+
+    # Shortcut etiketleri: RunAltJ / AcceptAll / ContinueWithoutDebugging gibi birlesik OCR ciktisi.
+    if compact.startswith("run") and (compact == "run" or "alt" in compact or "without" in compact):
+        return True
+    if compact.startswith("accept") or compact.startswith("approve") or compact.startswith("continue") or compact.startswith("allow"):
+        return True
+    if compact.startswith("onay") or compact.startswith("kabul") or compact.startswith("devam"):
+        return True
+    return False
+
+
+def _is_button_like_phrase(
+    phrase: str,
+    button_terms_multi: set[str],
+    button_terms_multi_compact: set[str],
+    button_terms_compact: set[str],
+) -> bool:
+    if not phrase:
+        return False
+    if phrase in button_terms_multi:
+        return True
+    compact = re.sub(r"\s+", "", phrase)
+    if compact in button_terms_multi_compact or compact in button_terms_compact:
+        return True
+    if compact.startswith("acceptall") or compact.startswith("acceptchanges"):
+        return True
+    if compact.startswith("runwithoutdebugging") or compact.startswith("continuewithoutdebugging"):
+        return True
+    return False
+
+
 def _get_window_region(title_pattern: str) -> Optional[Tuple[int, int, int, int]]:
     if platform.system() != "Windows" or not title_pattern:
         return None
@@ -1110,7 +1191,7 @@ def tool_wait_and_accept_approval(
     window_pattern: str = "Visual Studio Code|Code - Insiders",
     timeout: int = 25,
     interval: float = 0.8,
-    min_confidence: float = 40.0,
+    min_confidence: float = 30.0,
     lang: str = "tur+eng",
     allow_keyboard_fallback: bool = False,
 ) -> Dict[str, Any]:
@@ -1181,6 +1262,11 @@ def tool_wait_and_accept_approval(
     context_terms = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_CONTEXT_TERMS}
     button_terms_single = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS}
     button_terms_multi = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI}
+    context_free_action_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_ACTION_TERMS}
+    context_free_hint_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_HINT_TERMS}
+    button_terms_multi_compact = {_compact_normalized(x) for x in button_terms_multi}
+    button_terms_compact = {_compact_normalized(x) for x in (button_terms_single | context_free_action_terms | button_terms_multi)}
+    button_hint_confidence = max(18.0, min_confidence - 15.0)
 
     end_time = time.time() + timeout
     checks = 0
@@ -1196,7 +1282,12 @@ def tool_wait_and_accept_approval(
 
         screenshot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
         try:
-            data = pytesseract.image_to_data(screenshot, lang=lang, output_type=Output.DICT)
+            data = pytesseract.image_to_data(
+                screenshot,
+                lang=lang,
+                output_type=Output.DICT,
+                config="--oem 3 --psm 6",
+            )
         except Exception as exc:
             if allow_keyboard_fallback:
                 try:
@@ -1242,7 +1333,13 @@ def tool_wait_and_accept_approval(
                 conf = float(data["conf"][i])
             except Exception:
                 conf = -1.0
-            if conf < min_confidence:
+            token_is_button_like = _is_button_like_token(
+                norm,
+                button_terms_single=button_terms_single,
+                context_free_action_terms=context_free_action_terms,
+                button_terms_compact=button_terms_compact,
+            )
+            if conf < min_confidence and not (token_is_button_like and conf >= button_hint_confidence):
                 continue
             words.append(
                 {
@@ -1267,12 +1364,22 @@ def tool_wait_and_accept_approval(
         candidates: List[Dict[str, Any]] = []
         for i, current in enumerate(words):
             token = current["norm"]
-            if token in button_terms_single:
+            if _is_button_like_token(
+                token,
+                button_terms_single=button_terms_single,
+                context_free_action_terms=context_free_action_terms,
+                button_terms_compact=button_terms_compact,
+            ):
                 candidates.append(current)
 
             if i + 1 < len(words):
                 pair = f"{token} {words[i + 1]['norm']}"
-                if pair in button_terms_multi:
+                if _is_button_like_phrase(
+                    pair,
+                    button_terms_multi=button_terms_multi,
+                    button_terms_multi_compact=button_terms_multi_compact,
+                    button_terms_compact=button_terms_compact,
+                ):
                     left = min(current["left"], words[i + 1]["left"])
                     top = min(current["top"], words[i + 1]["top"])
                     right = max(current["left"] + current["width"], words[i + 1]["left"] + words[i + 1]["width"])
@@ -1289,7 +1396,13 @@ def tool_wait_and_accept_approval(
                         }
                     )
 
-        if has_context and candidates:
+        should_click = bool(has_context and candidates)
+        if not should_click and candidates:
+            hint_hit = any(h in blob for h in context_free_hint_terms)
+            action_hit = any(c.get("norm", "") in context_free_action_terms for c in candidates)
+            should_click = bool(hint_hit and action_hit)
+
+        if should_click and candidates:
             # Dialog buttons generally appear in the lower-right area.
             best = sorted(
                 candidates,
@@ -1434,7 +1547,7 @@ def _approval_watcher_worker(window_pattern: str, interval: float, min_confidenc
 def tool_start_approval_watcher(
     window_pattern: str = "Visual Studio Code|Code - Insiders",
     interval: float = 1.0,
-    min_confidence: float = 40.0,
+    min_confidence: float = 30.0,
     lang: str = "tur+eng",
     notify_on_completion: bool = True,
     auto_stop_on_completion: bool = False,
