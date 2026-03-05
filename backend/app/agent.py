@@ -1037,7 +1037,10 @@ class AgentService:
             )
 
         # SCREENSHOT - Masaustu (en yaygin istek!)
-        if "screenshot_desktop" in self._known_tool_names and any(
+        # NOT: "vs code", "kimicode", "codex" gibi IDE/AI keyword'leri varsa screenshot'a yonlendirme!
+        _ide_keywords = {"vs code", "vscode", "visual studio", "kimicode", "kimi code", "codex", "claude code", "claudecode", "copilot"}
+        _has_ide_intent = any(k in normalized for k in _ide_keywords)
+        if "screenshot_desktop" in self._known_tool_names and not _has_ide_intent and any(
             k in normalized for k in ("ekran goruntusu", "screenshot", "masaustu", "desktop", "masaustu", "ekran fotograf", "ekran resmi")
         ):
             return ParsedTextToolCall(
@@ -1078,9 +1081,9 @@ class AgentService:
         # NOT: "masaustu" tek basina tetiklemez - "masaustunde X'i ac" automation, screenshot degil
         screenshot_keywords = {"ekran goruntusu", "screenshot", "anlik goruntu", "fotograf cek"}
         screenshot_actions = {"al", "cek", "gonder", "kaydet", "goster"}
-        automation_overrides = {"ac", "yaz", "bul", "tikla", "git", "gir"}
+        automation_overrides = {"ac", "yaz", "bul", "tikla", "git", "gir", "baslat", "calistir", "kapat"}
         
-        if "screenshot_desktop" in self._known_tool_names and any(
+        if "screenshot_desktop" in self._known_tool_names and not _has_ide_intent and any(
             k in normalized for k in screenshot_keywords | {"desktop", "masaustu"}
         ) and any(k in normalized for k in screenshot_actions):
             # "masaustunde X'i ac" gibi ifadelerde screenshot'a degil, automasyona yonlendir
