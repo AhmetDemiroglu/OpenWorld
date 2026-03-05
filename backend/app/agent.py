@@ -257,6 +257,13 @@ class AgentService:
             self.store.save(session_id, messages)
             return pending_reply, 1, pending_tools, []
 
+        completion_reply, completion_tools, completion_consumed = self._try_handle_completion_prompt_answer(user_message)
+        if completion_consumed:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=completion_reply))
+            self.store.save(session_id, messages)
+            return completion_reply, 1, completion_tools, []
+
         if self._is_no_action_check_request(user_message):
             reply = (
                 "Kontrol modu acik: otomasyon araci calistirmadim.\n"
@@ -2473,16 +2480,30 @@ class AgentService:
         if not normalized:
             return ""
 
+        stop_markers = ("kapat", "durdur", "devre disi", "iptal", "stop", "disable", "birak")
+        status_markers = ("durum", "acik mi", "calisiyor mu", "status", "ne durumda")
+        start_markers = ("ac", "baslat", "aktif et", "etkinlestir", "enable", "start", "devam et")
+
+        # Daha dogal ifadeler: "izlemeyi durdur", "kontrolu birak", "takibi kapat" vb.
+        generic_watch_markers = (
+            "izle", "izleme", "izlemeyi", "izleyici",
+            "watcher",
+            "takip", "takibi",
+            "kontrol", "kontrolu",
+        )
+        if any(marker in normalized for marker in stop_markers) and any(marker in normalized for marker in generic_watch_markers):
+            return "stop"
+        if any(marker in normalized for marker in status_markers) and any(marker in normalized for marker in generic_watch_markers):
+            return "status"
+        if any(marker in normalized for marker in start_markers) and any(marker in normalized for marker in generic_watch_markers):
+            return "start"
+
         watcher_markers = (
             "onay izle", "onay izleme", "onay izleyici", "onay watcher",
             "otomatik onay", "onaylari otomatik", "approval watcher", "approval watch",
         )
         if not any(marker in normalized for marker in watcher_markers):
             return ""
-
-        stop_markers = ("kapat", "durdur", "devre disi", "iptal", "stop", "disable")
-        status_markers = ("durum", "acik mi", "calisiyor mu", "status", "ne durumda")
-        start_markers = ("ac", "baslat", "aktif et", "etkinlestir", "enable", "start")
 
         if any(marker in normalized for marker in stop_markers):
             return "stop"
@@ -2544,6 +2565,37 @@ class AgentService:
 
         reply, tools = self._run_approval_watcher_action("stop")
         return reply, tools, True
+
+    def _try_handle_completion_prompt_answer(self, user_message: str) -> Tuple[str, List[str], bool]:
+        decision = self._classify_watcher_confirmation_answer(user_message)
+        if not decision:
+            return "", [], False
+
+        required_tools = {"approval_watcher_status", "stop_approval_watcher", "ack_approval_completion_prompt"}
+        if not required_tools.issubset(self._known_tool_names):
+            return "", [], False
+
+        try:
+            status = execute_tool("approval_watcher_status", {})
+        except Exception:
+            return "", [], False
+
+        if not isinstance(status, dict):
+            return "", [], False
+        if not bool(status.get("running")):
+            return "", [], False
+        if not bool(status.get("completion_prompt_sent")):
+            return "", [], False
+
+        if decision == "yes":
+            reply, tools = self._run_approval_watcher_action("stop")
+            return f"Tamam. {reply}", tools, True
+
+        try:
+            execute_tool("ack_approval_completion_prompt", {"keep_running": True})
+        except Exception:
+            pass
+        return "Tamam. Onay izleyici acik birakildi.", ["approval_watcher_status", "ack_approval_completion_prompt"], True
 
     def _try_fast_approval_watcher_control(self, user_message: str) -> Tuple[str, List[str]]:
         action = self._extract_approval_watcher_action(user_message)

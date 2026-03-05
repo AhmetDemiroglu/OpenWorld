@@ -158,6 +158,11 @@ OCR (ekrandan metin okuma) için gerekli. Vision özelliği olmayan modellerde b
 Launcher > `OCR / Tesseract` alanındaki `Tesseract Yolu` değerini
 `C:\Program Files\Tesseract-OCR\tesseract.exe` yapıp `Kaydet` düğmesine basın.
 
+**OCR gereken başlıca işlemler:**
+- Görselden metin okuma
+- IDE onay penceresi izleme / kabul etme
+- Ekran üstündeki metinleri analiz etme
+
 **Doğrulama:**
 ```powershell
 tesseract --version

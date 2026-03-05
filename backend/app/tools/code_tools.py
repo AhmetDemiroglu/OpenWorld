@@ -562,15 +562,17 @@ def tool_vscode_command(
     goto_line: int = 0,
     action: str = "open",
     extension: str = "",
+    message: str = "",
 ) -> Dict[str, Any]:
     """VS Code'da gelişmiş işlemler: dosya aç, satıra git, terminal komutu çalıştır, AI extension chat aç.
 
     Args:
         path: Dosya veya klasör yolu
-        command: Terminal komutu (action=terminal), diff dosyası, veya chat mesajı (action=chat). EGER action=chat ise, BURAYA SADECE KULLANICININ İLETTİĞİ MESAJI YAZIN. Örneğin kullanıcı "KimiCode'a 'Merhaba Dünya' yaz" derse command parametresi sadece "Merhaba Dünya" olmalıdır. Aksi takdirde AI yanlış mesajı yazar!
+        command: Terminal komutu (action=terminal) veya diff dosyası.
         goto_line: Belirli satıra git (opsiyonel)
         action: open (dosya aç), terminal (komut çalıştır), diff (diff görüntüle), chat (AI extension'a mesaj gönder)
         extension: AI extension adı (action=chat için): kimicode, copilot, claudecode, codex
+        message: action=chat ise, SADECE gönderilecek mesajın tam içeriği. (Örn: "sorun var mı?")
     """
     cwd = _resolve_project_path(path)
     p = Path(cwd)
@@ -654,7 +656,8 @@ def tool_vscode_command(
                 return {"error": f"Bilinmeyen extension: {ext}. Desteklenen: {', '.join(ext_shortcuts.keys())}"}
 
             info = ext_shortcuts[ext]
-            msg = command.strip() if command else ""
+            # LLM genellikle yeni mesaji "message" parametresinde gonderir, eskiye dukkan diye command'a fallback yapiyoruz.
+            msg = message.strip() if message else (command.strip() if command else "")
 
             def _run_chat_in_background():
                 """Arka planda VS Code ac, extension baslat, mesaj yaz."""

@@ -67,6 +67,7 @@ from .super_agent import (
     tool_start_approval_watcher,
     tool_stop_approval_watcher,
     tool_approval_watcher_status,
+    tool_ack_approval_completion_prompt,
 )
 
 # VERITABANI VE HAFIZA
@@ -2645,7 +2646,9 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                         "window_pattern": {"type": "string", "description": "Hedef pencere regex deseni"},
                         "interval": {"type": "number", "description": "Tarama araligi (saniye)"},
                         "min_confidence": {"type": "number", "description": "OCR minimum guven skoru (0-100)"},
-                        "lang": {"type": "string", "description": "OCR dil paketi (or: tur+eng)"}
+                        "lang": {"type": "string", "description": "OCR dil paketi (or: tur+eng)"},
+                        "notify_on_completion": {"type": "boolean", "description": "IDE gorevi bitti gibi algilaninca Telegram bildirimi gonder"},
+                        "auto_stop_on_completion": {"type": "boolean", "description": "Bitti algilaninca izleyiciyi otomatik durdur"}
                     }
                 }
             }
@@ -2670,6 +2673,22 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                 "name": "approval_watcher_status",
                 "description": "Onay izleyicinin calisma durumunu getirir.",
                 "parameters": {"type": "object", "properties": {}}
+            }
+        }
+    ),
+    "ack_approval_completion_prompt": (
+        tool_ack_approval_completion_prompt,
+        {
+            "type": "function",
+            "function": {
+                "name": "ack_approval_completion_prompt",
+                "description": "Tamamlanma bildirimi sorusunu temizler, izleyiciyi acik birakabilir.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keep_running": {"type": "boolean", "description": "true ise watcher acik kalir"}
+                    }
+                }
             }
         }
     ),

@@ -262,13 +262,20 @@ SETUP_GUIDE = """\
 
    Tesseract OCR (\u00f6nerilir):
    \u2022 \u0130ndirme: https://github.com/UB-Mannheim/tesseract/wiki
-   \u2022 Kurulum dosyas\u0131: C:\\Program Files\\Tesseract-OCR\\tesseract.exe
-   \u2022 PATH'e eklenecek klas\u00f6r: C:\\Program Files\\Tesseract-OCR
-   \u2022 Launcher > OCR / Tesseract > Tesseract Yolu alan\u0131na
-     `C:\\Program Files\\Tesseract-OCR\\tesseract.exe` yaz\u0131n ve Kaydet'e bas\u0131n
-   \u2022 Do\u011frulama: terminalde `tesseract --version`
-   \u2022 Vision \u00f6zelli\u011fi olmayan modellerde OCR
-     (g\u00f6rselden metin okuma) i\u00e7in zorunludur
+   \u2022 Kurulum dosyas\u0131:
+     C:\\Program Files\\Tesseract-OCR\\tesseract.exe
+   \u2022 PATH'e eklenecek klas\u00f6r:
+     C:\\Program Files\\Tesseract-OCR
+   \u2022 Launcher ayar\u0131:
+     OCR / Tesseract b\u00f6l\u00fcm\u00fcn\u00fc a\u00e7\u0131n
+     Tesseract Yolu alan\u0131na tam yolu yaz\u0131n
+     OCR b\u00f6l\u00fcm\u00fcndeki \u201cKaydet\u201d butonuna bas\u0131n
+   \u2022 Do\u011frulama:
+     tesseract --version
+   \u2022 Vision \u00f6zelli\u011fi olmayan modellerde OCR zorunludur:
+     - G\u00f6rselden metin okuma
+     - IDE onay penceresi izleme / kabul etme
+     - Ekran \u00fcst\u00fc metin alg\u0131lama
 
    NOT: Bu iki program zaten kuruluysa
    bu ad\u0131m\u0131 atlayabilirsiniz.
@@ -401,9 +408,11 @@ SETUP_GUIDE = """\
 
    \u2716 \u201cTesseract is not installed\u201d hatas\u0131
      \u2192 Tesseract'\u0131 C:\\Program Files\\Tesseract-OCR klas\u00f6r\u00fcne kurun
-     \u2192 Launcher > OCR / Tesseract alan\u0131na
-       C:\\Program Files\\Tesseract-OCR\\tesseract.exe yaz\u0131n ve Kaydet'e bas\u0131n
-     \u2192 Yeni terminal a\u00e7\u0131p `tesseract --version` ile kontrol edin
+     \u2192 Launcher > OCR / Tesseract b\u00f6l\u00fcm\u00fcn\u00fc a\u00e7\u0131n
+     \u2192 Tesseract Yolu alan\u0131na tam yolu yaz\u0131n:
+       C:\\Program Files\\Tesseract-OCR\\tesseract.exe
+     \u2192 OCR b\u00f6l\u00fcm\u00fcndeki \u201cKaydet\u201d butonuna bas\u0131n
+     \u2192 Yeni terminal a\u00e7\u0131p tesseract --version ile kontrol edin
 
 
 \u2501\u2501\u2501\u2501\u2501\u2501  \u0130LET\u0130\u015e\u0130M  \u2501\u2501\u2501\u2501\u2501\u2501
@@ -685,7 +694,8 @@ class LauncherApp:
         ocr_btns = tk.Frame(ocr, bg=CARD_BG)
         ocr_btns.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._btn(ocr_btns, "Varsayılan Doldur", self._fill_default_tesseract_path, bg="#2563eb").pack(side="left", padx=(0, 4))
-        self._btn(ocr_btns, "Doğrula", self._validate_tesseract_path, bg="#475569").pack(side="left")
+        self._btn(ocr_btns, "Doğrula", self._validate_tesseract_path, bg="#475569").pack(side="left", padx=(0, 4))
+        self._btn(ocr_btns, "Kaydet", self._save_tesseract_settings, bg="#7c3aed").pack(side="left")
 
         # === GMAIL ===
         gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
@@ -888,6 +898,37 @@ class LauncherApp:
             return
         self._append_status(f"Tesseract yolu doğrulandı: {exe_path}")
         messagebox.showinfo("Tesseract Doğrulama", f"Doğrulandı:\n{exe_path}")
+
+    def _save_tesseract_settings(self) -> None:
+        self.save_env()
+        exe_path, err = self._resolve_tesseract_cmd()
+        if exe_path is None:
+            messagebox.showerror("OCR / Tesseract", err)
+            return
+
+        path_state = "Bilinmiyor"
+        target_dir = str(exe_path.parent)
+        try:
+            if os.name == "nt" and winreg is not None:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ) as key:
+                    user_path, _ = winreg.QueryValueEx(key, "Path")
+                parts = [p.strip() for p in str(user_path).split(";") if p.strip()]
+                normalized_parts = {self._normalize_path_token(p) for p in parts}
+                if self._normalize_path_token(target_dir) in normalized_parts:
+                    path_state = "Kullanıcı PATH'inde mevcut"
+                else:
+                    path_state = "Kullanıcı PATH'inde bulunamadı"
+            else:
+                path_state = "Windows registry okunamadı"
+        except Exception:
+            path_state = "Kullanıcı PATH doğrulanamadı"
+
+        messagebox.showinfo(
+            "OCR / Tesseract",
+            "Tesseract ayarları kaydedildi.\n\n"
+            f"TESSERACT_CMD:\n{exe_path}\n\n"
+            f"PATH durumu: {path_state}",
+        )
 
     def _check_python_env_health(self) -> tuple[bool, str]:
         py = VENV_PYTHON

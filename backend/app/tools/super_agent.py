@@ -18,6 +18,8 @@ import time
 import socket
 import ipaddress
 import unicodedata
+import urllib.parse
+import urllib.request
 import usb.core
 import usb.util
 from datetime import datetime
@@ -33,6 +35,7 @@ import scipy.io.wavfile as wav
 from PIL import Image, ImageGrab
 
 from ..config import settings
+from ..secrets import decrypt_text
 
 _WORKSPACE_ROOT = settings.workspace_path.resolve()
 _VIRTUAL_DESKTOP = (_WORKSPACE_ROOT / "desktop").resolve()
@@ -77,6 +80,16 @@ _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
     "onay ver",
 }
 
+_IDE_COMPLETION_TERMS = (
+    "done", "completed", "finished", "all done", "all set", "task completed",
+    "islem tamamlandi", "gorev tamamlandi", "tamamlandi", "bitti", "sonuc",
+    "result ready", "response complete",
+)
+_IDE_BUSY_TERMS = (
+    "thinking", "generating", "processing", "running", "in progress",
+    "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor",
+)
+
 _APPROVAL_WATCHER_LOCK = threading.Lock()
 _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
     "running": False,
@@ -89,6 +102,14 @@ _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
     "last_event": "",
     "window_pattern": "Visual Studio Code|Code - Insiders",
     "interval": 1.0,
+    "notify_on_completion": True,
+    "auto_stop_on_completion": False,
+    "completion_detected": False,
+    "completion_prompt_sent": False,
+    "completion_hits": 0,
+    "last_completion_text": "",
+    "last_notification_at": "",
+    "notification_error": "",
 }
 
 _TESSERACT_INSTALL_URL = "https://github.com/UB-Mannheim/tesseract/wiki"
@@ -1037,6 +1058,54 @@ def _configure_tesseract_runtime(pytesseract_module: Any) -> Dict[str, Any]:
     return {"ok": True, "resolved_cmd": resolved_cmd}
 
 
+def _resolve_telegram_bot_token() -> str:
+    token = str(getattr(settings, "telegram_bot_token", "") or "").strip()
+    if token:
+        return token
+    token_enc = str(getattr(settings, "telegram_bot_token_enc", "") or "").strip()
+    if not token_enc:
+        return ""
+    try:
+        return decrypt_text(token_enc).strip()
+    except Exception:
+        return ""
+
+
+def _send_telegram_notification(text: str) -> Tuple[bool, str]:
+    token = _resolve_telegram_bot_token()
+    chat_id = str(getattr(settings, "telegram_allowed_user_id", "") or "").strip()
+    if not token or not chat_id:
+        return False, "Telegram token veya allowed user id eksik."
+
+    data = urllib.parse.urlencode(
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": "true",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+        return True, body[:240]
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
+    blob = _normalize_for_ocr_match(ocr_blob or "")
+    if len(blob) < 20:
+        return False
+    completion_hit = any(_normalize_for_ocr_match(term) in blob for term in _IDE_COMPLETION_TERMS)
+    busy_hit = any(_normalize_for_ocr_match(term) in blob for term in _IDE_BUSY_TERMS)
+    return completion_hit and not busy_hit
+
+
 def tool_wait_and_accept_approval(
     window_pattern: str = "Visual Studio Code|Code - Insiders",
     timeout: int = 25,
@@ -1287,6 +1356,9 @@ def _approval_watcher_worker(window_pattern: str, interval: float, min_confidenc
             allow_keyboard_fallback=False,
         )
 
+        send_completion_prompt = False
+        auto_stop_now = False
+        notification_text = ""
         with _APPROVAL_WATCHER_LOCK:
             _APPROVAL_WATCHER_STATE["checks"] = int(_APPROVAL_WATCHER_STATE.get("checks", 0)) + int(result.get("checks", 1))
 
@@ -1298,6 +1370,10 @@ def _approval_watcher_worker(window_pattern: str, interval: float, min_confidenc
                 else:
                     _APPROVAL_WATCHER_STATE["last_event"] = "Kabul edildi"
                 _APPROVAL_WATCHER_STATE["last_error"] = ""
+                _APPROVAL_WATCHER_STATE["completion_detected"] = False
+                _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+                _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+                _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
             elif result.get("error"):
                 _APPROVAL_WATCHER_STATE["last_error"] = str(result.get("error", ""))[:240]
                 _APPROVAL_WATCHER_STATE["last_event"] = "Hata olustu"
@@ -1306,6 +1382,48 @@ def _approval_watcher_worker(window_pattern: str, interval: float, min_confidenc
                     stop_event.set()
             else:
                 _APPROVAL_WATCHER_STATE["last_event"] = "Onay bekleniyor"
+
+            ocr_blob = str(result.get("last_seen_text", "") or "").strip()
+            if _looks_like_ide_completion_text(ocr_blob):
+                _APPROVAL_WATCHER_STATE["completion_hits"] = int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)) + 1
+            else:
+                _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+
+            completion_hits = int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0))
+            completion_prompt_sent = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
+            notify_on_completion = bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True))
+            auto_stop_on_completion = bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False))
+
+            if completion_hits >= 2 and not completion_prompt_sent:
+                _APPROVAL_WATCHER_STATE["completion_detected"] = True
+                _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
+                _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
+                _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
+                if notify_on_completion:
+                    send_completion_prompt = True
+                    notification_text = (
+                        "IDE gorevi tamamlanmis gorunuyor.\n"
+                        "Onay izleyiciyi kapatayim mi?\n"
+                        "Kapatmak icin: izlemeyi kapat\n"
+                        "Acik birakmak icin: izlemeye devam et"
+                    )
+                if auto_stop_on_completion:
+                    auto_stop_now = True
+
+        if send_completion_prompt and notification_text:
+            sent, info = _send_telegram_notification(notification_text)
+            with _APPROVAL_WATCHER_LOCK:
+                if sent:
+                    _APPROVAL_WATCHER_STATE["last_notification_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _APPROVAL_WATCHER_STATE["notification_error"] = ""
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gonderildi."
+                else:
+                    _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
+
+        if auto_stop_now:
+            with _APPROVAL_WATCHER_LOCK:
+                _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi, onay izleyici otomatik durduruluyor."
+            stop_event.set()
 
     with _APPROVAL_WATCHER_LOCK:
         _APPROVAL_WATCHER_STATE["running"] = False
@@ -1318,10 +1436,14 @@ def tool_start_approval_watcher(
     interval: float = 1.0,
     min_confidence: float = 40.0,
     lang: str = "tur+eng",
+    notify_on_completion: bool = True,
+    auto_stop_on_completion: bool = False,
 ) -> Dict[str, Any]:
     """Arka planda IDE onay pencerelerini surekli izleyip otomatik kabul et."""
     interval = max(0.4, min(float(interval), 5.0))
     min_confidence = max(0.0, min(float(min_confidence), 100.0))
+    notify_on_completion = bool(notify_on_completion)
+    auto_stop_on_completion = bool(auto_stop_on_completion)
 
     ok, err = _tesseract_ready()
     if not ok:
@@ -1356,6 +1478,14 @@ def tool_start_approval_watcher(
         _APPROVAL_WATCHER_STATE["interval"] = interval
         _APPROVAL_WATCHER_STATE["checks"] = 0
         _APPROVAL_WATCHER_STATE["accepted"] = 0
+        _APPROVAL_WATCHER_STATE["notify_on_completion"] = notify_on_completion
+        _APPROVAL_WATCHER_STATE["auto_stop_on_completion"] = auto_stop_on_completion
+        _APPROVAL_WATCHER_STATE["completion_detected"] = False
+        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+        _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+        _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+        _APPROVAL_WATCHER_STATE["last_notification_at"] = ""
+        _APPROVAL_WATCHER_STATE["notification_error"] = ""
 
         worker.start()
 
@@ -1365,6 +1495,8 @@ def tool_start_approval_watcher(
         "message": "Onay izleyici baslatildi.",
         "window_pattern": window_pattern,
         "interval": interval,
+        "notify_on_completion": notify_on_completion,
+        "auto_stop_on_completion": auto_stop_on_completion,
     }
 
 
@@ -1409,7 +1541,35 @@ def tool_approval_watcher_status() -> Dict[str, Any]:
             "last_error": _APPROVAL_WATCHER_STATE.get("last_error", ""),
             "window_pattern": _APPROVAL_WATCHER_STATE.get("window_pattern", ""),
             "interval": _APPROVAL_WATCHER_STATE.get("interval", 1.0),
+            "notify_on_completion": bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True)),
+            "auto_stop_on_completion": bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False)),
+            "completion_detected": bool(_APPROVAL_WATCHER_STATE.get("completion_detected", False)),
+            "completion_prompt_sent": bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent", False)),
+            "completion_hits": int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
+            "last_completion_text": _APPROVAL_WATCHER_STATE.get("last_completion_text", ""),
+            "last_notification_at": _APPROVAL_WATCHER_STATE.get("last_notification_at", ""),
+            "notification_error": _APPROVAL_WATCHER_STATE.get("notification_error", ""),
         }
+
+
+def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, Any]:
+    """Tamamlanma bildirimi sorusunu temizle (watcher acik kalabilir)."""
+    with _APPROVAL_WATCHER_LOCK:
+        running = bool(_APPROVAL_WATCHER_STATE.get("running"))
+        _APPROVAL_WATCHER_STATE["completion_detected"] = False
+        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+        _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+        _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+        if keep_running and running:
+            _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gecildi, izleyici acik."
+        else:
+            _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi temizlendi."
+    return {
+        "success": True,
+        "running": running,
+        "completion_prompt_sent": False,
+        "message": "Tamamlanma bildirimi sifirlandi.",
+    }
 
 
 # =============================================================================
