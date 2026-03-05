@@ -31,7 +31,7 @@ def _save_state(state: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Weather briefing (daily, via wttr.in – no API key needed)
+# Weather briefing (daily, via wttr.in - no API key needed)
 # ---------------------------------------------------------------------------
 
 async def _check_weather(state: Dict[str, Any]) -> None:
@@ -39,6 +39,7 @@ async def _check_weather(state: Dict[str, Any]) -> None:
     now = datetime.now()
     now_hour = now.hour
     today = now.strftime("%Y-%m-%d")
+    daily_key = "last_weather_daily"
 
     # Determine period: morning (7-9), noon (12-13), evening (18-19)
     if 7 <= now_hour <= 9:
@@ -48,7 +49,12 @@ async def _check_weather(state: Dict[str, Any]) -> None:
     elif 18 <= now_hour <= 19:
         period = "evening"
     else:
-        return  # Outside notification windows
+        # If strict windows were missed, still send one fallback daily briefing.
+        if state.get(daily_key) == today:
+            return
+        if not (9 <= now_hour <= 23):
+            return
+        period = "daily"
 
     period_key = f"last_weather_{period}"
     if state.get(period_key) == today:
@@ -80,26 +86,27 @@ async def _check_weather(state: Dict[str, Any]) -> None:
         # Clothing advice
         temp_int = int(temp) if temp != "?" else 20
         if temp_int < 5:
-            advice = "🧥 Kalın mont, atkı ve eldiven şart!"
+            advice = "Kalin mont, atki ve eldiven sart."
         elif temp_int < 12:
-            advice = "🧣 Mont veya kalın ceket önerilir."
+            advice = "Mont veya kalin ceket onerilir."
         elif temp_int < 18:
-            advice = "🧥 Hafif bir ceket/hırka yeterli."
+            advice = "Hafif bir ceket/hirka yeterli."
         elif temp_int < 25:
-            advice = "👕 T-shirt ve hafif giyim yeterli."
+            advice = "T-shirt ve hafif giyim yeterli."
         else:
-            advice = "☀️ Çok sıcak – hafif giyinin, su için!"
+            advice = "Cok sicak - hafif giyinin, su icin."
 
         text = (
-            f"🌤 <b>Günlük Hava Durumu – {city}</b>\n\n"
-            f"🌡 <b>Sıcaklık:</b> {temp}°C (hissedilen: {feels}°C)\n"
-            f"📊 <b>Min/Max:</b> {min_t}°C / {max_t}°C\n"
-            f"💧 <b>Nem:</b> %{humidity}\n"
-            f"☁️ <b>Durum:</b> {desc}\n\n"
+            f"<b>Gunluk Hava Durumu - {city}</b>\n\n"
+            f"<b>Sicaklik:</b> {temp} C (hissedilen: {feels} C)\n"
+            f"<b>Min/Max:</b> {min_t} C / {max_t} C\n"
+            f"<b>Nem:</b> %{humidity}\n"
+            f"<b>Durum:</b> {desc}\n\n"
             f"{advice}"
         )
         await _send_telegram(text)
         state[period_key] = today
+        state[daily_key] = today
         _save_state(state)
         logger.info(f"SmartAssistant: weather briefing sent for {city} ({period})")
 
@@ -145,11 +152,11 @@ async def _check_github_trending(state: Dict[str, Any]) -> None:
                 seen_repos.add(full_name)
 
         if new_repos:
-            lines = ["🔥 <b>GitHub Trending Repolar</b>\n"]
+            lines = ["<b>GitHub Trending Repolar</b>\n"]
             for r in new_repos[:5]:
                 lines.append(
-                    f"⭐ <b>{r['stars']}</b> | <a href=\"{r['url']}\">{r['name']}</a>\n"
-                    f"    {r['lang']} – {r['desc']}"
+                    f"* <b>{r['stars']}</b> | <a href=\"{r['url']}\">{r['name']}</a>\n"
+                    f"  {r['lang']} - {r['desc']}"
                 )
             await _send_telegram("\n".join(lines))
 
@@ -166,26 +173,34 @@ async def _check_github_trending(state: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tech News Digest (every 4h via Google News RSS)
+# News Digest (every 2h via Google News RSS)
 # ---------------------------------------------------------------------------
 
 async def _check_tech_news(state: Dict[str, Any]) -> None:
     last_check = state.get("last_tech_news", 0)
-    if time.time() - last_check < 4 * 3600:
+    if time.time() - last_check < 2 * 3600:
         return
 
     import xml.etree.ElementTree as ET
 
-    queries = [
-        "AI model deprecation OR API change OR breaking change",
-        "React OR Vue.js OR frontend framework update",
-        "Gemini OR Claude OR OpenAI model release",
+    owner_profile = (getattr(settings, "owner_profile", "") or "").lower()
+    query_plan: List[Dict[str, str]] = [
+        {"tag": "Teknoloji", "q": "AI model deprecation OR API change OR breaking change"},
+        {"tag": "Teknoloji", "q": "Gemini OR Claude OR OpenAI model release"},
+        {"tag": "Piyasa", "q": "Turkiye ekonomi enflasyon faiz borsa"},
+        {"tag": "Jeopolitik", "q": "middle east conflict energy oil market impact"},
     ]
+    if any(k in owner_profile for k in ("yazilim", "developer", "frontend", "react", "vue")):
+        query_plan.append({"tag": "Yazilim", "q": "React OR Vue.js OR frontend framework update"})
+    if any(k in owner_profile for k in ("yapay zeka", "ai", "ml")):
+        query_plan.append({"tag": "AI", "q": "LLM benchmark release open source model"})
 
     seen_titles: Set[str] = set(state.get("tech_news_seen", []))
     new_items: List[Dict[str, str]] = []
 
-    for query in queries:
+    for qp in query_plan:
+        query = qp.get("q", "")
+        tag = qp.get("tag", "Gundem")
         try:
             feed_url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en&gl=US&ceid=US:en"
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -202,16 +217,17 @@ async def _check_tech_news(state: Dict[str, Any]) -> None:
                 if not title or title_key in seen_titles:
                     continue
 
-                new_items.append({"title": title, "link": link})
+                new_items.append({"title": title, "link": link, "tag": tag})
                 seen_titles.add(title_key)
 
         except Exception as exc:
             logger.debug(f"SmartAssistant: tech news query failed: {exc}")
 
     if new_items:
-        lines = ["📰 <b>Teknoloji Haberleri</b>\n"]
-        for item in new_items[:6]:
-            lines.append(f"• <a href=\"{item['link']}\">{item['title']}</a>")
+        lines = ["📰 <b>Kisisel Gundem Ozeti</b>\n"]
+        for item in new_items[:8]:
+            tag = item.get("tag", "Gundem")
+            lines.append(f"• <b>[{tag}]</b> <a href=\"{item['link']}\">{item['title']}</a>")
         await _send_telegram("\n".join(lines))
 
     # Keep seen list manageable
@@ -224,7 +240,7 @@ async def _check_tech_news(state: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Custom Alerts (every 30 min – user-defined search terms)
+# Custom Alerts (every 30 min - user-defined search terms)
 # ---------------------------------------------------------------------------
 
 async def _check_custom_alerts(state: Dict[str, Any]) -> None:
@@ -264,9 +280,9 @@ async def _check_custom_alerts(state: Dict[str, Any]) -> None:
             pass
 
     if new_items:
-        lines = ["🔔 <b>Özel Uyarılar</b>\n"]
+        lines = ["<b>Ozel Uyarilar</b>\n"]
         for item in new_items[:5]:
-            lines.append(f"🏷 <b>{item['term']}</b>\n• <a href=\"{item['link']}\">{item['title']}</a>")
+            lines.append(f"* <b>{item['term']}</b>\n- <a href=\"{item['link']}\">{item['title']}</a>")
         await _send_telegram("\n".join(lines))
 
     if len(seen_keys) > 200:
@@ -327,3 +343,4 @@ class SmartAssistant:
                 logger.exception(f"SmartAssistant error: {exc}")
             # Check every 10 minutes, individual features have their own intervals
             await asyncio.sleep(600)
+

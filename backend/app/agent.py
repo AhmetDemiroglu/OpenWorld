@@ -2714,6 +2714,7 @@ class AgentService:
         no_phrases = {
             "hayir", "gerek yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin",
             "izlemeyi kapat", "izleyiciyi kapat",
+            "bitmedi", "daha bitmedi", "hala bitmedi", "devam ediyor", "hala devam ediyor", "suruyor",
         }
         if joined in yes_phrases:
             return "yes"
@@ -2727,6 +2728,7 @@ class AgentService:
         no_tokens = {
             "hayir", "gerek", "yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin", "lutfen",
             "izlemeyi", "izleyiciyi",
+            "bitmedi", "devam", "ediyor", "hala", "suruyor",
         }
         if all(w in yes_tokens for w in words):
             return "yes"

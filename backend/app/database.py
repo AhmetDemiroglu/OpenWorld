@@ -422,6 +422,17 @@ def mark_email_seen(message_id: str, subject: str) -> None:
         finally:
             conn.close()
 
+
+def unmark_email_seen(message_id: str) -> None:
+    with _lock:
+        conn = _get_connection()
+        try:
+            conn.execute("DELETE FROM email_seen_log WHERE message_id = ?", (message_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def get_seen_emails(days: int = 7) -> List[Dict[str, str]]:
     with _lock:
         conn = _get_connection()

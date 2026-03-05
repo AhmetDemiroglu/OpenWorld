@@ -90,16 +90,29 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
         result["error"] = "Tum haber kaynaklari basarisiz oldu: " + "; ".join(feed_errors)
     return result
 
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
+_STEALTH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
 
 
 def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
     _validate_web_url(url)
-    with httpx.Client(timeout=25, follow_redirects=True, headers={"User-Agent": _BROWSER_UA}) as client:
+    with httpx.Client(timeout=25, follow_redirects=True, headers=_STEALTH_HEADERS) as client:
         resp = client.get(url)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "").lower()
@@ -107,6 +120,11 @@ def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
     if "html" in content_type:
         text = re.sub(r"<script.*?>.*?</script>", " ", text, flags=re.IGNORECASE | re.DOTALL)
         text = re.sub(r"<style.*?>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<noscript.*?>.*?</noscript>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<nav.*?>.*?</nav>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<footer.*?>.*?</footer>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<header.*?>.*?</header>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
         text = re.sub(r"<[^>]+>", " ", text)
         text = html_lib.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()

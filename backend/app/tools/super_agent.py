@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import platform
 import re
@@ -23,6 +24,7 @@ import urllib.request
 import usb.core
 import usb.util
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -36,6 +38,8 @@ from PIL import Image, ImageGrab
 
 from ..config import settings
 from ..secrets import decrypt_text
+
+logger = logging.getLogger(__name__)
 
 _WORKSPACE_ROOT = settings.workspace_path.resolve()
 _VIRTUAL_DESKTOP = (_WORKSPACE_ROOT / "desktop").resolve()
@@ -226,7 +230,7 @@ _IDE_COMPLETION_DIRECT_TERMS = (
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "in progress", "loading", "analyzing",
-    "synthesizing",
+    "synthesizing", "working", "executing", "researching",
     "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor", "bekleniyor",
 )
 
@@ -265,8 +269,13 @@ _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
     "completion_prompt_sent": False,
     "completion_hits": 0,
     "last_completion_text": "",
+    "completion_reason": "",
     "last_notification_at": "",
     "notification_error": "",
+    "last_busy_at": "",
+    "last_activity_at": "",
+    "idle_clear_hits": 0,
+    "idle_stable_hits": 0,
 }
 
 _TESSERACT_INSTALL_URL = "https://github.com/UB-Mannheim/tesseract/wiki"
@@ -293,8 +302,13 @@ def _approval_watcher_status_snapshot_unlocked() -> Dict[str, Any]:
         "completion_prompt_sent": bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent", False)),
         "completion_hits": int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
         "last_completion_text": _APPROVAL_WATCHER_STATE.get("last_completion_text", ""),
+        "completion_reason": _APPROVAL_WATCHER_STATE.get("completion_reason", ""),
         "last_notification_at": _APPROVAL_WATCHER_STATE.get("last_notification_at", ""),
         "notification_error": _APPROVAL_WATCHER_STATE.get("notification_error", ""),
+        "last_busy_at": _APPROVAL_WATCHER_STATE.get("last_busy_at", ""),
+        "last_activity_at": _APPROVAL_WATCHER_STATE.get("last_activity_at", ""),
+        "idle_clear_hits": int(_APPROVAL_WATCHER_STATE.get("idle_clear_hits", 0)),
+        "idle_stable_hits": int(_APPROVAL_WATCHER_STATE.get("idle_stable_hits", 0)),
     }
 
 
@@ -1451,7 +1465,7 @@ def _send_telegram_notification(text: str) -> Tuple[bool, str]:
 
 def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
     blob = _normalize_for_ocr_match(ocr_blob or "")
-    if len(blob) < 8:
+    if len(blob) < 4:
         return False
     completion_hits = sum(1 for term in _IDE_COMPLETION_TERMS if _normalize_for_ocr_match(term) in blob)
     strong_hits = sum(1 for term in _IDE_COMPLETION_STRONG_TERMS if _normalize_for_ocr_match(term) in blob)
@@ -1464,16 +1478,45 @@ def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
 
 def _looks_like_ide_busy_text(ocr_blob: str) -> bool:
     blob = _normalize_for_ocr_match(ocr_blob or "")
-    if len(blob) < 8:
+    if len(blob) < 4:
         return False
     return any(_normalize_for_ocr_match(term) in blob for term in _IDE_BUSY_TERMS)
 
 
 def _looks_like_input_required_text(ocr_blob: str) -> bool:
     blob = _normalize_for_ocr_match(ocr_blob or "")
-    if len(blob) < 8:
+    if len(blob) < 4:
         return False
     return any(_normalize_for_ocr_match(term) in blob for term in _IDE_INPUT_REQUIRED_TERMS)
+
+
+def _ocr_state_key(text: str) -> str:
+    blob = _normalize_for_ocr_match(text or "")
+    if not blob:
+        return ""
+    blob = re.sub(r"\b\d+\b", " ", blob)
+    blob = re.sub(r"\s+", " ", blob).strip()
+    return blob[:700]
+
+
+def _ocr_state_similarity(left: str, right: str) -> float:
+    left_key = _ocr_state_key(left)
+    right_key = _ocr_state_key(right)
+    if not left_key or not right_key:
+        return 0.0
+    if left_key == right_key:
+        return 1.0
+    return SequenceMatcher(None, left_key, right_key).ratio()
+
+
+def _reset_completion_signal_unlocked(last_event: str = "") -> None:
+    _APPROVAL_WATCHER_STATE["completion_detected"] = False
+    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+    _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+    _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+    _APPROVAL_WATCHER_STATE["completion_reason"] = ""
+    if last_event:
+        _APPROVAL_WATCHER_STATE["last_event"] = last_event
 
 
 def tool_wait_and_accept_approval(
@@ -2046,9 +2089,14 @@ def _approval_watcher_worker(
 ) -> None:
     last_notify_try_ts = 0.0
     saw_input_required = False
+    saw_busy = False
     idle_clear_hits = 0
+    idle_stable_hits = 0
     last_accept_ts = 0.0
+    last_busy_ts = 0.0
+    last_activity_ts = 0.0
     no_input_required_since = 0.0
+    last_idle_blob = ""
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -2065,12 +2113,16 @@ def _approval_watcher_worker(
         notification_text = ""
         with _APPROVAL_WATCHER_LOCK:
             _APPROVAL_WATCHER_STATE["checks"] = int(_APPROVAL_WATCHER_STATE.get("checks", 0)) + int(result.get("checks", 1))
+            completion_prompt_sent_before = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
 
             if result.get("success"):
                 _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
                 last_accept_ts = time.time()
+                last_activity_ts = last_accept_ts
                 saw_input_required = True
                 idle_clear_hits = 0
+                idle_stable_hits = 0
+                last_idle_blob = ""
                 clicked_text = str(result.get("clicked_text", "")).strip()
                 followup_text = str(result.get("followup_text", "")).strip()
                 followup_clicked = bool(result.get("followup_clicked"))
@@ -2081,10 +2133,8 @@ def _approval_watcher_worker(
                 else:
                     _APPROVAL_WATCHER_STATE["last_event"] = "Kabul edildi"
                 _APPROVAL_WATCHER_STATE["last_error"] = ""
-                _APPROVAL_WATCHER_STATE["completion_detected"] = False
-                _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
-                _APPROVAL_WATCHER_STATE["completion_hits"] = 0
-                _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+                _reset_completion_signal_unlocked()
+                _APPROVAL_WATCHER_STATE["last_activity_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elif result.get("error"):
                 _APPROVAL_WATCHER_STATE["last_error"] = str(result.get("error", ""))[:240]
                 _APPROVAL_WATCHER_STATE["last_event"] = "Hata olustu"
@@ -2098,23 +2148,82 @@ def _approval_watcher_worker(
             input_required_hit = bool(result.get("input_required_detected")) or _looks_like_input_required_text(ocr_blob)
             busy_hit = bool(result.get("busy_detected")) or _looks_like_ide_busy_text(ocr_blob)
             now_ts = time.time()
+            now_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if result.get("success") or input_required_hit or busy_hit:
+                last_activity_ts = now_ts
+                _APPROVAL_WATCHER_STATE["last_activity_at"] = now_label
+
+            if busy_hit:
+                saw_busy = True
+                last_busy_ts = now_ts
+                _APPROVAL_WATCHER_STATE["last_busy_at"] = now_label
+
+            if completion_prompt_sent_before and (result.get("success") or input_required_hit or busy_hit):
+                reason = "Yeni aktivite goruldu, onceki tamamlanma sinyali iptal edildi."
+                if busy_hit and not result.get("success"):
+                    reason = "Calisma yeniden goruldu, onceki tamamlanma sinyali iptal edildi."
+                _reset_completion_signal_unlocked(reason)
+                logger.info(
+                    "Approval watcher completion reset | reason=%s profile=%s",
+                    reason,
+                    profile,
+                )
+                completion_prompt_sent_before = False
+            elif completion_prompt_sent_before:
+                last_completion_text = str(_APPROVAL_WATCHER_STATE.get("last_completion_text", "") or "")
+                if (
+                    last_completion_text
+                    and ocr_blob
+                    and _ocr_state_similarity(last_completion_text, ocr_blob) < 0.72
+                    and not _looks_like_ide_completion_text(ocr_blob)
+                ):
+                    _reset_completion_signal_unlocked(
+                        "Ekran akisi degisti, onceki tamamlanma sinyali iptal edildi."
+                    )
+                    logger.info(
+                        "Approval watcher completion reset | reason=screen_changed profile=%s similarity=%.3f",
+                        profile,
+                        _ocr_state_similarity(last_completion_text, ocr_blob),
+                    )
+                    completion_prompt_sent_before = False
 
             if input_required_hit:
                 saw_input_required = True
                 idle_clear_hits = 0
+                idle_stable_hits = 0
+                last_idle_blob = ""
                 no_input_required_since = 0.0
             elif busy_hit:
                 idle_clear_hits = 0
+                idle_stable_hits = 0
+                last_idle_blob = ""
                 if no_input_required_since <= 0.0:
                     no_input_required_since = now_ts
             else:
-                enough_idle_delay = (time.time() - last_accept_ts) >= max(18.0, interval * 6.0)
+                activity_seen = bool(saw_input_required or saw_busy or last_accept_ts > 0.0 or last_busy_ts > 0.0)
+                activity_anchor_ts = max(last_accept_ts, last_busy_ts, last_activity_ts)
+                enough_idle_delay = bool(
+                    activity_seen
+                    and activity_anchor_ts > 0.0
+                    and (now_ts - activity_anchor_ts) >= max(30.0, interval * 10.0)
+                )
                 if no_input_required_since <= 0.0:
                     no_input_required_since = now_ts
-                if saw_input_required and enough_idle_delay:
+                if enough_idle_delay:
                     idle_clear_hits += 1
+                    if last_idle_blob and _ocr_state_similarity(last_idle_blob, ocr_blob) >= 0.96:
+                        idle_stable_hits += 1
+                    else:
+                        idle_stable_hits = 1 if _ocr_state_key(ocr_blob) else 0
+                    last_idle_blob = ocr_blob
                 else:
                     idle_clear_hits = 0
+                    idle_stable_hits = 0
+                    last_idle_blob = ocr_blob
+
+            _APPROVAL_WATCHER_STATE["idle_clear_hits"] = idle_clear_hits
+            _APPROVAL_WATCHER_STATE["idle_stable_hits"] = idle_stable_hits
 
             if _looks_like_ide_completion_text(ocr_blob):
                 _APPROVAL_WATCHER_STATE["completion_hits"] = int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)) + 1
@@ -2125,27 +2234,67 @@ def _approval_watcher_worker(
             completion_prompt_sent = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
             notify_on_completion = bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True))
             auto_stop_on_completion = bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False))
-            heuristic_completion = bool(saw_input_required and idle_clear_hits >= 3 and not input_required_hit and not busy_hit)
+            activity_seen = bool(saw_input_required or saw_busy or last_accept_ts > 0.0 or last_busy_ts > 0.0)
+            activity_anchor_ts = max(last_accept_ts, last_busy_ts, last_activity_ts)
+            quiet_seconds = (now_ts - activity_anchor_ts) if activity_anchor_ts > 0.0 else 0.0
+            direct_completion = bool(completion_hits >= 2 and not input_required_hit and not busy_hit)
+            heuristic_completion = bool(
+                activity_seen
+                and not input_required_hit
+                and not busy_hit
+                and idle_clear_hits >= 6
+                and idle_stable_hits >= 3
+                and quiet_seconds >= max(45.0, interval * 24.0)
+            )
             silent_seconds = (now_ts - no_input_required_since) if no_input_required_since > 0.0 else 0.0
-            silent_completion = bool(saw_input_required and not input_required_hit and silent_seconds >= max(60.0, interval * 30.0))
-            stale_completion = bool(saw_input_required and not input_required_hit and (now_ts - last_accept_ts) >= max(150.0, interval * 80.0))
-            completion_detected_now = completion_hits >= 2 or heuristic_completion or silent_completion or stale_completion
+            silent_completion = bool(
+                activity_seen
+                and not input_required_hit
+                and not busy_hit
+                and idle_clear_hits >= 10
+                and idle_stable_hits >= 4
+                and max(quiet_seconds, silent_seconds) >= max(90.0, interval * 45.0)
+            )
+            stale_completion = bool(
+                activity_seen
+                and not input_required_hit
+                and not busy_hit
+                and idle_stable_hits >= 3
+                and quiet_seconds >= max(180.0, interval * 90.0)
+            )
+            completion_detected_now = direct_completion or heuristic_completion or silent_completion or stale_completion
 
             if completion_detected_now and not completion_prompt_sent:
                 saw_input_required = False
+                saw_busy = False
                 idle_clear_hits = 0
+                idle_stable_hits = 0
                 no_input_required_since = 0.0
+                last_idle_blob = ""
                 _APPROVAL_WATCHER_STATE["completion_detected"] = True
                 _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
                 _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
-                if completion_hits >= 2:
+                if direct_completion:
+                    _APPROVAL_WATCHER_STATE["completion_reason"] = "ocr_completion"
                     _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
                 elif heuristic_completion:
+                    _APPROVAL_WATCHER_STATE["completion_reason"] = "stable_idle"
                     _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor (durum sezgisi)."
                 elif silent_completion:
+                    _APPROVAL_WATCHER_STATE["completion_reason"] = "silent_idle"
                     _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari tamamlandi gibi gorunuyor (sessiz durum)."
                 else:
+                    _APPROVAL_WATCHER_STATE["completion_reason"] = "stale_idle"
                     _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari uzun suredir gorunmuyor; tamamlandi varsayildi."
+                logger.info(
+                    "Approval watcher completion detected | profile=%s reason=%s quiet=%.1fs idle_hits=%s stable_hits=%s completion_hits=%s",
+                    profile,
+                    _APPROVAL_WATCHER_STATE.get("completion_reason", ""),
+                    quiet_seconds,
+                    idle_clear_hits,
+                    idle_stable_hits,
+                    completion_hits,
+                )
                 if notify_on_completion:
                     send_completion_prompt = True
                     notification_text = (
@@ -2169,12 +2318,18 @@ def _approval_watcher_worker(
                     _APPROVAL_WATCHER_STATE["last_notification_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _APPROVAL_WATCHER_STATE["notification_error"] = ""
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gonderildi."
+                    logger.info("Approval watcher completion notification sent | profile=%s", profile)
                 else:
                     _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
                     _APPROVAL_WATCHER_STATE["completion_detected"] = True
                     # Bildirim gecici hata ile gidemeyebilir; sonraki dongude tekrar dene.
                     _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi (tekrar denenecek)."
+                    logger.warning(
+                        "Approval watcher completion notification failed | profile=%s error=%s",
+                        profile,
+                        info[:240],
+                    )
 
         if auto_stop_now:
             with _APPROVAL_WATCHER_LOCK:
@@ -2246,8 +2401,13 @@ def tool_start_approval_watcher(
         _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
         _APPROVAL_WATCHER_STATE["completion_hits"] = 0
         _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+        _APPROVAL_WATCHER_STATE["completion_reason"] = ""
         _APPROVAL_WATCHER_STATE["last_notification_at"] = ""
         _APPROVAL_WATCHER_STATE["notification_error"] = ""
+        _APPROVAL_WATCHER_STATE["last_busy_at"] = ""
+        _APPROVAL_WATCHER_STATE["last_activity_at"] = ""
+        _APPROVAL_WATCHER_STATE["idle_clear_hits"] = 0
+        _APPROVAL_WATCHER_STATE["idle_stable_hits"] = 0
 
         worker.start()
 
@@ -2299,10 +2459,7 @@ def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, 
     """Tamamlanma bildirimi sorusunu temizle (watcher acik kalabilir)."""
     with _APPROVAL_WATCHER_LOCK:
         running = bool(_APPROVAL_WATCHER_STATE.get("running"))
-        _APPROVAL_WATCHER_STATE["completion_detected"] = False
-        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
-        _APPROVAL_WATCHER_STATE["completion_hits"] = 0
-        _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+        _reset_completion_signal_unlocked()
         if keep_running and running:
             _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gecildi, izleyici acik."
         else:

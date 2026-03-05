@@ -46,7 +46,7 @@ async def _smart_assistant_tick():
 
 def start_scheduler():
     if not scheduler.running:
-        email_interval = getattr(settings, "bg_email_interval_min", 15)
+        email_interval = max(1, min(int(getattr(settings, "bg_email_interval_min", 5) or 5), 5))
         
         # Email monitor job — fires immediately, then every N minutes
         scheduler.add_job(

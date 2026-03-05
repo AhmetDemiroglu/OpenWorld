@@ -186,6 +186,22 @@ def _extract_llm_text(resp: Any) -> str:
     return ""
 
 
+def _clean_llm_output(text: str) -> str:
+    """LLM ciktisindaki JSON bloklari, code fence'ler ve halusinasyonlari temizle."""
+    if not text:
+        return ""
+    # Sondaki JSON array/object artiklari (LLM bazen yapisallandirilmis cikti ekler)
+    # Pattern: metin bittikten sonra [ { "title": ... } ] veya benzer JSON
+    text = re.sub(r'\n\s*\[?\s*\{[^{}]*"(?:title|content|url|citations)"[^}]*\}[\s\S]*$', '', text)
+    # Code fence bloklari (```json ... ```)
+    text = re.sub(r'```(?:json|javascript|python|html)?\s*[\s\S]*?```', '', text)
+    # <|endoftext|>, <|im_start|>, <|im_end|> gibi ozel tokenlar
+    text = re.sub(r'<\|[^|]+\|>', '', text)
+    # "user", "assistant", "system" role etiketleri (LLM prompt leak)
+    text = re.sub(r'\n(?:user|assistant|system)\s*$', '', text, flags=re.MULTILINE)
+    return text.strip()
+
+
 def _is_low_signal_content(text: str) -> bool:
     raw = (text or "").strip()
     if len(raw) < 140:
@@ -629,36 +645,135 @@ def tool_research_async(
                     logging.getLogger(__name__).error("[research_async] search hatasi: %s\n%s", exc2, traceback.format_exc())
                     tool_notebook_add_note(name=safe_name, note=f"'{q}' hatası: {_error_brief(exc2)}")
 
-            # 3b. Wikipedia — konuya ait genel bilgi çek (kelime siniri kontrolu ile)
+            # 3a2. Brave Search — Google News'i tamamlayici genel web aramasi
+            # Her zaman calisir (haber kaynaklari yetersiz kalabilir, ozellikle nis konularda)
+            if len(all_sources) < 15:
+                tool_notebook_add_note(name=safe_name, note=f"[BİLGİ] Google News: {len(all_sources)} kaynak. Brave Search ile takviye ediliyor...")
+                import httpx as _httpx
+                _brave_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                }
+                # Kisa EN sorgularla ara (Brave EN'de daha iyi sonuc verir)
+                brave_queries = []
+                for q in queries[:4]:
+                    ascii_q = _normalize_ascii(q)
+                    if ascii_q and len(ascii_q) < 80:
+                        brave_queries.append(ascii_q)
+                # Yedek: konunun Ingilizce anahtar kelimeleri
+                if not brave_queries:
+                    brave_queries = [_normalize_ascii(" ".join(topic_keywords[:4]))]
+
+                for bq in brave_queries[:3]:
+                    if len(all_sources) >= 20:
+                        break
+                    try:
+                        from urllib.parse import quote_plus as _qp
+                        brave_url = f"https://search.brave.com/search?q={_qp(bq)}"
+                        brave_resp = _httpx.get(brave_url, headers=_brave_headers, timeout=15, follow_redirects=True)
+                        if brave_resp.status_code != 200:
+                            continue
+                        # Brave sonuclarindan URL cek
+                        brave_urls = re.findall(r'href="(https?://[^"]{15,})"', brave_resp.text)
+                        brave_added = 0
+                        skip_domains = {"brave.com", "brave.software", "youtube.com", "youtu.be", "google.com", "facebook.com", "twitter.com"}
+                        for bu in brave_urls:
+                            if len(all_sources) >= 25:
+                                break
+                            bu = bu.split("#")[0]  # Fragment kaldir
+                            from urllib.parse import urlparse as _up
+                            domain = _up(bu).netloc.lower()
+                            if any(sd in domain for sd in skip_domains):
+                                continue
+                            key = bu.lower()
+                            if key in seen_source_keys:
+                                continue
+                            # Baslik icin URL'den cikar
+                            path_parts = _up(bu).path.strip("/").split("/")
+                            title_guess = " ".join(path_parts[-1:]).replace("-", " ").replace("_", " ").title()[:80] if path_parts else domain
+                            seen_source_keys.add(key)
+                            all_sources.append({
+                                "title": title_guess or domain,
+                                "url": bu,
+                                "link": bu,
+                                "pub_date": "",
+                                "source": f"Brave/{domain}",
+                                "source_url": "",
+                                "summary": "",
+                            })
+                            brave_added += 1
+                            if brave_added >= 8:  # Sorgu basina max 8
+                                break
+                        if brave_added:
+                            tool_notebook_add_note(name=safe_name, note=f"[BRAVE] '{bq[:40]}': {brave_added} kaynak eklendi")
+                    except Exception as brave_exc:
+                        tool_notebook_add_note(name=safe_name, note=f"[BRAVE HATA] {_error_brief(brave_exc)[:100]}")
+
+            # 3b. Wikipedia — konuya ait genel bilgi çek
             _lower_topic = _normalize_ascii(topic).lower()
             wiki_subjects: list[str] = []
+
+            # Hardcoded konu-spesifik Wikipedia sayfalari
             if _topic_has_keyword(_lower_topic, ["iran", "israil", "israel"]):
-                wiki_subjects += ["Iran–Israel conflict", "Israel–Hamas war", "Iran nuclear program"]
+                wiki_subjects += ["Iran–Israel conflict", "Israel–Hamas war"]
             if _topic_has_keyword(_lower_topic, ["finans", "piyasa", "petrol", "enerji", "ekonomi"]):
-                wiki_subjects += ["Oil price", "Geopolitical risk premium", "Commodity market"]
-            if _topic_has_keyword(_lower_topic, ["abd", "nato", "america"]):
-                wiki_subjects += ["United States foreign policy in the Middle East"]
+                wiki_subjects += ["Oil price", "Commodity market"]
             if _topic_has_keyword(_lower_topic, ["kanser", "cancer", "tedavi", "treatment"]):
-                wiki_subjects += ["Cancer research", "Immunotherapy", "Cancer treatment"]
+                wiki_subjects += ["Cancer research", "Immunotherapy"]
             if _topic_has_keyword(_lower_topic, ["yapay", "zeka", "llm", "agents", "ajanlar"]):
-                wiki_subjects += ["Artificial intelligence", "Large language model", "AI agent"]
+                wiki_subjects += ["Artificial intelligence", "Large language model"]
+
+            # Dinamik Wikipedia arama — konunun EN anahtar kelimeleri ile
+            _wiki_ua = "OpenWorldResearch/1.0 (https://github.com/openworld; research@openworld.app)"
+            try:
+                import httpx as _httpx
+                wiki_search_q = _normalize_ascii(" ".join(topic_keywords[:4]))
+                wiki_search_resp = _httpx.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params={"action": "opensearch", "search": wiki_search_q, "limit": "5", "format": "json"},
+                    headers={"User-Agent": _wiki_ua, "Api-User-Agent": _wiki_ua},
+                    timeout=10,
+                )
+                if wiki_search_resp.status_code == 200:
+                    search_data = wiki_search_resp.json()
+                    if len(search_data) >= 2 and isinstance(search_data[1], list):
+                        for ws_title in search_data[1][:5]:
+                            if ws_title and ws_title not in wiki_subjects:
+                                wiki_subjects.append(ws_title)
+                        tool_notebook_add_note(name=safe_name, note=f"[WİKİ ARAMA] '{wiki_search_q[:40]}': {len(search_data[1])} sonuç")
+            except Exception as ws_exc:
+                tool_notebook_add_note(name=safe_name, note=f"[WİKİ ARAMA HATA] {_error_brief(ws_exc)[:80]}")
             for subj in wiki_subjects:
                 try:
-                    wiki_url = f"https://en.wikipedia.org/wiki/{subj.replace(' ', '_')}"
-                    page = execute_tool("fetch_web_page", {"url": wiki_url, "max_chars": 18000})
-                    raw = str(page.get("content", "") or "").strip()
-                    cleaned = _clean_web_content(raw)
-                    if cleaned and len(cleaned) > 300:
-                        all_sources.append({
-                            "title": f"Wikipedia: {subj}",
-                            "url": wiki_url,
-                            "link": wiki_url,
-                            "pub_date": "",
-                            "source": "Wikipedia",
-                            "source_url": wiki_url,
-                            "summary": cleaned[:600],
-                        })
-                        tool_notebook_add_note(name=safe_name, note=f"[WİKİ] '{subj}': {len(cleaned)} karakter çekildi")
+                    # Wikipedia REST API kullan (web scraping 403 veriyor)
+                    import httpx as _httpx
+                    wiki_api_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{subj.replace(' ', '_')}"
+                    wiki_resp = _httpx.get(
+                        wiki_api_url,
+                        headers={"User-Agent": _wiki_ua, "Api-User-Agent": _wiki_ua},
+                        timeout=10,
+                        follow_redirects=True,
+                    )
+                    if wiki_resp.status_code == 200:
+                        wiki_data = wiki_resp.json()
+                        extract = str(wiki_data.get("extract", "")).strip()
+                        wiki_url = str(wiki_data.get("content_urls", {}).get("desktop", {}).get("page", ""))
+                        if not wiki_url:
+                            wiki_url = f"https://en.wikipedia.org/wiki/{subj.replace(' ', '_')}"
+                        if extract and len(extract) > 100:
+                            all_sources.append({
+                                "title": f"Wikipedia: {wiki_data.get('title', subj)}",
+                                "url": wiki_url,
+                                "link": wiki_url,
+                                "pub_date": "",
+                                "source": "Wikipedia",
+                                "source_url": wiki_url,
+                                "summary": extract[:800],
+                            })
+                            tool_notebook_add_note(name=safe_name, note=f"[WİKİ] '{subj}': {len(extract)} karakter (REST API)")
+                    else:
+                        tool_notebook_add_note(name=safe_name, note=f"[WİKİ] '{subj}': HTTP {wiki_resp.status_code}")
                 except Exception as wiki_exc:
                     tool_notebook_add_note(name=safe_name, note=f"[WİKİ HATA] {subj}: {_error_brief(wiki_exc)[:100]}")
 
@@ -877,7 +992,7 @@ def tool_research_async(
                                     f"KAYNAKLAR (Batch {b_idx}/{len(batches)}):\n{batch_ctx}"
                                 )},
                             ]
-                            b_summary = _llm_call_safe(b_msgs, timeout_sec=300.0)
+                            b_summary = _clean_llm_output(_llm_call_safe(b_msgs, timeout_sec=300.0))
                             if b_summary:
                                 batch_summaries.append(f"[Batch {b_idx} özeti]\n{b_summary}")
                                 tool_notebook_add_note(name=safe_name, note=f"[SENTEZ] Batch {b_idx}/{len(batches)} tamamlandı ({len(b_summary)} karakter)")
@@ -907,7 +1022,9 @@ def tool_research_async(
                         )},
                     ]
 
-                    synthesis_text = _llm_call_safe(final_msgs, timeout_sec=420.0)
+                    synthesis_text = _clean_llm_output(
+                        _llm_call_safe(final_msgs, timeout_sec=420.0)
+                    )
 
                     # Event loop kapat
                     try:

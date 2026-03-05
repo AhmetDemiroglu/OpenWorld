@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     # Background Services
     bg_email_monitor: bool = True
-    bg_email_interval_min: int = 15
+    bg_email_interval_min: int = 5
     bg_smart_assistant: bool = True
     bg_weather_city: str = "Izmir"
     bg_custom_alerts: str = ""
