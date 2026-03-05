@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import ctypes
@@ -24,11 +24,7 @@ from tkinter import messagebox
 ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
 BROKEN_VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
-RUNTIME_PYTHON = Path(r"C:\OpenWorldRuntime\venv\Scripts\python.exe")
-if RUNTIME_PYTHON.exists():
-    VENV_PYTHON = RUNTIME_PYTHON
-else:
-    VENV_PYTHON = BROKEN_VENV_PYTHON
+VENV_PYTHON = BROKEN_VENV_PYTHON
 ENV_PATH = BACKEND_DIR / ".env"
 QWEN_INSTALL_SCRIPT = ROOT / "scripts" / "install-qwen35-9b.ps1"
 LOG_DIR = ROOT / "data" / "logs"
@@ -182,6 +178,206 @@ def _run_loopback_oauth(
         raise RuntimeError("OAuth timeout. Browser approval not completed.")
     return result["code"], redirect_uri
 
+# ---------------------------------------------------------------------------
+#  TOOLTIP HELPER
+# ---------------------------------------------------------------------------
+class ToolTip:
+    """Tkinter widget'lar\u0131 i\u00e7in g\u00f6rsel tooltip (ba\u015fl\u0131k + a\u00e7\u0131klama)."""
+    def __init__(self, widget: tk.Widget, text: str, title: str = "", delay: int = 350):
+        self.widget = widget
+        self.title = title
+        self.text = text
+        self.delay = delay
+        self._tip_window: tk.Toplevel | None = None
+        self._after_id: str | None = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+
+    def _schedule(self, _event=None):
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _show(self):
+        if self._tip_window:
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
+        outer = tk.Frame(tw, bg="#334155", bd=0)
+        outer.pack()
+        inner = tk.Frame(outer, bg="#0f172a", bd=0)
+        inner.pack(padx=1, pady=1)
+        if self.title:
+            tk.Label(
+                inner, text=self.title, justify="left",
+                bg="#1e293b", fg="#60a5fa", font=("Segoe UI", 9, "bold"),
+                anchor="w", padx=10, pady=5,
+            ).pack(fill="x")
+            tk.Frame(inner, bg="#334155", height=1).pack(fill="x")
+        tk.Label(
+            inner, text=self.text, justify="left", wraplength=340,
+            bg="#0f172a", fg="#cbd5e1", font=("Segoe UI", 9),
+            anchor="w", padx=10, pady=7,
+        ).pack(fill="x")
+        self._tip_window = tw
+
+    def _hide(self, _event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self._tip_window:
+            self._tip_window.destroy()
+            self._tip_window = None
+
+
+# ---------------------------------------------------------------------------
+#  HELP GUIDE CONTENT
+# ---------------------------------------------------------------------------
+SETUP_GUIDE = """\
+\u2501\u2501\u2501\u2501\u2501\u2501  OPENWORLD KURULUM REHBER\u0130  \u2501\u2501\u2501\u2501\u2501\u2501
+
+  Bu rehber sizi s\u0131f\u0131rdan \u00e7al\u0131\u015fan bir sisteme
+  ad\u0131m ad\u0131m g\u00f6t\u00fcrecektir.
+
+
+\u24ea  \u00d6N GEREKL\u0130L\u0130KLER  (Bir Kere Yap)
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   Python 3.11 veya \u00fcst\u00fc:
+   \u2022 https://python.org/downloads adresinden
+     indirin ve kurun
+   \u2022 Kurulumda \u201cAdd Python to PATH\u201d
+     kutusunu MUTLAKA i\u015faretleyin!
+
+   Node.js 20 veya \u00fcst\u00fc:
+   \u2022 https://nodejs.org adresinden LTS
+     s\u00fcr\u00fcm\u00fcn\u00fc indirin ve kurun
+
+   NOT: Bu iki program zaten kuruluysa
+   bu ad\u0131m\u0131 atlayabilirsiniz.
+
+
+\u2460  OLLAMA Y\u00dcKLE  (Yapay Zek\u00e2 Motoru)
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u2022 https://ollama.com adresine gidin
+   \u2022 \u0130\u015fletim sisteminize uygun versiyonu indirin
+   \u2022 Kurulumu tamamlay\u0131n (Next > Next > Finish)
+   \u2022 Kurulum sonras\u0131 Ollama otomatik ba\u015flar
+
+
+\u2461  MODEL \u0130ND\u0130R  (Yapay Zek\u00e2 Beyni)
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u2022 Launcher'\u0131 a\u00e7\u0131n
+   \u2022 \u201cYapay Zek\u00e2 Modeli\u201d b\u00f6l\u00fcm\u00fcn\u00fc a\u00e7\u0131n
+   \u2022 Motor: ollama olarak ayarl\u0131 olmal\u0131
+   \u2022 \u201cModel \u00c7ek\u201d butonuna t\u0131klay\u0131n
+   \u2022 ~5 GB indirilir, 10-30 dk s\u00fcrebilir
+   \u2022 Alternatif: \u201cQwen3.5\u201d butonu tek t\u0131kla
+     \u00f6nerilen modeli y\u00fckler
+
+
+\u2462  KURULUM  (Ba\u011f\u0131ml\u0131l\u0131klar\u0131 Y\u00fckle)
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u201cKurulum\u201d butonuna bas\u0131n. Bu i\u015flem:
+   \u2022 Python sanal ortam\u0131 (venv) olu\u015fturur
+   \u2022 Backend Python paketlerini y\u00fckler
+     (FastAPI, LangChain, Ollama vb.)
+   \u2022 Frontend ba\u011f\u0131ml\u0131l\u0131klar\u0131n\u0131 y\u00fckler
+     (npm install)
+   \u2022 \u0130lk seferde 5-10 dk s\u00fcrebilir
+
+
+\u2463  BA\u015eLAT  (Servisleri \u00c7al\u0131\u015ft\u0131r)
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u2022 \u201cBa\u015flat\u201d butonuna t\u0131klay\u0131n
+   \u2022 Backend API sunucusu ba\u015flar
+   \u2022 Telegram botu ba\u015flar (ayarl\u0131ysa)
+   \u2022 \u201cAray\u00fcz\u201d butonuyla web panelini a\u00e7\u0131n
+   \u2022 Adres: http://127.0.0.1:8000
+   \u2022 \u0130lk a\u00e7\u0131l\u0131\u015f biraz yava\u015f olabilir
+     (model belle\u011fe y\u00fckleniyor)
+
+
+\u2501\u2501\u2501\u2501\u2501\u2501  ENTEGRASYONLAR (\u0130ste\u011fe Ba\u011fl\u0131)  \u2501\u2501\u2501\u2501\u2501\u2501
+
+
+\u2464  TELEGRAM BOTU BA\u011eLAMA
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   Bot Token alma:
+   \u2022 Telegram'\u0131 a\u00e7\u0131n, @BotFather'\u0131 aray\u0131n
+   \u2022 /newbot komutu g\u00f6nderin
+   \u2022 Bot i\u00e7in bir isim ve kullan\u0131c\u0131 ad\u0131 girin
+   \u2022 BotFather size token verecek
+     (\u00f6rn: 123456:ABC-DEF1234ghIkl-zyx57W2v)
+   \u2022 Token'\u0131 Launcher'da \u201cBot Token\u201d alan\u0131na
+     yap\u0131\u015ft\u0131r\u0131n
+
+   Kullan\u0131c\u0131 ID alma:
+   \u2022 Telegram'da @userinfobot'\u0131 aray\u0131n
+   \u2022 /start komutu g\u00f6nderin
+   \u2022 Size ID numaran\u0131z\u0131 s\u00f6yleyecek
+     (\u00f6rn: 857792648)
+   \u2022 Bu ID'yi \u201cKullan\u0131c\u0131 ID\u201d alan\u0131na yaz\u0131n
+   \u2022 \u201cKaydet\u201d butonuna bas\u0131n
+
+
+\u2465  GMA\u0130L ENTEGRASYONU
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u2022 Google Cloud Console'\u0131 a\u00e7\u0131n
+     console.cloud.google.com/apis/credentials
+   \u2022 \u201c+ CREATE CREDENTIALS\u201d > OAuth client ID
+   \u2022 Application type: Desktop App
+   \u2022 Client ID'\u0131 kopyalay\u0131p Launcher'a
+     yap\u0131\u015ft\u0131r\u0131n
+   \u2022 \u201cOAuth Ba\u011flan\u201d butonuna t\u0131klay\u0131n
+   \u2022 A\u00e7\u0131lan taray\u0131c\u0131da Google hesab\u0131n\u0131zla
+     izin verin
+   \u2022 Token otomatik kaydedilir
+
+
+\u2466  OUTLOOK ENTEGRASYONU
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   \u2022 Azure Portal > App registrations
+     portal.azure.com
+   \u2022 \u201cNew registration\u201d ile uygulama
+     kay\u0131t edin
+   \u2022 Application (client) ID de\u011ferini
+     Launcher'\u0131n \u201cClient ID\u201d alan\u0131na yaz\u0131n
+   \u2022 Tenant ID: genellikle \u201ccommon\u201d b\u0131rak\u0131n
+   \u2022 \u201cOAuth Ba\u011flan\u201d butonuyla Microsoft
+     hesab\u0131n\u0131za izin verin
+   \u2022 Token otomatik kaydedilir
+
+
+\u2501\u2501\u2501\u2501\u2501\u2501  SORUN G\u0130DERME  \u2501\u2501\u2501\u2501\u2501\u2501
+
+   \u2716 Backend ba\u015flat\u0131lam\u0131yor
+     \u2192 Ollama'\u0131n \u00e7al\u0131\u015ft\u0131\u011f\u0131ndan emin olun
+     \u2192 \u201cKurulum\u201d butonuna tekrar bas\u0131n
+
+   \u2716 Model bulunamad\u0131
+     \u2192 \u201cModel \u00c7ek\u201d / \u201cQwen3.5\u201d butonuna bas\u0131n
+
+   \u2716 \u0130lk a\u00e7\u0131l\u0131\u015f yava\u015f
+     \u2192 Model belle\u011fe y\u00fckleniyor, 1-2 dk bekleyin
+
+   \u2716 ChromaDB hatas\u0131
+     \u2192 \u201cKurulum\u201d butonuna tekrar bas\u0131n
+
+   \u2716 \u201cVenv bulunamad\u0131\u201d hatas\u0131
+     \u2192 \u201cKurulum\u201d butonuna bas\u0131n
+
+
+\u2501\u2501\u2501\u2501\u2501\u2501  \u0130LET\u0130\u015e\u0130M  \u2501\u2501\u2501\u2501\u2501\u2501
+
+   Geli\u015ftirici : Ahmet Demiro\u011flu
+   E-posta   : ahmetdemiroglu89@gmail.com
+   GitHub    : github.com/AhmetDemiroglu
+"""
+
+APP_VERSION = "1.0.0"
+
 
 class LauncherApp:
     def __init__(self) -> None:
@@ -250,6 +446,8 @@ class LauncherApp:
         title_bar.pack(fill="x", padx=14, pady=(10, 0))
         tk.Label(title_bar, text="\u25c6 OpenWorld Launcher", fg="#f9fafb", bg=BG,
                  font=("Segoe UI", 13, "bold")).pack(side="left")
+        tk.Label(title_bar, text=f"v{APP_VERSION}", fg=HINT_FG, bg=BG,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(6, 0))
 
         # --- Kaydirilabilir alan ---
         container = tk.Frame(self.root, bg=BG)
@@ -327,15 +525,46 @@ class LauncherApp:
                 tk.Label(parent, text=hint, fg=HINT_FG, bg=CARD_BG,
                          font=("Segoe UI", 8), anchor="w").grid(row=r + 1, column=1, sticky="w", padx=8, pady=(0, 2))
 
-        # â•â•â• HIZLI Ä°ÅLEMLER â•â•â•
+        # === ILKKARSILAMA BANNER ===
+        self._banner_frame = tk.Frame(sf, bg="#1e3a5f")
+        self._banner_frame.pack(fill="x", padx=14, pady=(8, 2))
+        tk.Label(
+            self._banner_frame, text="\u0130lk kez mi kullan\u0131yorsunuz? A\u015fa\u011f\u0131daki Yard\u0131m butonuna t\u0131klay\u0131n.",
+            fg="#93c5fd", bg="#1e3a5f", font=("Segoe UI", 9), anchor="w",
+        ).pack(side="left", padx=8, pady=6)
+        tk.Button(
+            self._banner_frame, text="\u2715", command=self._dismiss_banner,
+            bg="#1e3a5f", fg="#64748b", bd=0, font=("Segoe UI", 9, "bold"),
+            cursor="hand2", activebackground="#1e3a5f", activeforeground="white",
+        ).pack(side="right", padx=4)
+
+        # === HIZLI ISLEMLER ===
         quick = tk.Frame(sf, bg=BG)
         quick.pack(fill="x", padx=14, pady=(8, 2))
 
-        self._btn(quick, "\u25b6 Ba\u015flat", self.start_all, bg=GREEN).pack(side="left", padx=(0, 4))
-        self._btn(quick, "\u25a0 Durdur", self.stop_all, bg=RED).pack(side="left", padx=(0, 4))
-        self._btn(quick, "Aray\u00fcz", self.open_ui, bg=ACCENT).pack(side="left", padx=(0, 4))
-        self._btn(quick, "\u2699 Kurulum", self.setup_all, bg="#64748b").pack(side="left", padx=(0, 4))
-        self._btn(quick, "Kaydet", self.save_env, bg="#7c3aed").pack(side="right")
+        btn_start = self._btn(quick, "Ba\u015flat", self.start_all, bg=GREEN)
+        btn_start.pack(side="left", padx=(0, 4))
+        ToolTip(btn_start, "Backend API ve Telegram botunu başlatır.\nOllama'ın açık olduğundan emin olun.", title="▶  Başlat")
+
+        btn_stop = self._btn(quick, "Durdur", self.stop_all, bg=RED)
+        btn_stop.pack(side="left", padx=(0, 4))
+        ToolTip(btn_stop, "Backend ve Telegram servislerini kapatır.", title="■  Durdur")
+
+        btn_ui = self._btn(quick, "Aray\u00fcz", self.open_ui, bg=ACCENT)
+        btn_ui.pack(side="left", padx=(0, 4))
+        ToolTip(btn_ui, "Web arayüzünü tarayıcıda açar.\nÖnce Başlat butonuna basmalısınız.", title="🌐  Arayüz")
+
+        btn_setup = self._btn(quick, "Kurulum", self.setup_all, bg="#64748b")
+        btn_setup.pack(side="left", padx=(0, 4))
+        ToolTip(btn_setup, "Python sanal ortamı, backend paketleri\nve frontend bağımlılıklarını yükler.\nİlk kullanımda zorunludur.", title="⚙  Kurulum")
+
+        btn_help = self._btn(quick, "Yard\u0131m", self._show_help, bg="#475569")
+        btn_help.pack(side="right", padx=(4, 0))
+        ToolTip(btn_help, "Adım adım kurulum rehberi, Telegram\nbot oluşturma, Gmail/Outlook bağlama\nve sorun giderme bilgileri.", title="❓  Yardım")
+
+        btn_save = self._btn(quick, "Kaydet", self.save_env, bg="#7c3aed")
+        btn_save.pack(side="right")
+        ToolTip(btn_save, "Ekrandaki tüm ayarları .env dosyasına\nkaydeder. Tokenlar şifreli saklanır.", title="💾  Kaydet")
 
         # ═══ DURUM (Loglar en üste taşındı) ═══
         status_frame = tk.Frame(sf, bg=BG)
@@ -344,12 +573,12 @@ class LauncherApp:
                  font=("Consolas", 9), anchor="w", padx=10, pady=8).pack(fill="x")
         self._update_connection_badges()
 
-        # â•â•â• KULLANICI PROFÄ°LÄ° (aÃ§Ä±k) â•â•â•
+        # === KULLANICI PROFILI ===
         prof = _collapsible(sf, "Kullan\u0131c\u0131 Profili", expanded=True)
         _field(prof, 0, "Ad\u0131n\u0131z", self.owner_name_var)
         _field(prof, 1, "\u0130lgi Alanlar\u0131", self.owner_profile_var)
 
-        # â•â•â• YAPAY ZEKÃ‚ MODELÄ° (aÃ§Ä±k) â•â•â•
+        # === YAPAY ZEKA MODELI ===
         llm = _collapsible(sf, "Yapay Zek\u00e2 Modeli", expanded=True)
         tk.Label(llm, text="Motor", fg=LABEL_FG, bg=CARD_BG,
                  font=("Segoe UI", 9), anchor="w").grid(row=0, column=0, sticky="w", **pad)
@@ -365,42 +594,48 @@ class LauncherApp:
         self._btn(llm_btns, "Qwen3.5", self.install_qwen35, bg="#2563eb").pack(side="left", padx=(0, 4))
         self._btn(llm_btns, "Eski Sil", self.remove_old_model, bg="#7c3aed").pack(side="left")
 
-        # â•â•â• TELEGRAM (aÃ§Ä±k) â•â•â•
+        # === TELEGRAM ===
         tg = _collapsible(sf, "Telegram Botu", expanded=True)
         _field(tg, 0, "Bot Token", self.token_var, show="*")
         _field(tg, 1, "Kullan\u0131c\u0131 ID", self.user_id_var)
 
-        # â•â•â• WEB GÃœVENLÄ°ÄÄ° (Gmail'in Ã¼zerine tasindi) â•â•â•
+        # === WEB GUVENLIGI ===
         sec = _collapsible(sf, "Web G\u00fcvenli\u011fi", expanded=True)
         _field(sec, 0, "\u0130zin Verilen Domainler", self.web_domains_var, hint="Bo\u015f: T\u00fcm internet serbest. K\u0131s\u0131tlamak i\u00e7in: github.com, python.org (https:// eklemeyin)")
-        tk.Checkbutton(
+        cb_internet = tk.Checkbutton(
             sec,
             text="\u0130nternete Ba\u011flan (\u0130\u015faretli de\u011filse ajan tamamen \u00c7evrimd\u0131\u015f\u0131 / \u0130nternetsiz \u00e7al\u0131\u015f\u0131r)",
             variable=self.web_allow_internet_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9, "bold"),
-        ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+        )
+        cb_internet.grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+        ToolTip(cb_internet, "İşaretli: Ajan web'e erişebilir (arama, sayfa okuma vb.)\nİşaretsiz: Tüm ağ erişimi engellenir, tamamen offline.", title="🌐  İnternet Erişimi")
 
-        tk.Checkbutton(
+        cb_private = tk.Checkbutton(
             sec,
             text="Yerel A\u011f / Modem Korumas\u0131 (Ajan\u0131n 192.168.x.x gibi yerel cihazlara eri\u015fmesini engeller)",
             variable=self.web_block_private_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9),
-        ).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
+        )
+        cb_private.grid(row=3, column=0, columnspan=2, sticky="w", **pad)
+        ToolTip(cb_private, "İşaretli: 192.168.x.x, 10.x.x.x gibi yerel\nadresler engellenir (modem, NAS, yazıcı vb.)\nİşaretsiz: Yerel ağ tamamen serbest.", title="🛡  Yerel Ağ Koruması")
 
-        tk.Checkbutton(
+        cb_shell = tk.Checkbutton(
             sec,
             text="Shell/Terminal Komut Arac\u0131 (\u0130\u015faretli de\u011filse ajan powershell/cmd \u00e7al\u0131\u015ft\u0131ramaz)",
             variable=self.enable_shell_var,
             fg=TEXT_FG, bg=CARD_BG, selectcolor=BG,
             activebackground=CARD_BG, activeforeground=TEXT_FG,
             font=("Segoe UI", 9),
-        ).grid(row=4, column=0, columnspan=2, sticky="w", **pad)
+        )
+        cb_shell.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
+        ToolTip(cb_shell, "İşaretli: Ajan PowerShell/CMD komutları\nçalıştırabilir (dosya, program vb.)\nİşaretsiz: Sisteme doğrudan erişemez.", title="🖥  Shell Erişimi")
 
-        # â•â•â• GMAIL (varsayilan kapali) â•â•â•
+        # === GMAIL ===
         gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
         _field(gm, 1, "Client Secret", self.gmail_client_secret_var, show="*")
@@ -413,7 +648,7 @@ class LauncherApp:
         self.gmail_conn_label = tk.Label(gm, textvariable=self.gmail_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
         self.gmail_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
-        # â•â•â• OUTLOOK (varsayilan kapali) â•â•â•
+        # === OUTLOOK ===
         ol = _collapsible(sf, "Outlook Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(ol, 0, "Client ID", self.outlook_client_id_var, hint="Application (client) ID GUID")
         _field(ol, 1, "Tenant ID", self.outlook_tenant_var, hint="common|organizations|consumers|tenant GUID")
@@ -426,9 +661,53 @@ class LauncherApp:
         self.outlook_conn_label = tk.Label(ol, textvariable=self.outlook_conn_var, fg="#f59e0b", bg=CARD_BG, font=("Segoe UI", 9, "bold"))
         self.outlook_conn_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
+        # === FOOTER ===
+        footer = tk.Frame(self.root, bg="#0f172a")
+        footer.pack(fill="x", side="bottom")
+        tk.Label(
+            footer,
+            text=f"OpenWorld v{APP_VERSION}  |  Geliştirici: Ahmet Demiroğlu  |  ahmetdemiroglu89@gmail.com",
+            fg="#64748b", bg="#0f172a", font=("Segoe UI", 8), anchor="center",
+        ).pack(pady=4)
+
     def _btn(self, parent: tk.Widget, text: str, command, bg: str = "#2563eb") -> tk.Button:
         return tk.Button(parent, text=text, command=command, bg=bg, fg="white", bd=0, padx=10, pady=6,
                          font=("Segoe UI", 9), cursor="hand2", activebackground=bg, activeforeground="white")
+
+    def _show_help(self) -> None:
+        """Kurulum Rehberi popup penceresi."""
+        win = tk.Toplevel(self.root)
+        win.title("OpenWorld - Kurulum Rehberi")
+        win.configure(bg="#1e293b")
+        win.geometry("560x720")
+        win.resizable(False, True)
+        win.transient(self.root)
+        win.grab_set()
+        # Center
+        win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 560) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 720) // 2
+        win.geometry(f"+{x}+{y}")
+        txt = tk.Text(
+            win, bg="#0f172a", fg="#e2e8f0", font=("Consolas", 10),
+            wrap="word", relief="flat", padx=16, pady=16,
+            insertbackground="#e2e8f0",
+        )
+        txt.pack(fill="both", expand=True, padx=8, pady=8)
+        txt.insert("1.0", SETUP_GUIDE.strip())
+        txt.configure(state="disabled")
+        tk.Button(
+            win, text="Kapat", command=win.destroy,
+            bg="#3b82f6", fg="white", bd=0, padx=20, pady=8,
+            font=("Segoe UI", 10, "bold"), cursor="hand2",
+        ).pack(pady=(0, 12))
+
+    def _dismiss_banner(self) -> None:
+        """Ilk karsilama bandini gizle."""
+        if hasattr(self, "_banner_frame"):
+            self._banner_frame.pack_forget()
+
+
 
     def _append_status(self, text: str) -> None:
         def _set() -> None:
@@ -462,6 +741,29 @@ class LauncherApp:
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
+
+    def _check_python_env_health(self) -> tuple[bool, str]:
+        py = VENV_PYTHON
+        if not py.exists():
+            return False, "Python sanal ortam bulunamadi."
+        cfg = py.parent.parent / "pyvenv.cfg"
+        if not cfg.exists():
+            return False, "Python ortami bozuk (pyvenv.cfg eksik)."
+        try:
+            probe = subprocess.run(
+                [str(py), "-c", "import sys; print(sys.executable)"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception as exc:
+            return False, f"Python ortami dogrulanamadi: {exc}"
+        if probe.returncode != 0:
+            detail = (probe.stderr or probe.stdout or "").strip()
+            if detail:
+                detail = detail[:180]
+            return False, f"Python ortami calismiyor: {detail or 'bilinmeyen hata'}"
+        return True, ""
 
     def _kill_existing_openworld_processes(self) -> None:
         cmd = (
@@ -832,8 +1134,9 @@ class LauncherApp:
 
     def download_gguf(self) -> None:
         def _job() -> None:
-            if not VENV_PYTHON.exists():
-                self._append_status("\u00d6nce Kurulum \u00e7al\u0131\u015ft\u0131r\u0131n.")
+            ok, reason = self._check_python_env_health()
+            if not ok:
+                self._append_status(f"\u00d6nce Kurulum \u00e7al\u0131\u015ft\u0131r\u0131n. ({reason})")
                 return
             url = self.gguf_url_var.get().strip()
             path = Path(self.gguf_var.get().strip())
@@ -897,8 +1200,9 @@ print("ok")
     def start_all(self) -> None:
         def _job() -> None:
             self.save_env()
-            if not VENV_PYTHON.exists():
-                self._append_status("HATA: Python sanal ortam bulunamad\u0131!")
+            ok, reason = self._check_python_env_health()
+            if not ok:
+                self._append_status(f"HATA: {reason}")
                 self._append_status("L\u00fctfen [Kurulum] butonuna t\u0131klay\u0131n")
                 return
 
@@ -1007,6 +1311,7 @@ print("ok")
         self.root.title(
             f"OpenWorld Launcher  \u2502  Ollama: {'\u2705 Aktif' if ollama else '\u274c Kapal\u0131'}  \u2502  Backend: {'\u2705 Aktif' if backend else '\u274c Kapal\u0131'}"
         )
+
         self.root.after(2000, self._tick_status)
 
     def _on_close(self) -> None:

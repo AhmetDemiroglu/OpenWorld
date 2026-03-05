@@ -15,39 +15,74 @@ function Assert-Command($name) {
   }
 }
 
+function Invoke-CheckedCommand([string]$exe, [string[]]$commandArgs, [string]$label) {
+  & $exe @commandArgs
+  $code = $LASTEXITCODE
+  if ($code -ne 0) {
+    throw "$label basarisiz (exit code: $code)"
+  }
+}
+
+function Test-HealthyVenv($venvPath) {
+  $py = Join-Path $venvPath "Scripts\python.exe"
+  $cfg = Join-Path $venvPath "pyvenv.cfg"
+  if (-not (Test-Path $py) -or -not (Test-Path $cfg)) {
+    return $false
+  }
+  try {
+    & $py -c "import sys; print(sys.executable)" | Out-Null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
+
 Write-Status "1/7 - Python ve npm kontrol ediliyor..."
 Assert-Command python
 Assert-Command npm
 Write-Status "   OK - Python ve npm bulundu"
 
-$runtimeRoot = "C:\OpenWorldRuntime"
-$runtimeVenv = Join-Path $runtimeRoot "venv"
-$runtimePython = Join-Path $runtimeVenv "Scripts\python.exe"
+$backendVenv = ".\backend\.venv"
 $backendPython = ".\backend\.venv\Scripts\python.exe"
-$backendCfg = ".\backend\.venv\pyvenv.cfg"
 
 Write-Status "2/7 - Sanal ortam kontrol ediliyor..."
-if (-not (Test-Path $runtimePython)) {
-  Write-Status "   C:\OpenWorldRuntime\venv olusturuluyor..."
-  if (-not (Test-Path $runtimeRoot)) {
-    New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
+if (-not (Test-HealthyVenv $backendVenv)) {
+  if (Test-Path $backendVenv) {
+    Write-Status "   Bozuk venv tespit edildi, temizleniyor..."
+    Remove-Item -Recurse -Force $backendVenv
   }
-  py -3.13 -m venv $runtimeVenv
+  Write-Status "   backend/.venv olusturuluyor..."
+  $venvCreator = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
+  try {
+    if ($venvCreator -eq "py") {
+      Invoke-CheckedCommand -exe "py" -commandArgs @("-3.13", "-m", "venv", $backendVenv) -label "Python 3.13 venv olusturma"
+    } else {
+      throw "py launcher bulunamadi"
+    }
+  } catch {
+    Write-Status "   Python 3.13 bulunamadi, varsayilan Python ile yeniden deneniyor..."
+    if ($venvCreator -eq "py") {
+      Invoke-CheckedCommand -exe "py" -commandArgs @("-3", "-m", "venv", $backendVenv) -label "Varsayilan Python venv olusturma"
+    } else {
+      Invoke-CheckedCommand -exe "python" -commandArgs @("-m", "venv", $backendVenv) -label "Varsayilan Python venv olusturma"
+    }
+  }
+  if (-not (Test-HealthyVenv $backendVenv)) {
+    throw "backend/.venv olusturuldu ama saglik kontrolunu gecemedi."
+  }
   Write-Status "   OK - Sanal ortam olusturuldu"
 } else {
   Write-Status "   OK - Sanal ortam zaten var"
 }
 
-$pythonExe = $runtimePython
-if ((Test-Path $backendPython) -and (Test-Path $backendCfg)) {
-  $pythonExe = $backendPython
-}
+$pythonExe = $backendPython
+Write-Status "   Not: Kurulum paketleri backend/.venv'e kurulacak: $pythonExe"
 
 Write-Status "3/7 - Python paketleri yukleniyor..."
 Write-Status "   - pip guncelleniyor..."
-& $pythonExe -m pip install --upgrade pip --quiet
+Invoke-CheckedCommand -exe $pythonExe -commandArgs @("-m", "pip", "install", "--upgrade", "pip", "--quiet") -label "pip guncelleme"
 Write-Status "   - requirements.txt yukleniyor (bu biraz zaman alabilir)..."
-& $pythonExe -m pip install -r .\backend\requirements.txt
+Invoke-CheckedCommand -exe $pythonExe -commandArgs @("-m", "pip", "install", "-r", ".\backend\requirements.txt") -label "requirements kurulumu"
 Write-Status "   OK - Python paketleri yuklendi"
 
 Write-Status "4/7 - Ortam degiskenleri ayarlaniyor..."
@@ -83,7 +118,11 @@ Write-Status "   OK - Ortam degiskenleri ayarlandi"
 
 Write-Status "5/7 - Frontend bagimliliklari yukleniyor..."
 Push-Location .\frontend
-npm install
+if (Test-Path ".\package-lock.json") {
+  npm ci --no-fund --loglevel=error
+} else {
+  npm install --no-fund --loglevel=error
+}
 Pop-Location
 Write-Status "   OK - Frontend bagimliliklari yuklendi"
 
