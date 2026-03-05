@@ -149,8 +149,9 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         "video kaydet", "video cek", "webcam video"
     ]
     if any(p in text_lower for p in fast_patterns):
-        # Hizli islemler (screenshot, webcam, ses) 15sn icinde biter
-        return httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+        # Hizli islemler (screenshot, webcam, ses) 35sn icinde biter
+        # Agent 25sn bekliyor, +10sn guvenlik payi
+        return httpx.Timeout(connect=5.0, read=35.0, write=5.0, pool=5.0)
     
     # NOTEBOOK DEVAM ETME: Cok uzun surebilir (5 dakika)
     if any(p in text_lower for p in ["devam et", "not defter", "rapora devam", "raporuna devam"]):

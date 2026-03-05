@@ -3464,14 +3464,15 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "vscode_command",
-                "description": "VS Code'da gelismis islemler: dosya ac, satira git, terminal komutu, diff goruntule.",
+                "description": "VS Code'da islemler: dosya ac, terminal komutu, diff, AI extension chat (KimiCode/Copilot/ClaudeCode/Codex). Chat action icin extension adi ve mesaj belirt.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Dosya veya klasor yolu"},
-                        "command": {"type": "string", "description": "Terminal komutu veya diff icin ikinci dosya"},
+                        "command": {"type": "string", "description": "Terminal komutu, diff dosyasi, veya chat mesaji"},
                         "goto_line": {"type": "integer", "description": "Satir numarasi"},
-                        "action": {"type": "string", "description": "open/terminal/diff", "enum": ["open", "terminal", "diff"]}
+                        "action": {"type": "string", "description": "open/terminal/diff/chat", "enum": ["open", "terminal", "diff", "chat"]},
+                        "extension": {"type": "string", "description": "AI extension (chat icin): kimicode, copilot, claudecode, codex", "enum": ["kimicode", "copilot", "claudecode", "codex"]}
                     },
                     "required": ["path"]
                 }

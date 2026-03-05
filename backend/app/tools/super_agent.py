@@ -234,10 +234,32 @@ def tool_click_on_screen(x: int, y: int, clicks: int = 1, button: str = "left") 
 
 
 def tool_type_text(text: str, interval: float = 0.01) -> Dict[str, Any]:
-    """Klavyeden metin yaz."""
+    """Klavyeden metin yaz (Türkçe ve Unicode destekli)."""
     try:
-        pyautogui.typewrite(text, interval=interval)
-        return {"success": True, "typed": text, "length": len(text)}
+        # ASCII-only text: typewrite (daha güvenilir, karakter karakter)
+        if text.isascii():
+            pyautogui.typewrite(text, interval=interval)
+            return {"success": True, "typed": text, "length": len(text), "method": "typewrite"}
+
+        # Non-ASCII (Türkçe, Unicode vs.): clipboard + paste
+        import subprocess as _sp
+        import platform
+        _sys = platform.system()
+        if _sys == "Windows":
+            p = _sp.Popen(["clip.exe"], stdin=_sp.PIPE)
+            p.communicate(text.encode("utf-16-le"))
+        elif _sys == "Darwin":
+            p = _sp.Popen(["pbcopy"], stdin=_sp.PIPE)
+            p.communicate(text.encode("utf-8"))
+        else:
+            p = _sp.Popen(["xclip", "-selection", "clipboard"], stdin=_sp.PIPE)
+            p.communicate(text.encode("utf-8"))
+
+        import time
+        time.sleep(0.05)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.05)
+        return {"success": True, "typed": text, "length": len(text), "method": "clipboard_paste"}
     except Exception as e:
         return {"error": str(e)}
 

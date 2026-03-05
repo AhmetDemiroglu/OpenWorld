@@ -268,13 +268,28 @@ SETUP_GUIDE = """\
 
 \u2461  MODEL \u0130ND\u0130R  (Yapay Zek\u00e2 Beyni)
 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-   \u2022 Launcher'\u0131 a\u00e7\u0131n
-   \u2022 \u201cYapay Zek\u00e2 Modeli\u201d b\u00f6l\u00fcm\u00fcn\u00fc a\u00e7\u0131n
-   \u2022 Motor: ollama olarak ayarl\u0131 olmal\u0131
+   Varsay\u0131lan model: qwen3.5:9b-q4_K_M (~5 GB)
+   Bu model t\u00fcm kullan\u0131c\u0131larda haz\u0131r gelir.
+
+   H\u0131zl\u0131 y\u00f6ntem:
+   \u2022 \u201cQwen3.5\u201d butonuna t\u0131klay\u0131n (tek t\u0131k)
+   \u2022 Model otomatik indirilir ve ayarlan\u0131r
+
+   Manuel y\u00f6ntem:
    \u2022 \u201cModel \u00c7ek\u201d butonuna t\u0131klay\u0131n
-   \u2022 ~5 GB indirilir, 10-30 dk s\u00fcrebilir
-   \u2022 Alternatif: \u201cQwen3.5\u201d butonu tek t\u0131kla
-     \u00f6nerilen modeli y\u00fckler
+   \u2022 \u201cModel Ad\u0131\u201d alan\u0131ndaki modeli \u00e7eker
+   \u2022 ~5 GB, internet h\u0131z\u0131na g\u00f6re 10-30 dk
+
+   Farkl\u0131 model kullanmak isterseniz:
+   \u2022 \u201cModel Ad\u0131\u201d alan\u0131n\u0131 de\u011fi\u015ftirin
+     (\u00f6rn: llama3:8b, mistral, gemma2 vb.)
+   \u2022 \u201cModel \u00c7ek\u201d ile yeni modeli indirin
+   \u2022 Desteklenen modeller: ollama.com/library
+
+   GGUF (ileri d\u00fczey):
+   \u2022 \u201cMotor\u201d alan\u0131n\u0131 \u201cllama_cpp\u201d yap\u0131n
+   \u2022 \u201cGGUF Yolu\u201d veya \u201cGGUF URL\u201d ile
+     kendi model dosyan\u0131z\u0131 kullanabilirsiniz
 
 
 \u2462  KURULUM  (Ba\u011f\u0131ml\u0131l\u0131klar\u0131 Y\u00fckle)
@@ -1109,11 +1124,25 @@ class LauncherApp:
         def _job() -> None:
             self._append_status("Kurulum ba\u015fl\u0131yor...")
             ps = ROOT / "scripts" / "setup.ps1"
-            proc = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)], cwd=str(ROOT))
+            proc = subprocess.Popen(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps)],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    self._append_status(line)
+            proc.wait()
             if proc.returncode == 0:
-                self._append_status("Kurulum tamamland\u0131.")
+                self._append_status("\u2705 Kurulum ba\u015far\u0131yla tamamland\u0131!")
             else:
-                self._append_status("Kurulum hatas\u0131. Loglar\u0131 kontrol edin.")
+                self._append_status(f"\u274c Kurulum hatas\u0131 (kod: {proc.returncode})")
 
         self._run_bg(_job)
 
@@ -1121,14 +1150,27 @@ class LauncherApp:
         def _job() -> None:
             model = self.model_var.get().strip()
             if not model:
-                self._append_status("Model ad\u0131 bo\u015f olamaz.")
+                self._append_status("Model adı boş olamaz.")
                 return
             self._append_status(f"Ollama modeli indiriliyor: {model}")
-            proc = subprocess.run(["ollama", "pull", model], text=True)
+            proc = subprocess.Popen(
+                ["ollama", "pull", model],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    self._append_status(line)
+            proc.wait()
             if proc.returncode == 0:
-                self._append_status("Model indirildi.")
+                self._append_status("✅ Model başarıyla indirildi.")
             else:
-                self._append_status("Model indirilemedi.")
+                self._append_status("❌ Model indirilemedi.")
 
         self._run_bg(_job)
 
@@ -1149,43 +1191,83 @@ class LauncherApp:
             script = f"""
 import httpx
 from pathlib import Path
+import sys
 
 url = {url!r}
 out = Path(r"{str(target)}")
 
-with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
-    response.raise_for_status()
-    with out.open("wb") as file_obj:
-        for chunk in response.iter_bytes():
-            if chunk:
-                file_obj.write(chunk)
-
-print("ok")
+try:
+    with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
+        response.raise_for_status()
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded_size = 0
+        
+        with out.open("wb") as file_obj:
+            for chunk in response.iter_bytes(chunk_size=8192):
+                if chunk:
+                    file_obj.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress = (downloaded_size / total_size) * 100
+                        sys.stdout.write(f"\\r{{progress:.1f}}% indirildi...")
+                    else:
+                        sys.stdout.write(f"\\r{{downloaded_size / (1024*1024):.1f}} MB indirildi...")
+                    sys.stdout.flush()
+    sys.stdout.write("\\n") # Newline after progress
+    print("ok")
+except Exception as e:
+    print(f"error: {{e}}", file=sys.stderr)
+    sys.exit(1)
 """
-            proc = subprocess.run([str(VENV_PYTHON), "-c", script], cwd=str(ROOT), text=True, capture_output=True)
+            proc = subprocess.Popen([str(VENV_PYTHON), "-c", script], cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
+            
+            output_lines = []
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    self._append_status(line)
+                output_lines.append(line)
+            proc.wait()
+
             if proc.returncode == 0:
-                self._append_status("GGUF indirildi.")
+                self._append_status("✅ GGUF indirildi.")
             else:
-                self._append_status(f"GGUF indirme hatas\u0131: {proc.stderr[:220].strip()}")
+                error_msg = "GGUF indirme hatası."
+                # Try to find a more specific error from the script's output
+                for line in output_lines:
+                    if line.startswith("error:"):
+                        error_msg = f"GGUF indirme hatası: {line[6:].strip()}"
+                        break
+                self._append_status(f"❌ {error_msg}")
 
         self._run_bg(_job)
 
     def install_qwen35(self) -> None:
         def _job() -> None:
             self._append_status("Qwen3.5-9B GGUF kuruluyor...")
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(QWEN_INSTALL_SCRIPT)],
                 cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
             )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    self._append_status(line)
+            proc.wait()
             if proc.returncode == 0:
                 self.model_var.set("qwen3.5:9b-q4_K_M")
                 self.backend_var.set("ollama")
                 self.gguf_var.set("../models/Qwen3.5-9B-Q4_K_M.gguf")
                 self.save_env()
-                self._append_status("Qwen3.5-9B kuruldu ve se\u00e7ildi.")
+                self._append_status("✅ Qwen3.5-9B kuruldu ve seçildi.")
             else:
-                self._append_status("Model kurulumu ba\u015far\u0131s\u0131z.")
+                self._append_status("❌ Model kurulumu başarısız.")
 
         self._run_bg(_job)
 

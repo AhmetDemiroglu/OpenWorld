@@ -1036,6 +1036,16 @@ class AgentService:
                 arguments={"camera_index": 0},
             )
 
+        # SCREENSHOT - Masaustu (en yaygin istek!)
+        if "screenshot_desktop" in self._known_tool_names and any(
+            k in normalized for k in ("ekran goruntusu", "screenshot", "masaustu", "desktop", "masaustu", "ekran fotograf", "ekran resmi")
+        ):
+            return ParsedTextToolCall(
+                id=f"text_tc_{uuid.uuid4().hex[:10]}",
+                name="screenshot_desktop",
+                arguments={},
+            )
+
         if "check_gmail_messages" in self._known_tool_names and (
             "gmail" in normalized or ("mail" in normalized and "outlook" not in normalized)
         ):

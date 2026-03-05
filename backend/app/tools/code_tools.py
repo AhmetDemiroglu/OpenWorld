@@ -543,14 +543,16 @@ def tool_vscode_command(
     command: str = "",
     goto_line: int = 0,
     action: str = "open",
+    extension: str = "",
 ) -> Dict[str, Any]:
-    """VS Code'da gelişmiş işlemler: dosya aç, satıra git, terminal komutu çalıştır.
+    """VS Code'da gelişmiş işlemler: dosya aç, satıra git, terminal komutu çalıştır, AI extension chat aç.
 
     Args:
         path: Dosya veya klasör yolu
-        command: Terminal'de çalıştırılacak komut (action=terminal ise)
+        command: Terminal komutu (action=terminal), diff dosyası, veya chat mesajı (action=chat)
         goto_line: Belirli satıra git (opsiyonel)
-        action: open (dosya aç), terminal (komut çalıştır), diff (diff görüntüle)
+        action: open (dosya aç), terminal (komut çalıştır), diff (diff görüntüle), chat (AI extension'a mesaj gönder)
+        extension: AI extension adı (action=chat için): kimicode, copilot, claudecode, codex
     """
     cwd = _resolve_project_path(path)
     p = Path(cwd)
@@ -609,13 +611,125 @@ def tool_vscode_command(
                 "file2": command.strip(),
             }
 
+        elif action == "chat":
+            import time
+            try:
+                import pyautogui
+            except ImportError:
+                return {"error": "pyautogui kurulu degil. 'pip install pyautogui' ile kur."}
+
+            ext = (extension or "copilot").lower().strip()
+
+            # Extension shortcut mapping
+            ext_shortcuts = {
+                "kimicode":   {"keys": ["ctrl", "shift", "k"], "name": "KimiCode"},
+                "copilot":    {"keys": ["ctrl", "shift", "i"], "name": "GitHub Copilot"},
+                "claudecode": {"keys": ["ctrl", "shift", "p"], "name": "Claude Code", "palette_cmd": "Claude: New Session"},
+                "codex":      {"keys": ["ctrl", "shift", "p"], "name": "Codex", "palette_cmd": "Codex: Start Session"},
+            }
+
+            if ext not in ext_shortcuts:
+                return {"error": f"Bilinmeyen extension: {ext}. Desteklenen: {', '.join(ext_shortcuts.keys())}"}
+
+            info = ext_shortcuts[ext]
+
+            # 1) VS Code'u ac
+            subprocess.Popen(["code", cwd], shell=False)
+            time.sleep(2.5)
+
+            # 2) VS Code'u on plana getir
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+
+                def _find_vscode_window():
+                    result = []
+                    def callback(hwnd, _):
+                        if user32.IsWindowVisible(hwnd):
+                            length = user32.GetWindowTextLengthW(hwnd)
+                            if length > 0:
+                                title = ctypes.create_unicode_buffer(length + 1)
+                                user32.GetWindowTextW(hwnd, title, length + 1)
+                                if "Visual Studio Code" in title.value:
+                                    result.append(hwnd)
+                        return True
+                    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+                    user32.EnumWindows(WNDENUMPROC(callback), 0)
+                    return result[0] if result else None
+
+                hwnd = _find_vscode_window()
+                if hwnd:
+                    user32.SetForegroundWindow(hwnd)
+                    time.sleep(0.5)
+            except Exception:
+                pass  # Linux/Mac veya ctypes hatasi - devam et
+
+            # 3) Extension panelini ac
+            if "palette_cmd" in info:
+                # Command palette ile ac
+                pyautogui.hotkey(*info["keys"])
+                time.sleep(0.8)
+                # Palette'e komutu yaz
+                _type_unicode(info["palette_cmd"])
+                time.sleep(0.5)
+                pyautogui.press("enter")
+                time.sleep(1.5)
+            else:
+                # Direkt shortcut ile ac
+                pyautogui.hotkey(*info["keys"])
+                time.sleep(1.5)
+
+            # 4) Mesaj yaz
+            if command.strip():
+                _type_unicode(command.strip())
+                time.sleep(0.3)
+                pyautogui.press("enter")
+
+            return {
+                "success": True,
+                "action": "chat",
+                "extension": info["name"],
+                "message": command.strip() if command.strip() else "(panel acildi, mesaj yok)",
+                "path": cwd,
+            }
+
         else:
-            return {"error": f"Bilinmeyen action: {action}. Kullan: open, terminal, diff"}
+            return {"error": f"Bilinmeyen action: {action}. Kullan: open, terminal, diff, chat"}
 
     except FileNotFoundError:
         return {"error": "VS Code ('code' komutu) bulunamadi. PATH'e ekli mi?"}
     except Exception as e:
         return {"error": str(e)[:300]}
+
+
+def _type_unicode(text: str) -> None:
+    """Unicode metin yaz (clipboard paste ile)."""
+    import subprocess as _sp
+    import platform
+    import time
+    try:
+        import pyautogui
+    except ImportError:
+        return
+
+    if text.isascii():
+        pyautogui.typewrite(text, interval=0.02)
+        return
+
+    _sys = platform.system()
+    if _sys == "Windows":
+        p = _sp.Popen(["clip.exe"], stdin=_sp.PIPE)
+        p.communicate(text.encode("utf-16-le"))
+    elif _sys == "Darwin":
+        p = _sp.Popen(["pbcopy"], stdin=_sp.PIPE)
+        p.communicate(text.encode("utf-8"))
+    else:
+        p = _sp.Popen(["xclip", "-selection", "clipboard"], stdin=_sp.PIPE)
+        p.communicate(text.encode("utf-8"))
+
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.05)
 
 
 def tool_claude_code_ask(
