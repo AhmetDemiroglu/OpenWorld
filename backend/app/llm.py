@@ -21,7 +21,7 @@ class OllamaClient:
         }
         if self.tools_supported and tools:
             payload["tools"] = tools
-        timeout = httpx.Timeout(180.0, connect=20.0)
+        timeout = httpx.Timeout(300.0, connect=20.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
             if resp.status_code == 400 and self.tools_supported:

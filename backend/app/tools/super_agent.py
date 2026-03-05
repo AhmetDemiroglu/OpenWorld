@@ -71,6 +71,10 @@ _BASE_APPROVAL_BUTTON_TERMS = {
 
 _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
     "allow access",
+    "allow once",
+    "allow this conversation",
+    "allow for this conversation",
+    "allow this chat",
     "run anyway",
     "allow anyway",
     "yes continue",
@@ -142,6 +146,11 @@ _APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
         "context": {"kimi", "requires input", "run command"},
         "context_hints": {"kimi", "run", "continue"},
     },
+    "gemini": {
+        "context": {"gemini", "requires input", "1 step requires input", "allow directory access"},
+        "button_multi": {"allow once", "allow this conversation", "allow access"},
+        "context_hints": {"gemini", "allow", "conversation"},
+    },
 }
 _RUN_PROMPT_CONTEXT_TERMS = {
     "1 step requires input",
@@ -161,6 +170,13 @@ _MENU_BAR_TERMS_COMPACT = {
     "startdebugging", "runwithoutdebugging", "stopdebugging", "restartdebugging",
     "openconfigurations", "addconfiguration", "stepover", "stepinto", "stepout",
     "continue", "togglebreakpoint", "newbreakpoint", "enableallbreakpoints",
+    "disableallbreakpoints", "removeallbreakpoints", "installadditionaldebuggers",
+}
+_DEBUG_MENU_COMMAND_TERMS_COMPACT = {
+    "startdebugging", "runwithoutdebugging", "stopdebugging", "restartdebugging",
+    "openconfigurations", "addconfiguration",
+    "stepover", "stepinto", "stepout", "continue",
+    "togglebreakpoint", "newbreakpoint", "enableallbreakpoints",
     "disableallbreakpoints", "removeallbreakpoints", "installadditionaldebuggers",
 }
 
@@ -184,6 +200,21 @@ _IDE_COMPLETION_STRONG_TERMS = (
     "summary of what was done",
     "everything is wired up correctly",
     "fully complete",
+)
+_IDE_COMPLETION_DIRECT_TERMS = (
+    "done",
+    "completed",
+    "finished",
+    "all done",
+    "task completed",
+    "response complete",
+    "islem tamamlandi",
+    "gorev tamamlandi",
+    "tamamlandi",
+    "bitti",
+    "rapor tamamlandi",
+    "islem basariyla tamamlandi",
+    "tamamlandi ve kaydedildi",
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "in progress", "loading", "analyzing",
@@ -1381,10 +1412,11 @@ def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
         return False
     completion_hits = sum(1 for term in _IDE_COMPLETION_TERMS if _normalize_for_ocr_match(term) in blob)
     strong_hits = sum(1 for term in _IDE_COMPLETION_STRONG_TERMS if _normalize_for_ocr_match(term) in blob)
+    direct_hits = sum(1 for term in _IDE_COMPLETION_DIRECT_TERMS if _normalize_for_ocr_match(term) in blob)
     busy_hit = any(_normalize_for_ocr_match(term) in blob for term in _IDE_BUSY_TERMS)
-    if busy_hit and strong_hits == 0:
+    if busy_hit and strong_hits == 0 and direct_hits == 0:
         return False
-    return strong_hits >= 1 or completion_hits >= 2
+    return strong_hits >= 1 or direct_hits >= 1 or completion_hits >= 2
 
 
 def tool_wait_and_accept_approval(
@@ -1669,11 +1701,16 @@ def tool_wait_and_accept_approval(
             if not norm_text:
                 continue
             is_menu_term = _is_likely_menu_term(norm_text)
-            if is_menu_term and not run_prompt_context_hit:
+            compact_text = _compact_normalized(norm_text)
+            if compact_text in _DEBUG_MENU_COMMAND_TERMS_COMPACT:
+                continue
+            # VS Code ust menu / debug dropdown elemanlarini asla buton adayi yapma.
+            # "1 Step Requires Input" aktifken bile menuye tiklama yanlisi olabiliyor.
+            if is_menu_term and _in_top_menu_zone(c, image_height):
                 continue
             if _in_top_menu_zone(c, image_height):
                 short_or_menu = len(_compact_normalized(norm_text)) <= 12 or is_menu_term
-                if short_or_menu and not (has_strict_context or run_prompt_context_hit):
+                if short_or_menu and not has_strict_context:
                     continue
             filtered_candidates.append(c)
         candidates = filtered_candidates
@@ -1839,10 +1876,8 @@ def tool_wait_and_accept_approval(
         # Ozellikle VS Code "Run Alt+J" akisinda OCR buton koordinati kacarsa,
         # gorunen kisayolu klavyeden deneyelim.
         compact_blob = re.sub(r"\s+", "", blob)
-        if (
-            ("runaltj" in compact_blob or "runaltj" in compact_blob.replace("+", ""))
-            or run_prompt_context_hit
-        ) and (has_context or hint_hit or "debug" in compact_blob or run_prompt_context_hit):
+        run_altj_seen = ("runaltj" in compact_blob or "runaltj" in compact_blob.replace("+", ""))
+        if run_altj_seen and (has_context or hint_hit or "debug" in compact_blob):
             try:
                 pyautogui.hotkey("alt", "j")
                 return {
@@ -1981,12 +2016,9 @@ def _approval_watcher_worker(
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gonderildi."
                 else:
                     _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
-                    # Bildirim gidemediyse algi state'ini sifirlayip tekrar deneme sansi ver.
-                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
-                    _APPROVAL_WATCHER_STATE["completion_hits"] = max(
-                        1,
-                        int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
-                    )
+                    _APPROVAL_WATCHER_STATE["completion_detected"] = True
+                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi."
 
         if auto_stop_now:
             with _APPROVAL_WATCHER_LOCK:

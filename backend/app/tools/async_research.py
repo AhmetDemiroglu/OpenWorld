@@ -17,31 +17,36 @@ from typing import Any, Dict
 
 def _generate_smart_queries(topic: str) -> list:
     """Konuya OZGU alt sorgular uretir â€” sabit sablon degil."""
-    t = topic.lower()
-    queries = [topic]
+    # Uzun istekleri kisaltarak temiz arama motoru sorgulari uret
+    stop_words = {"bir", "ve", "ile", "icin", "hakkinda", "konulu", "detayli", "arastirma", "rapor", "istiyorum", "yapmani", "hazirla", "bana", "gonder", "olusturmani", "yazacagin", "cevirecek", "buradan", "gondermeni", "lutfen", "bul", "getir", "nihai", "durumda", "pdf'e"}
+    words = [w for w in topic.split() if w.lower() not in stop_words and len(w) > 2]
+    core_topic = " ".join(words[:6]) if words else topic[:40]
+    
+    t = core_topic.lower()
+    queries = [core_topic]
 
     if any(w in t for w in ['kod', 'code', 'yazilim', 'software', 'api', 'python',
                               'javascript', 'uygulama', 'app', 'gelistir', 'develop',
                               'mimari', 'architecture', 'framework', 'refactor']):
-        queries += [f"{topic} best practices 2025", f"{topic} mimari onerileri eksikler guclu yanlar"]
+        queries += [f"{core_topic} best practices", f"{core_topic} mimari eksikler"]
 
     elif any(w in t for w in ['haber', 'gundem', 'son dakika', 'politik', 'ekonomi',
                                 'piyasa', 'borsa', 'doviz', 'enflasyon', 'secim', 'savas']):
-        queries += [f"{topic} son gelismeler analiz", f"{topic} uzman yorumu neden etki"]
+        queries += [f"{core_topic} son gelismeler", f"{core_topic} analiz yorum"]
 
     elif any(w in t for w in ['urun', 'marka', 'sirket', 'firma', 'company', 'brand', 'startup']):
-        queries += [f"{topic} pazar analiz 2025", f"{topic} avantajlar eksikler karsilastirma"]
+        queries += [f"{core_topic} pazar analiz 2025", f"{core_topic} avantajlar karsilastirma"]
 
     else:
-        queries += [f"{topic} nedir nasil calisir avantaj dezavantaj", f"{topic} guncel gelismeler 2025"]
+        queries += [f"{core_topic} nedir nasil calisir", f"{core_topic} guncel gelismeler 2025"]
 
-    return list(dict.fromkeys(queries))[:5]
+    return list(dict.fromkeys(queries))[:4]
 
 
 # â”€â”€ PDF olusturucu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: list,
-               elapsed: int, report_style: str) -> str:
+               elapsed: int, report_style: str, synthesis_text: str = "") -> str:
     """reportlab ile PDF olustur. Ozet metni (str) dondurur."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -86,17 +91,17 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
     story = []
 
     # Baslik
-    story.append(Paragraph(f"Arastirma Raporu", h1))
+    story.append(Paragraph(f"Araştırma Raporu", h1))
     story.append(Paragraph(topic, h2))
     story.append(Paragraph(
-        f"Tarih: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC Â |Â  "
-        f"Stil: {report_style} Â |Â  Kaynak: {len(read_contents)} Â |Â  Sure: {elapsed}s",
+        f"Tarih: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC  |  "
+        f"Stil: {report_style}  |  Kaynak: {len(read_contents)}  |  Sure: {elapsed}s",
         meta,
     ))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e0e0e0"), spaceAfter=12))
 
     if not read_contents:
-        story.append(Paragraph("Okunabilir kaynak bulunamadi. Haber basliklari:", h2))
+        story.append(Paragraph("Okunabilir kaynak bulunamadı. Haber başlıkları:", h2))
         for item in all_sources[:8]:
             title = (item.get("title") or "")[:120]
             summary = (item.get("summary") or "")[:200]
@@ -105,17 +110,34 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
                 story.append(Paragraph(summary, body))
             story.append(Spacer(1, 4))
     else:
-        story.append(Paragraph("Kaynaklar ve Bulgular", h2))
+        if synthesis_text:
+            story.append(Paragraph("Sentezlenmiş Araştırma Sonucu", h2))
+            for line in synthesis_text.split('\n'):
+                line = line.strip()
+                if not line:
+                    story.append(Spacer(1, 6))
+                    continue
+                # Handle basic markdown headings
+                if line.startswith('### '):
+                    story.append(Paragraph(line[4:].replace("<", "&lt;").replace(">", "&gt;"), h2))
+                elif line.startswith('## '):
+                    story.append(Paragraph(line[3:].replace("<", "&lt;").replace(">", "&gt;"), h1))
+                elif line.startswith('# '):
+                    story.append(Paragraph(line[2:].replace("<", "&lt;").replace(">", "&gt;"), h1))
+                elif line.startswith('- ') or line.startswith('* '):
+                    story.append(Paragraph(f"• {line[2:].replace('<', '&lt;').replace('>', '&gt;')}", body))
+                else:
+                    story.append(Paragraph(line.replace("<", "&lt;").replace(">", "&gt;"), body))
+            story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e0e0e0"), spaceAfter=12))
+            
+        story.append(Paragraph("Kullanılan Kaynaklar", h2))
         for i, rc in enumerate(read_contents, 1):
             title = (rc.get("title") or f"Kaynak {i}")[:120]
             url = (rc.get("url") or "")[:200]
-            content = (rc.get("content") or "")[:800]
-
-            story.append(Paragraph(f"{i}. {title}", h2))
+            story.append(Paragraph(f"{i}. {title}", body))
             if url:
                 story.append(Paragraph(url, url_style))
-            story.append(Paragraph(content.replace("<", "&lt;").replace(">", "&gt;"), body))
-            story.append(HRFlowable(width="80%", thickness=0.5, color=colors.lightgrey, spaceAfter=8))
+            story.append(Spacer(1, 4))
 
     doc = SimpleDocTemplate(
         str(report_path),
@@ -127,14 +149,14 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
 
     # Ozet metni (Telegram mesaji icin)
     titles = [rc.get("title", "")[:60] for rc in read_contents[:4]]
-    titles_text = "\n".join(f"  - {t}" for t in titles) if titles else "  (kaynak bulunamadi)"
+    titles_text = "\n".join(f"  - {t}" for t in titles) if titles else "  (kaynak bulunamadı)"
     summary_text = (
-        f"<b>Arastirma Ozeti</b>\n\n"
+        f"📋 <b>Araştırma Özeti</b>\n\n"
         f"<b>Konu:</b> {topic[:100]}\n"
-        f"<b>Kaynak sayisi:</b> {len(read_contents)}\n"
-        f"<b>Sure:</b> {elapsed} saniye\n\n"
-        f"<b>One cikan kaynaklar:</b>\n{titles_text}\n\n"
-        f"Detayli rapor asagidaki PDF dosyasinda."
+        f"<b>Kaynak sayısı:</b> {len(read_contents)}\n"
+        f"<b>Süre:</b> {elapsed} saniye\n\n"
+        f"<b>Öne çıkan kaynaklar:</b>\n{titles_text}\n\n"
+        f"Detaylı rapor aşağıdaki PDF dosyasında 👇"
     )
     return summary_text
 
@@ -147,17 +169,17 @@ def tool_research_async(
     max_sources: int = 10,
     out_path: str = "",
 ) -> Dict[str, Any]:
-    """Arastirmayi ARKA PLANDA baslatir. Hemen 'Arastirma basladi' mesaji don.
-    Arastirma bitince Telegram'a ozet mesaj + PDF rapor dosyasi gonderilir.
+    """Araştırmayı ARKA PLANDA başlatır. Hemen 'Araştırma başladı' mesajı dön.
+    Araştırma bitince Telegram'a özet mesaj + PDF rapor dosyası gönderilir.
 
     Args:
-        topic: Arastirilacak konu (ne kadar detayli, o kadar iyi)
+        topic: Araştırılacak konu (ne kadar detaylı, o kadar iyi)
         report_style: standard, technical, academic, brief
-        max_sources: Kullanilacak max kaynak sayisi (varsayilan: 10)
-        out_path: Cikti PDF dosyasi yolu (opsiyonel, bos birakilirsa otomatik)
+        max_sources: Kullanılacak max kaynak sayısı (varsayılan: 10)
+        out_path: Çıktı PDF dosyası yolu (opsiyonel, boş bırakılırsa otomatik)
     """
     if not topic.strip():
-        return {"error": "Konu bos olamaz."}
+        return {"error": "Konu boş olamaz."}
 
     safe_name = re.sub(r'[^\w\s-]', '', topic[:40]).strip().replace(' ', '_')
     if not safe_name:
@@ -181,17 +203,17 @@ def tool_research_async(
                 name=safe_name,
                 goal=topic,
                 steps=(
-                    "Konuya ozgu sorgular belirle\n"
-                    "Kaynaklari tara ve topla\n"
-                    "Kaynak iceriklerini oku ve not al\n"
-                    "Bulgulari sentezle\n"
-                    "PDF rapor olustur ve bildir"
+                    "Konuya özgül sorgular belirle\n"
+                    "Kaynakları tara ve topla\n"
+                    "Kaynak içeriklerini oku ve not al\n"
+                    "Bulguları sentezle\n"
+                    "PDF rapor oluştur ve bildir"
                 ),
             )
             notify(
-                f"\U0001f4da <b>Arastirma basladi:</b> {topic[:80]}\n\n"
+                f"\U0001f4da <b>Araştırma başladı:</b> {topic[:80]}\n\n"
                 f"Not defteri: <code>{safe_name}</code>\n"
-                f"Bitince PDF raporu buraya gonderecegim. (~3-8 dk)"
+                f"Bitince PDF raporu buraya göndereceğim. (~3-8 dk)"
             )
         except Exception as exc:
             import logging, traceback
@@ -283,6 +305,51 @@ def tool_research_async(
                 finding=f"{len(read_contents)} kaynak islendi"
             )
 
+            # 4.5 Bulgulari Sentezle (LLM ile)
+            synthesis_text = ""
+            if read_contents:
+                try:
+                    import asyncio
+                    from ..llm import LLMClient
+                    
+                    llm_client = LLMClient()
+                    context_blocks = []
+                    # Sadece ilk 6 kaynagi gonder, context limitini ve sureyi asma
+                    for i, rc in enumerate(read_contents[:6], 1):
+                        context_blocks.append(f"Kaynak {i}:\nBaslik: {rc.get('title')}\nIcerik: {rc.get('content')[:800]}")
+                    
+                    full_context = "\n\n".join(context_blocks)
+                    
+                    system_prompt = (
+                        "Sen profesyonel bir arastirmacisin. Asagidaki kaynaklari kullanarak verilen konu hakkinda "
+                        "detayli, akici ve kapsamli bir rapor hazirla. Raporu markdown formati kullanarak basliklar (###), "
+                        "maddelendirmeler ve paragraflar seklinde profesyonelce yapilandir. "
+                        "Sadece kaynaklarda yer alan dogrulanmis bilgileri kullan. Eger kaynaklarda yeterli bilgi yoksa, elindeki bilgilerle sınırlı kal. Turkce yaz."
+                    )
+                    
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Arastirma Konusu: {topic}\n\nToplanan Kaynaklar:\n{full_context}"}
+                    ]
+                    
+                    # LLM cagirisi
+                    llm_resp = asyncio.run(llm_client.chat(messages=messages, tools=[]))
+                    synthesis_text = llm_resp.get("message", {}).get("content", "")
+                    
+                    tool_notebook_complete_step(
+                        name=safe_name, step_keyword="sentez",
+                        finding=f"Sentez tamamlandi ({len(synthesis_text)} karakter)"
+                    )
+                    
+                except Exception as synth_exc:
+                    import logging, traceback
+                    err_trace = traceback.format_exc()
+                    with open("C:\\Users\\Ahmet Demiro\u011flu\\Desktop\\OpenWorld\\backend\\synth_err.txt", "w", encoding="utf-8") as f:
+                        f.write(err_trace)
+                    logging.getLogger(__name__).error(f"[research_async] Sentez hatasi: {synth_exc}\n{err_trace}")
+                    tool_notebook_add_note(name=safe_name, note=f"[UYARI] Sentez asamasinda hata: {synth_exc}")
+                    synthesis_text = "Bulgular sentezlenirken bir hata olustu. Icerikler dogrudan dosyaya eklenemedi."
+
             # 5. PDF olustur
             elapsed = int(time.time() - start_ts)
             workspace = Path(settings.workspace_path)
@@ -302,6 +369,7 @@ def tool_research_async(
                 all_sources=all_sources,
                 elapsed=elapsed,
                 report_style=report_style,
+                synthesis_text=synthesis_text
             )
 
             tool_notebook_complete_step(
@@ -309,9 +377,9 @@ def tool_research_async(
                 finding=f"PDF Rapor: {report_path}"
             )
 
-            # 6. Telegram'a ozet + PDF gonder
+            # 6. Telegram'a özet + PDF gönder
             notify(
-                f"\u2705 <b>Arastirma tamamlandi!</b>\n\n{summary_text}",
+                f"\u2705 <b>Araştırma tamamlandı!</b>\n\n{summary_text}",
                 file_path=str(report_path),
             )
 
@@ -332,8 +400,8 @@ def tool_research_async(
         "status": "started",
         "notebook": safe_name,
         "message": (
-            f"Arastirma arka planda baslatildi: {topic}\n"
-            f"Bitince Telegram'a ozet mesaj ve PDF rapor gonderilecek. (~3-8 dakika)"
+            f"Araştırma arka planda başlatıldı: {topic}\n"
+            f"Bitince Telegram'a özet mesaj ve PDF rapor gönderilecek. (~3-8 dakika)"
         ),
     }
 

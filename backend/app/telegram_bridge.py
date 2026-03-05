@@ -785,21 +785,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if user_message and not update.message.photo and not update.message.document:
         fast_research_topic = _try_fast_research(user_message)
         if fast_research_topic:
-            await update.message.reply_text("📚 Bu kapsamli bir arastirma istegi. Arka planda başlatiyorum...")
+            await update.message.reply_text("📚 Bu kapsamlı bir araştırma isteği. Arka planda başlatıyorum...")
             try:
                 from .tools.registry import execute_tool
                 result = execute_tool("research_async", {"topic": fast_research_topic})
                 if result.get("success"):
                     await update.message.reply_text(
-                        f"✅ <b>Arastirma basladi!</b>\n"
+                        f"✅ <b>Araştırma başladı!</b>\n"
                         f"Not defteri: <code>{result.get('notebook', '')}</code>\n"
-                        f"Bitince Telegram'a ozet + PDF rapor gonderecegim (~3-8 dk).",
+                        f"Bitince Telegram'a özet + PDF rapor göndereceğim (~3-8 dk).",
                         parse_mode="HTML"
                     )
                 else:
-                    await update.message.reply_text(f"❌ Arastirma baslatilamadi: {result.get('error', '...')}")
+                    await update.message.reply_text(f"❌ Araştırma başlatılamadı: {result.get('error', '...')}")
             except Exception as exc:
-                await update.message.reply_text(f"❌ Arastirma hatasi: {exc}")
+                await update.message.reply_text(f"❌ Araştırma hatası: {exc}")
             return
 
     # Agent'i cagir
@@ -856,8 +856,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
             if looks_like_tool_dump:
                 reply = (
-                    "Arastirmayi baslattim. Arka planda calisiyor.\n\n"
-                    "Bitince ozeti ve PDF raporu buradan otomatik gonderecegim."
+                    "Araştırmayı başlattım. Arka planda çalışıyor.\n\n"
+                    "Bitince özeti ve PDF raporu buradan otomatik göndereceğim."
                 )
     except Exception:
         pass

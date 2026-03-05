@@ -2313,8 +2313,8 @@ class AgentService:
 
         if async_started is not None:
             lines = [
-                "Arastirmayi baslattim. Arka planda calisiyor.",
-                "Bitince ozet ve PDF raporu buradan gonderecegim.",
+                "Araştırmayı başlattım. Arka planda çalışıyor.",
+                "Bitince özet ve PDF raporu buradan göndereceğim.",
             ]
             notebook = str(async_started.get("notebook") or "").strip()
             if notebook:
@@ -2332,11 +2332,11 @@ class AgentService:
                     errors.append(f"- `{name}`: {err}")
             if errors:
                 lines.append("")
-                lines.append("Uyari/Hata notlari:")
+                lines.append("Uyarı/Hata notları:")
                 lines.extend(errors[:3])
             return "\n".join(lines)
 
-        lines = ["Islem tamamlandi. Sonuclar:"]
+        lines = ["İşlem tamamlandı. Sonuçlar:"]
         for name, result in step_results:
             lines.append(f"- `{name}`: {AgentService._summarize_tool_result(result)}")
         return "\n".join(lines)
@@ -2363,7 +2363,7 @@ class AgentService:
         if isinstance(status, str) and status.strip():
             status_text = status.strip().lower()
             if status_text == "started":
-                return "arka planda baslatildi"
+                return "arka planda başlatıldı"
             return status.strip()
 
         if isinstance(result.get("messages"), list):
@@ -2669,17 +2669,26 @@ class AgentService:
         yes_phrases = {
             "evet", "olur", "tamam", "ac", "baslat", "aktif et", "etkinlestir",
             "acabilirsin", "onayliyorum",
+            "devam et", "izlemeye devam et", "izleyici devam etsin",
+            "acik birak", "acik birak lutfen", "acik kalsin",
         }
         no_phrases = {
             "hayir", "gerek yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin",
+            "izlemeyi kapat", "izleyiciyi kapat",
         }
         if joined in yes_phrases:
             return "yes"
         if joined in no_phrases:
             return "no"
 
-        yes_tokens = {"evet", "olur", "tamam", "ac", "baslat", "aktif", "et", "etkinlestir", "lutfen"}
-        no_tokens = {"hayir", "gerek", "yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin", "lutfen"}
+        yes_tokens = {
+            "evet", "olur", "tamam", "ac", "baslat", "aktif", "et", "etkinlestir", "lutfen",
+            "devam", "izlemeye", "izleyici", "acik", "birak", "kalsin",
+        }
+        no_tokens = {
+            "hayir", "gerek", "yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin", "lutfen",
+            "izlemeyi", "izleyiciyi",
+        }
         if all(w in yes_tokens for w in words):
             return "yes"
         if all(w in no_tokens for w in words):
@@ -2689,7 +2698,7 @@ class AgentService:
     @staticmethod
     def _watcher_profile_for_target(target: str) -> str:
         key = AgentService._normalize_text_for_match(target or "")
-        if key in {"claudecode", "codex", "kimicode"}:
+        if key in {"claudecode", "codex", "kimicode", "gemini"}:
             return key
         return "generic"
 
@@ -2721,10 +2730,6 @@ class AgentService:
         return reply, tools, True
 
     def _try_handle_completion_prompt_answer(self, user_message: str) -> Tuple[str, List[str], bool]:
-        decision = self._classify_watcher_confirmation_answer(user_message)
-        if not decision:
-            return "", [], False
-
         required_tools = {"approval_watcher_status", "stop_approval_watcher", "ack_approval_completion_prompt"}
         if not required_tools.issubset(self._known_tool_names):
             return "", [], False
@@ -2740,6 +2745,15 @@ class AgentService:
             return "", [], False
         if not bool(status.get("completion_prompt_sent")):
             return "", [], False
+
+        decision = self._classify_watcher_confirmation_answer(user_message)
+        if not decision:
+            return (
+                "Onay izleyici, IDE gorevinin tamamlandigini algiladi. "
+                "Izleyiciyi kapatayim mi? (evet/hayir)",
+                ["approval_watcher_status"],
+                True,
+            )
 
         if decision == "yes":
             reply, tools = self._run_approval_watcher_action("stop")
@@ -2763,6 +2777,8 @@ class AgentService:
             profile = "codex"
         elif "kimicode" in normalized or "kimi code" in normalized:
             profile = "kimicode"
+        elif "gemini" in normalized:
+            profile = "gemini"
         return self._run_approval_watcher_action(action, profile=profile)
 
     def _run_approval_watcher_action(self, action: str, profile: str = "generic") -> Tuple[str, List[str]]:
