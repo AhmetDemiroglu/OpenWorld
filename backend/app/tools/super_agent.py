@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import socket
 import ipaddress
@@ -73,6 +74,20 @@ _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
     "kabul et",
     "devam et",
     "onay ver",
+}
+
+_APPROVAL_WATCHER_LOCK = threading.Lock()
+_APPROVAL_WATCHER_STATE: Dict[str, Any] = {
+    "running": False,
+    "thread": None,
+    "stop_event": None,
+    "started_at": "",
+    "last_error": "",
+    "checks": 0,
+    "accepted": 0,
+    "last_event": "",
+    "window_pattern": "Visual Studio Code|Code - Insiders",
+    "interval": 1.0,
 }
 
 
@@ -1145,6 +1160,156 @@ def tool_wait_and_accept_approval(
         "message": "Onay penceresi tespit edilmedi.",
         "last_seen_text": last_blob,
     }
+
+
+def _tesseract_ready() -> Tuple[bool, str]:
+    try:
+        import pytesseract
+        _ = pytesseract.get_tesseract_version()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _approval_watcher_worker(window_pattern: str, interval: float, min_confidence: float, lang: str, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        result = tool_wait_and_accept_approval(
+            window_pattern=window_pattern,
+            timeout=max(2, int(round(interval * 2))),
+            interval=max(0.25, min(interval, 2.5)),
+            min_confidence=min_confidence,
+            lang=lang,
+            allow_keyboard_fallback=False,
+        )
+
+        with _APPROVAL_WATCHER_LOCK:
+            _APPROVAL_WATCHER_STATE["checks"] = int(_APPROVAL_WATCHER_STATE.get("checks", 0)) + int(result.get("checks", 1))
+
+            if result.get("success"):
+                _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
+                clicked_text = str(result.get("clicked_text", "")).strip()
+                if clicked_text:
+                    _APPROVAL_WATCHER_STATE["last_event"] = f"Kabul edildi: {clicked_text}"
+                else:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Kabul edildi"
+                _APPROVAL_WATCHER_STATE["last_error"] = ""
+            elif result.get("error"):
+                _APPROVAL_WATCHER_STATE["last_error"] = str(result.get("error", ""))[:240]
+                _APPROVAL_WATCHER_STATE["last_event"] = "Hata olustu"
+                # Tesseract yoksa izleyiciyi devam ettirmeyelim.
+                if "tesseract" in str(result.get("error", "")).lower():
+                    stop_event.set()
+            else:
+                _APPROVAL_WATCHER_STATE["last_event"] = "Onay bekleniyor"
+
+    with _APPROVAL_WATCHER_LOCK:
+        _APPROVAL_WATCHER_STATE["running"] = False
+        _APPROVAL_WATCHER_STATE["thread"] = None
+        _APPROVAL_WATCHER_STATE["stop_event"] = None
+
+
+def tool_start_approval_watcher(
+    window_pattern: str = "Visual Studio Code|Code - Insiders",
+    interval: float = 1.0,
+    min_confidence: float = 40.0,
+    lang: str = "tur+eng",
+) -> Dict[str, Any]:
+    """Arka planda IDE onay pencerelerini surekli izleyip otomatik kabul et."""
+    interval = max(0.4, min(float(interval), 5.0))
+    min_confidence = max(0.0, min(float(min_confidence), 100.0))
+
+    ok, err = _tesseract_ready()
+    if not ok:
+        return {
+            "success": False,
+            "error": "Tesseract OCR bulunamadi.",
+            "detail": err[:240],
+            "install_path": r"C:\Program Files\Tesseract-OCR",
+            "install_url": "https://github.com/UB-Mannheim/tesseract/wiki",
+        }
+
+    with _APPROVAL_WATCHER_LOCK:
+        thread = _APPROVAL_WATCHER_STATE.get("thread")
+        if _APPROVAL_WATCHER_STATE.get("running") and isinstance(thread, threading.Thread) and thread.is_alive():
+            return {
+                "success": True,
+                "running": True,
+                "message": "Onay izleyici zaten aktif.",
+                "status": tool_approval_watcher_status(),
+            }
+
+        stop_event = threading.Event()
+        worker = threading.Thread(
+            target=_approval_watcher_worker,
+            args=(window_pattern, interval, min_confidence, lang, stop_event),
+            daemon=True,
+            name="OpenWorldApprovalWatcher",
+        )
+
+        _APPROVAL_WATCHER_STATE["running"] = True
+        _APPROVAL_WATCHER_STATE["thread"] = worker
+        _APPROVAL_WATCHER_STATE["stop_event"] = stop_event
+        _APPROVAL_WATCHER_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _APPROVAL_WATCHER_STATE["last_error"] = ""
+        _APPROVAL_WATCHER_STATE["last_event"] = "Baslatildi"
+        _APPROVAL_WATCHER_STATE["window_pattern"] = window_pattern
+        _APPROVAL_WATCHER_STATE["interval"] = interval
+        _APPROVAL_WATCHER_STATE["checks"] = 0
+        _APPROVAL_WATCHER_STATE["accepted"] = 0
+
+        worker.start()
+
+    return {
+        "success": True,
+        "running": True,
+        "message": "Onay izleyici baslatildi.",
+        "window_pattern": window_pattern,
+        "interval": interval,
+    }
+
+
+def tool_stop_approval_watcher() -> Dict[str, Any]:
+    """Arka plandaki IDE onay izleyiciyi durdur."""
+    thread: Optional[threading.Thread] = None
+    stop_event: Optional[threading.Event] = None
+    with _APPROVAL_WATCHER_LOCK:
+        thread = _APPROVAL_WATCHER_STATE.get("thread")
+        stop_event = _APPROVAL_WATCHER_STATE.get("stop_event")
+        running = bool(_APPROVAL_WATCHER_STATE.get("running"))
+
+    if not running:
+        return {"success": True, "running": False, "message": "Onay izleyici zaten kapali."}
+
+    if isinstance(stop_event, threading.Event):
+        stop_event.set()
+    if isinstance(thread, threading.Thread) and thread.is_alive():
+        thread.join(timeout=3.0)
+
+    with _APPROVAL_WATCHER_LOCK:
+        _APPROVAL_WATCHER_STATE["running"] = False
+        _APPROVAL_WATCHER_STATE["thread"] = None
+        _APPROVAL_WATCHER_STATE["stop_event"] = None
+        _APPROVAL_WATCHER_STATE["last_event"] = "Durduruldu"
+
+    return {"success": True, "running": False, "message": "Onay izleyici durduruldu."}
+
+
+def tool_approval_watcher_status() -> Dict[str, Any]:
+    """IDE onay izleyici durumunu getir."""
+    with _APPROVAL_WATCHER_LOCK:
+        thread = _APPROVAL_WATCHER_STATE.get("thread")
+        running = bool(_APPROVAL_WATCHER_STATE.get("running"))
+        alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())
+        return {
+            "running": running and alive,
+            "started_at": _APPROVAL_WATCHER_STATE.get("started_at", ""),
+            "checks": int(_APPROVAL_WATCHER_STATE.get("checks", 0)),
+            "accepted": int(_APPROVAL_WATCHER_STATE.get("accepted", 0)),
+            "last_event": _APPROVAL_WATCHER_STATE.get("last_event", ""),
+            "last_error": _APPROVAL_WATCHER_STATE.get("last_error", ""),
+            "window_pattern": _APPROVAL_WATCHER_STATE.get("window_pattern", ""),
+            "interval": _APPROVAL_WATCHER_STATE.get("interval", 1.0),
+        }
 
 
 # =============================================================================

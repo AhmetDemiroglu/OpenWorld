@@ -254,6 +254,14 @@ SETUP_GUIDE = """\
    \u2022 https://nodejs.org adresinden LTS
      s\u00fcr\u00fcm\u00fcn\u00fc indirin ve kurun
 
+   Tesseract OCR (\u00f6nerilir):
+   \u2022 \u0130ndirme: https://github.com/UB-Mannheim/tesseract/wiki
+   \u2022 Kurulum yolu: C:\\Program Files\\Tesseract-OCR
+   \u2022 PATH'e eklenecek klas\u00f6r: C:\\Program Files\\Tesseract-OCR
+   \u2022 Do\u011frulama: terminalde `tesseract --version`
+   \u2022 Vision \u00f6zelli\u011fi olmayan modellerde OCR
+     (g\u00f6rselden metin okuma) i\u00e7in zorunludur
+
    NOT: Bu iki program zaten kuruluysa
    bu ad\u0131m\u0131 atlayabilirsiniz.
 
@@ -382,6 +390,11 @@ SETUP_GUIDE = """\
 
    \u2716 \u201cVenv bulunamad\u0131\u201d hatas\u0131
      \u2192 \u201cKurulum\u201d butonuna bas\u0131n
+
+   \u2716 \u201cTesseract is not installed\u201d hatas\u0131
+     \u2192 Tesseract'\u0131 C:\\Program Files\\Tesseract-OCR klas\u00f6r\u00fcne kurun
+     \u2192 PATH'e C:\\Program Files\\Tesseract-OCR ekleyin
+     \u2192 Yeni terminal a\u00e7\u0131p `tesseract --version` ile kontrol edin
 
 
 \u2501\u2501\u2501\u2501\u2501\u2501  \u0130LET\u0130\u015e\u0130M  \u2501\u2501\u2501\u2501\u2501\u2501

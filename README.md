@@ -144,11 +144,20 @@ ollama --version
 
 ### Adım 4: Tesseract OCR Kurulumu (Opsiyonel ama Önerilir)
 
-OCR (ekrandan metin okuma) için gerekli:
+OCR (ekrandan metin okuma) için gerekli. Vision özelliği olmayan modellerde bu adım zorunludur.
 
 **İndir:** https://github.com/UB-Mannheim/tesseract/wiki
 
-Kurulum sırasında "Add to PATH" seçeneğini işaretleyin.
+**Kurulum klasörü (önerilen):**
+`C:\Program Files\Tesseract-OCR`
+
+**PATH'e eklenecek dizin (tam olarak):**
+`C:\Program Files\Tesseract-OCR`
+
+**Doğrulama:**
+```powershell
+tesseract --version
+```
 
 ---
 
@@ -849,7 +858,11 @@ GET http://127.0.0.1:8000/services/status
 Python kurulumunda "Add to PATH" işaretlememişsiniz. Yeniden kurun.
 
 ### "Tesseract not found"
-OCR kullanmak için Tesseract kurulu olmalı: https://github.com/UB-Mannheim/tesseract/wiki
+1. Tesseract'ı `C:\Program Files\Tesseract-OCR` klasörüne kurun.
+2. PATH'e `C:\Program Files\Tesseract-OCR` dizinini ekleyin.
+3. Yeni terminal açıp `tesseract --version` komutunu çalıştırın.
+4. Gerekirse launcher'ı yeniden başlatın.
+5. İndirme: https://github.com/UB-Mannheim/tesseract/wiki
 
 ### "ChromeDriver hatası"
 Web screenshot için Chrome tarayıcısı kurulu olmalı.

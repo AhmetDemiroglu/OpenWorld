@@ -62,6 +62,11 @@ from .super_agent import (
     # OCR
     tool_ocr_screenshot,
     tool_ocr_image,
+    # IDE approval watcher
+    tool_wait_and_accept_approval,
+    tool_start_approval_watcher,
+    tool_stop_approval_watcher,
+    tool_approval_watcher_status,
 )
 
 # VERITABANI VE HAFIZA
@@ -2607,6 +2612,67 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             }
         }
     ),
+    "wait_and_accept_approval": (
+        tool_wait_and_accept_approval,
+        {
+            "type": "function",
+            "function": {
+                "name": "wait_and_accept_approval",
+                "description": "VS Code icindeki onay penceresini OCR ile bulup otomatik kabul etmeye calisir.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "window_pattern": {"type": "string", "description": "Hedef pencere regex deseni"},
+                        "timeout": {"type": "integer", "description": "Maksimum bekleme suresi (saniye)"},
+                        "interval": {"type": "number", "description": "Tarama araligi (saniye)"},
+                        "min_confidence": {"type": "number", "description": "OCR minimum guven skoru (0-100)"},
+                        "lang": {"type": "string", "description": "OCR dil paketi (or: tur+eng)"}
+                    }
+                }
+            }
+        }
+    ),
+    "start_approval_watcher": (
+        tool_start_approval_watcher,
+        {
+            "type": "function",
+            "function": {
+                "name": "start_approval_watcher",
+                "description": "Arka planda surekli onay penceresi izleyici baslatir.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "window_pattern": {"type": "string", "description": "Hedef pencere regex deseni"},
+                        "interval": {"type": "number", "description": "Tarama araligi (saniye)"},
+                        "min_confidence": {"type": "number", "description": "OCR minimum guven skoru (0-100)"},
+                        "lang": {"type": "string", "description": "OCR dil paketi (or: tur+eng)"}
+                    }
+                }
+            }
+        }
+    ),
+    "stop_approval_watcher": (
+        tool_stop_approval_watcher,
+        {
+            "type": "function",
+            "function": {
+                "name": "stop_approval_watcher",
+                "description": "Arka plandaki onay izleyiciyi durdurur.",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        }
+    ),
+    "approval_watcher_status": (
+        tool_approval_watcher_status,
+        {
+            "type": "function",
+            "function": {
+                "name": "approval_watcher_status",
+                "description": "Onay izleyicinin calisma durumunu getirir.",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        }
+    ),
     
     # ============================================================
     # SA’A…-S“PER AJAN ARA’A¢a¬A¡LARI - SES
@@ -3679,7 +3745,7 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     "screen": [
         "screenshot_desktop", "screenshot_webpage", "find_image_on_screen",
         "click_on_screen", "type_text", "press_key", "mouse_position",
-        "mouse_move", "drag_to", "scroll", "hotkey",
+        "mouse_move", "drag_to", "scroll", "hotkey", "wait_and_accept_approval",
     ],
     "audio": [
         "start_audio_recording", "stop_audio_recording",
@@ -3705,6 +3771,7 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     "window": [
         "get_window_list", "activate_window",
         "minimize_all_windows", "lock_workstation",
+        "start_approval_watcher", "stop_approval_watcher", "approval_watcher_status",
     ],
     "office": [
         "create_word_document", "create_markdown_report",
@@ -3789,7 +3856,7 @@ CATEGORY_KEYWORDS: Dict[str, set] = {
     "window": {
         "pencere", "window", "uygulama", "application", "minimize",
         "kA’AsA’AsA’Aslt", "kucult", "one getir", "A’Asne getir", "activate",
-        "kilit", "kilitle", "lock",
+        "kilit", "kilitle", "lock", "onay", "izin", "approve", "allow", "accept", "watcher", "izle", "izleyici",
     },
     "office": {
         "word", "docx", "belge", "document", "excel", "xlsx", "tablo",

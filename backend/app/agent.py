@@ -278,6 +278,13 @@ class AgentService:
             self.store.save(session_id, messages)
             return ide_approval_reply, 1, ide_approval_tools, []
 
+        approval_watcher_reply, approval_watcher_tools = self._try_fast_approval_watcher_control(user_message, messages)
+        if approval_watcher_reply:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=approval_watcher_reply))
+            self.store.save(session_id, messages)
+            return approval_watcher_reply, 1, approval_watcher_tools, []
+
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
         notebook_goal_for_research = ""  # research_and_report icin topic sakla
@@ -984,6 +991,7 @@ class AgentService:
             
             # VS Code - Hizli acma
             "open_in_vscode", "vscode_command",
+            "wait_and_accept_approval", "start_approval_watcher", "stop_approval_watcher", "approval_watcher_status",
             
             # Sistem - Bilgi sorgulama
             "get_system_info", "list_processes", "network_info", "ping_host",
@@ -2448,6 +2456,102 @@ class AgentService:
             ["wait_and_accept_approval"],
         )
 
+    @staticmethod
+    def _extract_approval_watcher_action(user_message: str) -> str:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if not normalized:
+            return ""
+
+        watcher_markers = (
+            "onay izle", "onay izleme", "onay izleyici", "onay watcher",
+            "otomatik onay", "onaylari otomatik", "approval watcher", "approval watch",
+        )
+        if not any(marker in normalized for marker in watcher_markers):
+            return ""
+
+        stop_markers = ("kapat", "durdur", "devre disi", "iptal", "stop", "disable")
+        status_markers = ("durum", "acik mi", "calisiyor mu", "status", "ne durumda")
+        start_markers = ("ac", "baslat", "aktif et", "etkinlestir", "enable", "start")
+
+        if any(marker in normalized for marker in stop_markers):
+            return "stop"
+        if any(marker in normalized for marker in status_markers):
+            return "status"
+        if any(marker in normalized for marker in start_markers):
+            return "start"
+        return "status"
+
+    @staticmethod
+    def _is_positive_approval_followup(messages: List[ChatMessage], user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        yes_tokens = {"evet", "olur", "tamam", "ac", "acalim", "acabilirsin", "aktif et"}
+        words = [w for w in re.findall(r"[^\W_]+", normalized, flags=re.UNICODE) if w]
+        if not words:
+            return False
+        if len(words) > 3:
+            return False
+        if not all(w in yes_tokens for w in words):
+            return False
+
+        last_assistant = ""
+        for msg in reversed(messages[-6:]):
+            if msg.role == "assistant":
+                last_assistant = AgentService._normalize_text_for_match(msg.content or "")
+                break
+        if not last_assistant:
+            return False
+        return "onay izlemeyi ac" in last_assistant or "onay izleyici" in last_assistant
+
+    def _try_fast_approval_watcher_control(self, user_message: str, messages: List[ChatMessage]) -> Tuple[str, List[str]]:
+        action = self._extract_approval_watcher_action(user_message)
+        if not action and self._is_positive_approval_followup(messages, user_message):
+            action = "start"
+        if not action:
+            return "", []
+
+        required_tools = {"start_approval_watcher", "stop_approval_watcher", "approval_watcher_status"}
+        if not required_tools.issubset(self._known_tool_names):
+            return "Onay izleyici araclari su an aktif degil.", []
+
+        tool_map = {
+            "start": "start_approval_watcher",
+            "stop": "stop_approval_watcher",
+            "status": "approval_watcher_status",
+        }
+        tool_name = tool_map.get(action, "approval_watcher_status")
+        try:
+            result = execute_tool(tool_name, {})
+        except Exception as exc:
+            return f"Hata: onay izleyici islemi basarisiz: {exc}", [tool_name]
+
+        if isinstance(result, dict) and result.get("error"):
+            error = str(result.get("error", "")).strip()
+            detail = str(result.get("detail", "")).strip()
+            install_path = str(result.get("install_path", "")).strip()
+            install_url = str(result.get("install_url", "")).strip()
+            lines = [f"Hata: {error or 'Onay izleyici baslatilamadi.'}"]
+            if detail:
+                lines.append(f"Detay: {detail}")
+            if install_path:
+                lines.append(f"Kurulum yolu: {install_path}")
+            if install_url:
+                lines.append(f"Indirme: {install_url}")
+            return "\n".join(lines), [tool_name]
+
+        if action == "start":
+            return (
+                "Onay izleyici acildi. VS Code acik oldugu surece onay pencerelerini otomatik takip edip kabul etmeye calisacagim.",
+                [tool_name],
+            )
+        if action == "stop":
+            return "Onay izleyici kapatildi.", [tool_name]
+
+        running = bool(result.get("running")) if isinstance(result, dict) else False
+        checks = int(result.get("checks", 0)) if isinstance(result, dict) else 0
+        accepted = int(result.get("accepted", 0)) if isinstance(result, dict) else 0
+        status_text = "acik" if running else "kapali"
+        return f"Onay izleyici durumu: {status_text}. Kontrol: {checks}, kabul edilen onay: {accepted}.", [tool_name]
+
     def _try_fast_vscode_agent_chat_write(self, user_message: str) -> Tuple[str, List[str]]:
         request = self._extract_vscode_agent_write_request(user_message)
         if not request:
@@ -2553,6 +2657,7 @@ class AgentService:
         reply = f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi."
         if approval_result.get("success"):
             reply += "\nNot: IDE onay penceresi otomatik tespit edilip kabul edildi."
+        reply += "\nEger uzun sureli takip istiyorsaniz \"onay izlemeyi ac\" yazabilirsiniz."
         return (reply, tools_used)
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:

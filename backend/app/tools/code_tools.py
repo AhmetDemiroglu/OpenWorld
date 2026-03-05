@@ -642,13 +642,12 @@ def tool_vscode_command(
 
             ext = (extension or "copilot").lower().strip()
 
-            # Extension command palette mapping (VS Code Command Palette komutlari)
-            # "Focus Input" komutlari paneli acar VE input'a odaklanir — direkt yazilabilir
+            # Extension shortcut mapping (Direct shortcuts are faster than Command Palette)
             ext_shortcuts = {
-                "kimicode":   {"name": "KimiCode", "palette_cmd": "Kimi Code: Focus Input"},
+                "kimicode":   {"name": "KimiCode", "shortcut": ["ctrl", "shift", "k"]},
                 "copilot":    {"name": "GitHub Copilot", "shortcut": ["ctrl", "shift", "i"]},
-                "claudecode": {"name": "Claude Code", "palette_cmd": "Claude Code: Focus input"},
-                "codex":      {"name": "Codex", "palette_cmd": "Codex: Open Codex Sidebar"},
+                "claudecode": {"name": "Claude Code", "shortcut": ["ctrl", "escape"]},
+                "codex":      {"name": "Codex", "shortcut": ["ctrl", "n"]},
             }
 
             if ext not in ext_shortcuts:
@@ -686,24 +685,22 @@ def tool_vscode_command(
                     except Exception:
                         pass
 
-                    # 3) Extension'larin yuklenmesini bekle (30-40sn surebilir)
-                    time.sleep(30)
+                    # 3) Kisayol ile Extension panelini ac (Bu, eklentinin Webview'ini arka planda yuklemeye baslatir)
+                    pyautogui.hotkey(*info["shortcut"])
+                    
+                    # 4) Eklentinin kendine gelmesi (Webview'in yuklenmesi) icin beklenmesi gereken sure (40 saniye)
+                    time.sleep(40)
 
-                    # 4) Extension panelini ac
-                    if "palette_cmd" in info:
-                        pyautogui.hotkey("ctrl", "shift", "p")
-                        time.sleep(1)
-                        _type_unicode(info["palette_cmd"])
-                        time.sleep(1)
-                        pyautogui.press("enter")
-                        time.sleep(5)
-                    elif "shortcut" in info:
-                        pyautogui.hotkey(*info["shortcut"])
-                        time.sleep(5)
+                    # 5) Focus'u garantiye alma islemi: 
+                    # 40 saniye icinde odak kaybolmus olabilir. Once text editor'e (Ctrl+1) odaklan, 
+                    # ardindan tekrar eklenti kisayoluna basarak odagi kesin olarak input'a al.
+                    pyautogui.hotkey("ctrl", "1")
+                    time.sleep(0.5)
+                    pyautogui.hotkey(*info["shortcut"])
+                    time.sleep(1)
 
-                    # 5) Mesaj yaz ("Focus Input" cursor'i zaten input alanina koyar)
+                    # 6) Mesaj yaz
                     if msg:
-                        time.sleep(0.5)
                         _type_unicode(msg)
                         time.sleep(0.5)
                         pyautogui.press("enter")
