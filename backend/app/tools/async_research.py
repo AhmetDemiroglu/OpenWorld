@@ -1,5 +1,5 @@
-"""
-async_research.py — Otonom arka plan arastirma araci.
+﻿"""
+async_research.py â€” Otonom arka plan arastirma araci.
 tool_research_async: Aninda yanitlar, arka planda arastirip Telegram'a bildirir.
 Cikti: PDF rapor (reportlab ile) + Telegram ozet mesaji.
 """
@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-# ── Yardimci: konuya ozgu sorgular ──────────────────────────────────────────
+# â”€â”€ Yardimci: konuya ozgu sorgular â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _generate_smart_queries(topic: str) -> list:
-    """Konuya OZGU alt sorgular uretir — sabit sablon degil."""
+    """Konuya OZGU alt sorgular uretir â€” sabit sablon degil."""
     t = topic.lower()
     queries = [topic]
 
@@ -38,7 +38,7 @@ def _generate_smart_queries(topic: str) -> list:
     return list(dict.fromkeys(queries))[:5]
 
 
-# ── PDF olusturucu ───────────────────────────────────────────────────────────
+# â”€â”€ PDF olusturucu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: list,
                elapsed: int, report_style: str) -> str:
@@ -89,8 +89,8 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
     story.append(Paragraph(f"Arastirma Raporu", h1))
     story.append(Paragraph(topic, h2))
     story.append(Paragraph(
-        f"Tarih: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC  |  "
-        f"Stil: {report_style}  |  Kaynak: {len(read_contents)}  |  Sure: {elapsed}s",
+        f"Tarih: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC Â |Â  "
+        f"Stil: {report_style} Â |Â  Kaynak: {len(read_contents)} Â |Â  Sure: {elapsed}s",
         meta,
     ))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e0e0e0"), spaceAfter=12))
@@ -127,19 +127,19 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
 
     # Ozet metni (Telegram mesaji icin)
     titles = [rc.get("title", "")[:60] for rc in read_contents[:4]]
-    titles_text = "\n".join(f"  • {t}" for t in titles) if titles else "  (kaynak bulunamadi)"
+    titles_text = "\n".join(f"  - {t}" for t in titles) if titles else "  (kaynak bulunamadi)"
     summary_text = (
-        f"📋 <b>Araştırma Özeti</b>\n\n"
+        f"<b>Arastirma Ozeti</b>\n\n"
         f"<b>Konu:</b> {topic[:100]}\n"
-        f"<b>Kaynak sayısı:</b> {len(read_contents)}\n"
-        f"<b>Süre:</b> {elapsed} saniye\n\n"
-        f"<b>Öne çıkan kaynaklar:</b>\n{titles_text}\n\n"
-        f"Detaylı rapor aşağıdaki PDF'te 👇"
+        f"<b>Kaynak sayisi:</b> {len(read_contents)}\n"
+        f"<b>Sure:</b> {elapsed} saniye\n\n"
+        f"<b>One cikan kaynaklar:</b>\n{titles_text}\n\n"
+        f"Detayli rapor asagidaki PDF dosyasinda."
     )
     return summary_text
 
 
-# ── Ana tool ─────────────────────────────────────────────────────────────────
+# â”€â”€ Ana tool â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def tool_research_async(
     topic: str,
@@ -191,10 +191,10 @@ def tool_research_async(
             notify(
                 f"\U0001f4da <b>Arastirma basladi:</b> {topic[:80]}\n\n"
                 f"Not defteri: <code>{safe_name}</code>\n"
-                f"Bitince PDF raporu buraya gondereceğim. (~3-8 dk)"
+                f"Bitince PDF raporu buraya gonderecegim. (~3-8 dk)"
             )
         except Exception as exc:
-            notify(f"\u26a0\ufe0f Arastirma baslatılamadı: {exc}")
+            notify(f"\u26a0\ufe0f Arastirma baslatilamadi: {exc}")
             return
 
         try:
@@ -296,7 +296,8 @@ def tool_research_async(
         "status": "started",
         "notebook": safe_name,
         "message": (
-            f"Araştırma arka planda başlatıldı: {topic}\n"
-            f"Bitince Telegram'a özet mesaj + PDF rapor gönderilecek. (~3-8 dakika)"
+            f"Arastirma arka planda baslatildi: {topic}\n"
+            f"Bitince Telegram'a ozet mesaj ve PDF rapor gonderilecek. (~3-8 dakika)"
         ),
     }
+

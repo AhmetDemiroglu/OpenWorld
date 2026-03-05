@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import atexit
 import asyncio
@@ -111,7 +111,7 @@ def markdown_to_telegram_html(text: str) -> str:
 
     # Code blocks first.
     text = re.sub(
-        r"```[\w]*\n(.*?)```",
+        r"```[\w]*\n(.*...)```",
         r"<pre>\1</pre>",
         text,
         flags=re.DOTALL,
@@ -119,8 +119,8 @@ def markdown_to_telegram_html(text: str) -> str:
 
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"^#{1,3}\s+(.+)$", r"\n<b>\1</b>", text, flags=re.MULTILINE)
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
+    text = re.sub(r"\*\*(.+...)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(...<!\*)\*([^*]+)\*(...!\*)", r"<i>\1</i>", text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
 
     # Markdown table blocks to monospace.
@@ -154,7 +154,7 @@ def markdown_to_telegram_html(text: str) -> str:
 def _normalize_tr(text: str) -> str:
     tr_map = {
         0x00E7: "c",  # ç
-        0x011F: "g",  # ğ
+        0x011F: "g",  # ş
         0x0131: "i",  # ı
         0x00F6: "o",  # ö
         0x015F: "s",  # ş
@@ -435,7 +435,7 @@ async def send_approval_request(
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inline buton callback'lerini işle (onay/ret + 'başka bir şey?' yanıtı)."""
+    """Inline buton callback'lerini işle (onay/ret + 'başka bir şey...' yanıtı)."""
     if not _is_allowed(update):
         return
     query = update.callback_query
@@ -460,9 +460,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
         return
 
-    # BLOK 7: "Başka bir şey?" yanıtı
+    # BLOK 7: "Başka bir şey..." yanıtı
     if data == "more_yes":
-        await query.edit_message_text("Tabii! Ne yapmamı istersin?")
+        await query.edit_message_text("Tabii! Ne yapmamı istersin...")
     elif data == "more_no":
         await query.edit_message_text("Anlaşıldı, beklemedeyim. İhtiyaç olursa yaz.")
 
@@ -498,7 +498,7 @@ async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         else:
             await update.message.reply_text(
-                f"❌ Araştırma başlatılamadı: {result.get('error', '?')}"
+                f"❌ Araştırma başlatılamadı: {result.get('error', '...')}"
             )
     except Exception as exc:
         await update.message.reply_text(f"❌ Hata: {exc}")
@@ -754,6 +754,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         data = await call_agent(session_id, user_message)
         reply = data.get("reply", "")
         media_list = data.get("media") or []
+        used_tools = data.get("used_tools") or []
     except Exception as exc:
         err_text = str(exc).strip()
         exc_type = type(exc).__name__
@@ -787,6 +788,26 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             reply = f"❌ Hata: {err_text[:500]}"
         media_list = []
+        used_tools = []
+
+    try:
+        if (
+            isinstance(used_tools, list)
+            and "research_async" in used_tools
+            and isinstance(reply, str)
+            and "hata" not in _normalize_tr(reply)
+        ):
+            looks_like_tool_dump = (
+                "islem tamamlandi. sonuclar" in _normalize_tr(reply)
+                or "`research_async`" in reply
+            )
+            if looks_like_tool_dump:
+                reply = (
+                    "Arastirmayi baslattim. Arka planda calisiyor.\n\n"
+                    "Bitince ozeti ve PDF raporu buradan otomatik gonderecegim."
+                )
+    except Exception:
+        pass
 
     # Send media first.
     _logger = logging.getLogger(__name__)
@@ -845,7 +866,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:
         await update.message.reply_text(reply[:4000])
 
-    # BLOK 7: Görev tamamlama → "Başka bir şey?" inline butonu
+    # BLOK 7: Görev tamamlama → "Başka bir şey..." inline butonu
     _done_hints = (
         "tamamland", "başarıyla", "basariyla", "hazır", "hazir",
         "oluşturuldu", "olusturuldu", "gönderildi", "gonderildi",
@@ -859,7 +880,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 InlineKeyboardButton("❌ Hayır", callback_data="more_no"),
             ]])
             await update.message.reply_text(
-                "Başka bir şey ister misin?",
+                "Başka bir şey ister misin...",
                 reply_markup=keyboard,
             )
         except Exception:
@@ -901,7 +922,6 @@ async def main() -> None:
         ))
         await app.initialize()
         await app.start()
-        await app.updater.start_polling()
 
         # Arka plan thread'lerinin Telegram'a bildirim gondermesini sagla
         try:
@@ -913,6 +933,8 @@ async def main() -> None:
             import logging as _log2
             _log2.getLogger(__name__).warning("[TelegramBridge] Notifier baslatılamadi: %s", _ne)
 
+        await app.updater.start_polling()
+
         await asyncio.Event().wait()
     finally:
         _release_single_instance_lock()
@@ -920,3 +942,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

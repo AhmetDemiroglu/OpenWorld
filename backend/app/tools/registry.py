@@ -2384,6 +2384,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                         "max_sources": {"type": "integer", "description": "Max kaynak sayisi (varsayilan: 10)"},
                         "out_path": {"type": "string", "description": "Cikti dosyasi yolu (opsiyonel)"}
                     },
+                    "required": ["topic"]
                 }
             }
         }
@@ -3916,7 +3917,7 @@ DEFAULT_TOOL_NAMES: List[str] = [
     "get_system_info",
     "search_news",
     "fetch_web_page",
-    "research_and_report",
+    "research_async",
     "research_note",
     "check_gmail_messages",
     "check_outlook_messages",
@@ -3965,7 +3966,7 @@ _TOOL_ARGUMENT_ALIASES: Dict[str, Dict[str, str]] = {
     "create_markdown_report": {"file_path": "path", "text": "content"},
     "check_gmail_messages": {"limit": "max_results"},
     "check_outlook_messages": {"limit": "max_results"},
-    "research_and_report": {"path": "out_path", "file_path": "out_path", "query": "topic"},
+    "research_async": {"path": "out_path", "file_path": "out_path", "query": "topic"},
     "notebook_create": {"title": "name", "topic": "goal"},
     "notebook_add_note": {"text": "note", "content": "note"},
     "notebook_complete_step": {"keyword": "step_keyword", "step": "step_keyword"},
@@ -4053,7 +4054,7 @@ def _normalize_execute_arguments(name: str, arguments: Dict[str, Any], fn: Calla
             default_dir.mkdir(parents=True, exist_ok=True)
             args["output_path"] = str(default_dir / f"{name}_{stamp}.{ext}")
 
-    if name == "research_and_report":
+    if name == "research_async":
         topic = args.get("topic")
         topic_text = topic.strip() if isinstance(topic, str) else ""
         if not topic_text:

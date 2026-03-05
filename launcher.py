@@ -422,7 +422,7 @@ SETUP_GUIDE = """\
    GitHub    : github.com/AhmetDemiroglu
 """
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 
 class LauncherApp:
@@ -438,6 +438,8 @@ class LauncherApp:
 
         self.backend_proc: subprocess.Popen | None = None
         self.telegram_proc: subprocess.Popen | None = None
+        self._last_status_text: str = "Hazir"
+        self._backend_ready_announced: bool = False
 
         self.status_var = tk.StringVar(value="Haz\u0131r")
         self.token_var = tk.StringVar()
@@ -773,9 +775,38 @@ class LauncherApp:
 
     def _append_status(self, text: str) -> None:
         def _set() -> None:
+            self._last_status_text = text
             self.status_var.set(f"{time.strftime('%H:%M:%S')} - {text}")
 
         self.root.after(0, _set)
+
+    def _wait_for_backend_ready(self, timeout_sec: int = 45, poll_sec: float = 0.4) -> bool:
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if self._is_port_open(8000):
+                return True
+            if self.backend_proc and self.backend_proc.poll() is not None:
+                return False
+            time.sleep(poll_sec)
+        return self._is_port_open(8000)
+
+    def _status_needs_backend_ready_hint(self) -> bool:
+        status_line = (self.status_var.get() or "").lower()
+        text = (self._last_status_text or "").lower()
+        combined = f"{status_line} {text}"
+        markers = (
+            "backend baslatiliyor",
+            "backend başlatılıyor",
+            "starting up",
+            "backend baslatilamadi",
+            "backend başlatılamadı",
+            "loglar bos",
+            "loglar boş",
+            "gec aciliyor",
+            "geç açılıyor",
+            "son hata",
+        )
+        return any(marker in combined for marker in markers)
 
     def _update_connection_badges(self) -> None:
         gmail_connected = bool(self.gmail_token_var.get().strip() or self.gmail_refresh_var.get().strip())
@@ -958,8 +989,7 @@ class LauncherApp:
             "$procs = Get-CimInstance Win32_Process | Where-Object { "
             "$cl = ($_.CommandLine | Out-String); "
             "$isOpenWorldTool = ($cl -like '*app.main_v2:app*' -or $cl -like '*app.main:app*' -or $cl -like '*app.telegram_bridge*'); "
-            "$isOurRuntime = ($cl -like '*OpenWorld*' -or $cl -like '*OpenWorldRuntime*'); "
-            "$isOpenWorldTool -and $isOurRuntime }; "
+            "$isOpenWorldTool }; "
             "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }"
         )
         subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True)
@@ -1506,10 +1536,11 @@ except Exception as e:
             )
             telegram_out.close()
             telegram_err.close()
-            time.sleep(3)
-            if self._is_port_open(8000):
+            if self._wait_for_backend_ready(timeout_sec=120):
+                self._backend_ready_announced = True
                 self._append_status("Servisler ba\u015flat\u0131ld\u0131. UI: http://127.0.0.1:8000")
             else:
+                self._backend_ready_announced = False
                 self._append_status("HATA: Backend ba\u015flat\u0131lamad\u0131!")
                 # Log dosyas\u0131n\u0131 oku ve g\u00f6ster
                 try:
@@ -1531,14 +1562,15 @@ except Exception as e:
 
                             rc = self.backend_proc.poll() if self.backend_proc else None
                             if out_content:
-                                self._append_status("backend.err.log bos. backend.out.log son satirlari:")
+                                self._append_status("Backend logu var ama port henuz acilmadi. Son log satirlari:")
                                 for line in out_content[-500:].split("\n"):
                                     if line.strip():
                                         self._append_status("  > " + line.strip()[:100])
+                                self._append_status("Backend hazirligi tamamlanmadi. Yukaridaki log satirlarini kontrol edin.")
                             elif rc is None:
                                 self._append_status(
-                                    "Loglar henuz olusmamis olabilir. Backend gec aciliyor olabilir, "
-                                    "biraz bekleyip tekrar deneyin."
+                                    "Backend sureci calisiyor ancak 127.0.0.1:8000 henuz acilmadi. "
+                                    "Birkac saniye sonra tekrar kontrol edin."
                                 )
                             else:
                                 self._append_status(
@@ -1577,6 +1609,26 @@ except Exception as e:
         self.root.title(
             f"OpenWorld Launcher  \u2502  Ollama: {'\u2705 Aktif' if ollama else '\u274c Kapal\u0131'}  \u2502  Backend: {'\u2705 Aktif' if backend else '\u274c Kapal\u0131'}"
         )
+        shown = (self.status_var.get() or "").lower()
+        suspicious = (
+            "starting up" in shown
+            or "baslatiliyor" in shown
+            or "başlatılıyor" in shown
+            or "loglar" in shown
+            or "backend gec" in shown
+            or "backend geç" in shown
+            or "backend ba" in shown and "hata" in shown
+        )
+        if backend:
+            if suspicious:
+                self._backend_ready_announced = True
+                self.status_var.set(f"{time.strftime('%H:%M:%S')} - Backend aktif ve yanit veriyor. Uygulama kullanima hazir.")
+                self._last_status_text = "Backend aktif ve yanit veriyor. Uygulama kullanima hazir."
+            elif not self._backend_ready_announced or self._status_needs_backend_ready_hint():
+                self._backend_ready_announced = True
+                self._append_status("Backend aktif ve yanit veriyor. Uygulama kullanima hazir.")
+        else:
+            self._backend_ready_announced = False
 
         self.root.after(2000, self._tick_status)
 
@@ -1591,5 +1643,3 @@ except Exception as e:
 if __name__ == "__main__":
     os.chdir(ROOT)
     LauncherApp().run()
-
-

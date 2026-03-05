@@ -166,10 +166,26 @@ _IDE_COMPLETION_TERMS = (
     "done", "completed", "finished", "all done", "all set", "task completed",
     "islem tamamlandi", "gorev tamamlandi", "tamamlandi", "bitti", "sonuc",
     "result ready", "response complete", "good bad", "thumbs up",
+    "summary of what was done", "here is a summary of what was done",
+    "execution summary", "what was done", "modified files", "next steps",
+    "next steps test", "bugs fixed", "syntax ok", "all imports ok",
+    "fully complete", "everything is wired up correctly",
+    "rapor tamamlandi", "islem basariyla tamamlandi", "tamamlandi ve kaydedildi",
+)
+_IDE_COMPLETION_STRONG_TERMS = (
+    "execution summary",
+    "what was done",
+    "modified files",
+    "next steps",
+    "syntax ok",
+    "all imports ok",
+    "summary of what was done",
+    "everything is wired up correctly",
+    "fully complete",
 )
 _IDE_BUSY_TERMS = (
-    "thinking", "generating", "processing", "running", "in progress",
-    "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor",
+    "thinking", "generating", "processing", "in progress", "loading", "analyzing",
+    "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor", "bekleniyor",
 )
 
 _APPROVAL_WATCHER_LOCK = threading.Lock()
@@ -1336,11 +1352,14 @@ def _send_telegram_notification(text: str) -> Tuple[bool, str]:
 
 def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
     blob = _normalize_for_ocr_match(ocr_blob or "")
-    if len(blob) < 20:
+    if len(blob) < 8:
         return False
-    completion_hit = any(_normalize_for_ocr_match(term) in blob for term in _IDE_COMPLETION_TERMS)
+    completion_hits = sum(1 for term in _IDE_COMPLETION_TERMS if _normalize_for_ocr_match(term) in blob)
+    strong_hits = sum(1 for term in _IDE_COMPLETION_STRONG_TERMS if _normalize_for_ocr_match(term) in blob)
     busy_hit = any(_normalize_for_ocr_match(term) in blob for term in _IDE_BUSY_TERMS)
-    return completion_hit and not busy_hit
+    if busy_hit and strong_hits == 0:
+        return False
+    return strong_hits >= 1 or completion_hits >= 2
 
 
 def tool_wait_and_accept_approval(
@@ -1485,6 +1504,7 @@ def tool_wait_and_accept_approval(
 
         words: List[Dict[str, Any]] = []
         blob_parts: List[str] = []
+        raw_blob_parts: List[str] = []
         count = len(data.get("text", []))
         for i in range(count):
             raw = str(data["text"][i] or "").strip()
@@ -1493,6 +1513,7 @@ def tool_wait_and_accept_approval(
             norm = _normalize_for_ocr_match(raw)
             if not norm:
                 continue
+            raw_blob_parts.append(norm)
             try:
                 conf = float(data["conf"][i])
             except Exception:
@@ -1519,7 +1540,8 @@ def tool_wait_and_accept_approval(
             blob_parts.append(norm)
 
         blob = " ".join(blob_parts)
-        last_blob = blob[:500]
+        raw_blob = " ".join(raw_blob_parts)
+        last_blob = (raw_blob or blob)[:1800]
         has_context = any(term in blob for term in context_terms)
         has_strict_context = any(term in blob for term in strict_context_terms)
         run_prompt_context_hit = any(term in blob for term in run_prompt_context_terms)
@@ -1664,6 +1686,64 @@ def tool_wait_and_accept_approval(
                 click_y += int(region[1])
 
             pyautogui.click(click_x, click_y)
+            best_norm = _normalize_for_ocr_match(str(best.get("norm", "")))
+            followup_clicked = False
+            followup_text = ""
+            if "expand" in best_norm:
+                # Bazi ajanlarda once Expand, sonra Yes/Allow/Run butonu gorunur.
+                try:
+                    time.sleep(0.25)
+                    screenshot2 = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+                    data2 = pytesseract.image_to_data(
+                        screenshot2,
+                        lang=lang,
+                        output_type=Output.DICT,
+                        config="--oem 3 --psm 6",
+                    )
+                    positives = {
+                        "run", "yes", "allow", "accept", "continue", "proceed", "ok",
+                        "evet", "onay", "onayla", "kabul", "devam",
+                    }
+                    second_candidates: List[Dict[str, Any]] = []
+                    count2 = len(data2.get("text", []))
+                    for j in range(count2):
+                        raw2 = str(data2["text"][j] or "").strip()
+                        if not raw2:
+                            continue
+                        norm2 = _normalize_for_ocr_match(raw2)
+                        if not norm2:
+                            continue
+                        if _is_negative_decision(
+                            norm2,
+                            negative_single=negative_terms_single,
+                            negative_multi=negative_terms_multi,
+                            negative_compact=negative_terms_compact,
+                        ):
+                            continue
+                        if norm2 in positives or norm2.startswith("run") or norm2.startswith("allow") or norm2.startswith("accept"):
+                            second_candidates.append(
+                                {
+                                    "norm": norm2,
+                                    "raw": raw2,
+                                    "left": int(data2["left"][j]),
+                                    "top": int(data2["top"][j]),
+                                    "width": int(data2["width"][j]),
+                                    "height": int(data2["height"][j]),
+                                    "conf": float(data2["conf"][j]) if str(data2["conf"][j]).strip() else 0.0,
+                                }
+                            )
+                    if second_candidates:
+                        second = sorted(second_candidates, key=lambda c: (c["top"], c["left"], c["conf"]), reverse=True)[0]
+                        sx = int(second["left"] + (second["width"] / 2))
+                        sy = int(second["top"] + (second["height"] / 2))
+                        if region:
+                            sx += int(region[0])
+                            sy += int(region[1])
+                        pyautogui.click(sx, sy)
+                        followup_clicked = True
+                        followup_text = str(second.get("raw", "")).strip()
+                except Exception:
+                    pass
             return {
                 "success": True,
                 "checks": checks,
@@ -1674,6 +1754,8 @@ def tool_wait_and_accept_approval(
                 "method": "ocr_click",
                 "profile": active_profile,
                 "score": round(float(best.get("score", 0.0)), 2),
+                "followup_clicked": followup_clicked,
+                "followup_text": followup_text,
             }
 
         # VS Code "1 Step Requires Input" modalinda Run butonu OCR'da kacinabiliyor.
@@ -1765,6 +1847,7 @@ def _approval_watcher_worker(
     profile: str,
     stop_event: threading.Event,
 ) -> None:
+    last_notify_try_ts = 0.0
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -1785,7 +1868,11 @@ def _approval_watcher_worker(
             if result.get("success"):
                 _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
                 clicked_text = str(result.get("clicked_text", "")).strip()
-                if clicked_text:
+                followup_text = str(result.get("followup_text", "")).strip()
+                followup_clicked = bool(result.get("followup_clicked"))
+                if clicked_text and followup_clicked and followup_text:
+                    _APPROVAL_WATCHER_STATE["last_event"] = f"Kabul edildi: {clicked_text} -> {followup_text}"
+                elif clicked_text:
                     _APPROVAL_WATCHER_STATE["last_event"] = f"Kabul edildi: {clicked_text}"
                 else:
                     _APPROVAL_WATCHER_STATE["last_event"] = "Kabul edildi"
@@ -1831,6 +1918,11 @@ def _approval_watcher_worker(
                     auto_stop_now = True
 
         if send_completion_prompt and notification_text:
+            now_ts = time.time()
+            if now_ts - last_notify_try_ts < 12.0:
+                time.sleep(max(0.05, min(interval, 0.5)))
+                continue
+            last_notify_try_ts = now_ts
             sent, info = _send_telegram_notification(notification_text)
             with _APPROVAL_WATCHER_LOCK:
                 if sent:
@@ -1839,6 +1931,12 @@ def _approval_watcher_worker(
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gonderildi."
                 else:
                     _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
+                    # Bildirim gidemediyse algi state'ini sifirlayip tekrar deneme sansi ver.
+                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+                    _APPROVAL_WATCHER_STATE["completion_hits"] = max(
+                        1,
+                        int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
+                    )
 
         if auto_stop_now:
             with _APPROVAL_WATCHER_LOCK:

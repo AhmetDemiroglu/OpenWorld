@@ -651,10 +651,10 @@ class AgentService:
             if (
                 steps == 1
                 and preferred_call is not None
-                and preferred_call.name == "research_and_report"
-                and not self._is_negative_tool_mention(user_message, "research_and_report")
+                and preferred_call.name == "research_async"
+                and not self._is_negative_tool_mention(user_message, "research_async")
                 and preferred_call.name in allowed_tool_names
-                and (not tool_calls or all(getattr(c, "name", "") != "research_and_report" for c in tool_calls))
+                and (not tool_calls or all(getattr(c, "name", "") != "research_async" for c in tool_calls))
             ):
                 tool_calls = [preferred_call]
                 tool_calls_from_text = True
@@ -1205,15 +1205,15 @@ class AgentService:
                 arguments={"max_results": 10},
             )
 
-        if "research_and_report" in self._known_tool_names and not _has_ide_intent and any(
-            k in normalized for k in ("detay", "analiz", "tum kaynak", "tum haber", "rapor")
-        ) and any(k in normalized for k in ("haber", "news", "gundem", "savas", "iran", "dunya", "world")):
+        if "research_async" in self._known_tool_names and not _has_ide_intent and any(
+            k in normalized for k in ("detay", "analiz", "tum kaynak", "tum haber", "rapor", "arastir", "araştır")
+        ) and any(k in normalized for k in ("haber", "news", "gundem", "savas", "iran", "israil", "dunya", "world", "piyasa", "finans")):
             args: Dict[str, Any] = {"topic": text, "max_sources": 8}
             if any(k in normalized for k in ("desktop", "masaustu")):
                 args["out_path"] = "Desktop\\arastirma_raporu.txt"
             return ParsedTextToolCall(
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
-                name="research_and_report",
+                name="research_async",
                 arguments=args,
             )
 
@@ -2305,6 +2305,37 @@ class AgentService:
         if not step_results:
             return "Islem tamamlandi."
 
+        async_started = None
+        for name, result in step_results:
+            if name == "research_async" and isinstance(result, dict) and result.get("status") == "started":
+                async_started = result
+                break
+
+        if async_started is not None:
+            lines = [
+                "Arastirmayi baslattim. Arka planda calisiyor.",
+                "Bitince ozet ve PDF raporu buradan gonderecegim.",
+            ]
+            notebook = str(async_started.get("notebook") or "").strip()
+            if notebook:
+                lines.append(f"Not defteri: `{notebook}`")
+            message = str(async_started.get("message") or "").strip()
+            if message:
+                lines.append(message)
+
+            errors: List[str] = []
+            for name, result in step_results:
+                if not isinstance(result, dict):
+                    continue
+                err = result.get("error")
+                if err:
+                    errors.append(f"- `{name}`: {err}")
+            if errors:
+                lines.append("")
+                lines.append("Uyari/Hata notlari:")
+                lines.extend(errors[:3])
+            return "\n".join(lines)
+
         lines = ["Islem tamamlandi. Sonuclar:"]
         for name, result in step_results:
             lines.append(f"- `{name}`: {AgentService._summarize_tool_result(result)}")
@@ -2319,10 +2350,21 @@ class AgentService:
         if err:
             return f"hata -> {err}"
 
+        message = result.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:240]
+
         for key in ("path", "output_path", "file_path", "opened", "url"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
                 return f"tamamlandi ({key}: {value})"
+
+        status = result.get("status")
+        if isinstance(status, str) and status.strip():
+            status_text = status.strip().lower()
+            if status_text == "started":
+                return "arka planda baslatildi"
+            return status.strip()
 
         if isinstance(result.get("messages"), list):
             messages = result["messages"]
@@ -2977,4 +3019,3 @@ class AgentService:
                 success_msg += f"\nMetin: {result['text']}"
         
         return success_msg
-
