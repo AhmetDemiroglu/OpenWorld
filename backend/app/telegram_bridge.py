@@ -210,7 +210,7 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     
     # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
     research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
-                        "analiz", "research", "report", "pdf olustur", "word olustur"]
+                        "analiz", "research", "report", "pdf olustur", "word olustur", "haberleri tara"]
     if any(p in text_lower for p in research_patterns):
         # Arastirma icin 5 dakika
         return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
@@ -460,6 +460,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
         return
 
+    # E-posta taslak onayı
+    if data.startswith("draft_send:") or data.startswith("draft_skip:"):
+        draft_id = data.split(":", 1)[1]
+        try:
+            from .services.email_monitor import pop_pending_draft, send_email_via_gmail, _get_gmail_token
+            draft = pop_pending_draft(draft_id)
+            if not draft:
+                await query.edit_message_text("❌ Taslak bulunamadı (zaten gönderilmiş veya süresi dolmuş).")
+                return
+            if data.startswith("draft_send:"):
+                token = _get_gmail_token()
+                if token and send_email_via_gmail(token, draft["to"], draft["subject"], draft["body"]):
+                    await query.edit_message_text(
+                        f"✅ Mail gönderildi!\nAlıcı: <code>{draft['to'][:60]}</code>",
+                        parse_mode="HTML",
+                    )
+                else:
+                    await query.edit_message_text("❌ Mail gönderilemedi (token sorunu?).")
+            else:
+                await query.edit_message_text("⏭ Taslak atlandı.")
+        except Exception as exc:
+            await query.edit_message_text(f"❌ Hata: {exc}")
+        return
+
     # BLOK 7: "Başka bir şey..." yanıtı
     if data == "more_yes":
         await query.edit_message_text("Tabii! Ne yapmamı istersin...")
@@ -468,6 +492,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ─── BLOK 6: /araştır ────────────────────────────────────────────────────────
+
+def _try_fast_research(text: str) -> Optional[str]:
+    """Eger metin agir bir arastirma istegi ise konuyu cikarip dondurur."""
+    text_lower = _normalize_tr(text)
+    research_keywords = {"arastirma yap", "arastir", "rapor", "detayli arastir", "detayli analiz"}
+    if any(k in text_lower for k in research_keywords) and len(text) > 30:
+        return text
+    return None
 
 async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/araştır [konu] — Arka planda araştırma başlat; bitince Telegram'a PDF rapor gelir."""
@@ -749,6 +781,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("⚠️ Mesaj icerigi bos. Lutfen metin yazin veya gorsel gonderin.")
         return
     
+    # 4. HIZLI ARASTIRMA (Agent oncesi)
+    if user_message and not update.message.photo and not update.message.document:
+        fast_research_topic = _try_fast_research(user_message)
+        if fast_research_topic:
+            await update.message.reply_text("📚 Bu kapsamli bir arastirma istegi. Arka planda başlatiyorum...")
+            try:
+                from .tools.registry import execute_tool
+                result = execute_tool("research_async", {"topic": fast_research_topic})
+                if result.get("success"):
+                    await update.message.reply_text(
+                        f"✅ <b>Arastirma basladi!</b>\n"
+                        f"Not defteri: <code>{result.get('notebook', '')}</code>\n"
+                        f"Bitince Telegram'a ozet + PDF rapor gonderecegim (~3-8 dk).",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await update.message.reply_text(f"❌ Arastirma baslatilamadi: {result.get('error', '...')}")
+            except Exception as exc:
+                await update.message.reply_text(f"❌ Arastirma hatasi: {exc}")
+            return
+
     # Agent'i cagir
     try:
         data = await call_agent(session_id, user_message)
@@ -889,6 +942,156 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     _audit(user_id, user_message[:100] if user_message else "(media)")
 
 
+# ─── Journal: /not, /notlar ──────────────────────────────────────────────────
+
+async def not_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/not [metin] — Bugünün notuna ekle."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("Kullanım: /not [not metni]\nÖrnek: /not Vue 3 migration notları incele")
+        return
+    _audit(user_id, f"/not {text[:80]}")
+    try:
+        from .services.journal import add_note
+        entry = add_note(text)
+        await update.message.reply_text(
+            f"📓 Not kaydedildi #{entry['id']} ({entry['time']})\n<i>{text[:200]}</i>",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Not kaydedilemedi: {exc}")
+
+
+async def notlar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/notlar [dün|hafta] — Notları listele."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    _audit(user_id, "/notlar")
+    arg = " ".join(context.args or []).strip().lower()
+    try:
+        from .services.journal import get_notes, get_recent_notes, format_notes_message
+        from datetime import datetime, timedelta
+        if arg in ("dun", "dün"):
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            notes = get_notes(yesterday)
+            msg = format_notes_message(notes, f"Dün ({yesterday})")
+        elif arg in ("hafta", "7gun", "7gün"):
+            notes = get_recent_notes(days=7)
+            if not notes:
+                msg = "📓 Son 7 günde kayıtlı not yok."
+            else:
+                lines = ["📓 <b>Son 7 Günün Notları</b>\n"]
+                for n in notes[:20]:
+                    lines.append(f"📅 <b>{n.get('date','')} {n.get('time','')}</b>\n{n['text']}")
+                msg = "\n\n".join(lines)
+        else:
+            notes = get_notes()
+            msg = format_notes_message(notes, "Bugün")
+        await update.message.reply_text(msg[:4000], parse_mode="HTML")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+# ─── Todo sistemi ─────────────────────────────────────────────────────────────
+
+async def todo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/todo [metin] — Todo ekle."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text(
+            "Kullanım: /todo [metin]\n"
+            "Örnek: /todo Vue 3 migration dökümantasyonunu oku"
+        )
+        return
+    _audit(user_id, f"/todo {text[:80]}")
+    try:
+        from .services.journal import add_todo
+        entry = add_todo(text)
+        await update.message.reply_text(
+            f"📋 Todo eklendi <b>#{entry['id']}</b>\n<i>{text[:200]}</i>",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+async def todos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/todos — Bekleyen todo'ları listele."""
+    if not _is_allowed(update):
+        return
+    _audit(str(update.effective_user.id), "/todos")
+    try:
+        from .services.journal import get_all_todos, format_todos_message
+        todos = get_all_todos(include_done=True)
+        msg = format_todos_message(todos, "Yapılacaklar")
+        await update.message.reply_text(msg[:4000], parse_mode="HTML")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+async def done_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/done [id] — Todo'yu tamamla."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    arg = " ".join(context.args or []).strip()
+    if not arg.isdigit():
+        await update.message.reply_text("Kullanım: /done [id]\nÖrnek: /done 3")
+        return
+    _audit(user_id, f"/done {arg}")
+    try:
+        from .services.journal import complete_todo
+        result = complete_todo(int(arg))
+        if result:
+            await update.message.reply_text(
+                f"✅ Tamamlandı: <b>#{result['id']}</b>\n<s>{result['text'][:150]}</s>",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(f"❌ #{arg} bulunamadı.")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/export [gün] — Todo + notları AI'ye gönderilebilir formatta aktar."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    _audit(user_id, "/export")
+    arg = " ".join(context.args or []).strip()
+    days = int(arg) if arg.isdigit() else 0
+    try:
+        from .services.journal import export_for_ai
+        import datetime as _dt
+        content = export_for_ai(include_notes_days=days)
+        if len(content) <= 3800:
+            await update.message.reply_text(
+                f"<pre>{content[:3800]}</pre>",
+                parse_mode="HTML",
+            )
+        else:
+            buf = io.BytesIO(content.encode("utf-8"))
+            fname = f"openworld_export_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+            buf.name = fname
+            await update.message.reply_document(document=buf, filename=fname)
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
 async def main() -> None:
     _acquire_single_instance_lock()
     atexit.register(_release_single_instance_lock)
@@ -913,7 +1116,14 @@ async def main() -> None:
         app.add_handler(CommandHandler(["arastir", "ara"], arastir_cmd))
         # BLOK 1: Durum
         app.add_handler(CommandHandler("durum", durum_cmd))
-        # BLOK 4 + 7: Inline buton callback'leri
+        # Journal + Todo
+        app.add_handler(CommandHandler("not", not_cmd))
+        app.add_handler(CommandHandler("notlar", notlar_cmd))
+        app.add_handler(CommandHandler("todo", todo_cmd))
+        app.add_handler(CommandHandler("todos", todos_cmd))
+        app.add_handler(CommandHandler("done", done_cmd))
+        app.add_handler(CommandHandler("export", export_cmd))
+        # BLOK 4 + 7 + draft onay: Inline buton callback'leri
         app.add_handler(CallbackQueryHandler(callback_handler))
         # Hem metin hem fotoğraf mesajlarını dinle
         app.add_handler(MessageHandler(
@@ -928,7 +1138,7 @@ async def main() -> None:
             allowed_chat_id = settings.telegram_allowed_user_id.strip()
             if allowed_chat_id:
                 from .notifier import set_context as _notifier_set_context
-                _notifier_set_context(app.bot, allowed_chat_id, asyncio.get_event_loop())
+                _notifier_set_context(app.bot, allowed_chat_id, asyncio.get_running_loop())
         except Exception as _ne:
             import logging as _log2
             _log2.getLogger(__name__).warning("[TelegramBridge] Notifier baslatılamadi: %s", _ne)

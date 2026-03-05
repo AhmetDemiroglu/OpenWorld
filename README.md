@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🌍 OpenWorld Local Agent
+# OpenWorld Local Agent
 
 **Gerçek Bir Süper Ajan - Yerel Yapay Zeka Asistanı**
 
@@ -16,7 +16,7 @@
 
 ---
 
-## 📋 İçindekiler
+## İçindekiler
 
 1. [Özellikler Özeti](#-özellikler-özeti)
 2. [Sistem Gereksinimleri](#-sistem-gereksinimleri)
@@ -34,7 +34,7 @@
 
 OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajandır**. 4 katmanlı güvenlik sistemi ile tehlikeli işlemler kontrol altında, günlük görevleriniz tamamen serbesttir.
 
-### 🚀 95+ Yerleşik Araç + Akıllı Tool Seçimi
+### 95+ Yerleşik Araç + Akıllı Tool Seçimi
 
 | Kategori | Araç Sayısı | Örnekler |
 |----------|-------------|----------|
@@ -57,7 +57,7 @@ OpenWorld, bilgisayarınızda çalışan **gerçek bir süper ajandır**. 4 katm
 
 **Toplam: 100+ Araç** (her istekte en fazla 20 tanesi akıllı seçimle gönderilir)
 
-### 📸 Medya Otomatik Teslimi
+### Medya Otomatik Teslimi
 
 Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **otomatik olarak teslim edilir**:
 
@@ -65,7 +65,7 @@ Ekran görüntüleri, ses kayıtları, webcam fotoğrafları ve videolar **otoma
 - Telegram'da: Medya dosyaları otomatik olarak gönderilir
 - Tüm medya `data/media/` klasöründe tek yerde saklanır
 
-### 🧠 Akıllı Tool Seçimi (NLP Semantic Routing)
+### Akıllı Tool Seçimi (NLP Semantic Routing)
 
 95+ aracın tamamı her istekte modele gönderilmez. Kullanıcı mesajı `sentence-transformers` (all-MiniLM-L6-v2) kullanılarak vektörlere dönüştürülür ve cosine similarity ile **en ilgili maksimum 15-20 araç** dinamik olarak seçilir:
 
@@ -79,7 +79,7 @@ Screenshot, webcam gibi basit işlemlerde **düşünme aşaması atlanır**:
 - Webcam fotoğraf: Anında çekilir
 - Sistem bilgisi: Hemen döndürülür
 
-### 📓 Not Defteri Sistemi (Checkpoint'ler)
+### Not Defteri Sistemi (Checkpoint'ler)
 
 Karmaşık görevler için **otomatik görev parçalama**:
 - Uzun araştırmalar adımlara bölünür
@@ -88,7 +88,7 @@ Karmaşık görevler için **otomatik görev parçalama**:
 
 ---
 
-## 💻 Sistem Gereksinimleri
+## Sistem Gereksinimleri
 
 ### Minimum
 - Windows 10/11 (64-bit)
@@ -170,7 +170,7 @@ tesseract --version
 
 ---
 
-## 🚀 Kurulum Adımları
+## Kurulum Adımları
 
 ### 5. Repository'yi İndir
 
@@ -192,7 +192,7 @@ python launcher.py
 ```
 
 Bu işlem şunları kurar:
-- Python sanal ortamı (`.venv/`)
+- Python sanal ortamı (`backend/.venv/`)
 - 30+ Python paketi
 - Node.js bağımlılıkları
 - Frontend build
@@ -206,6 +206,8 @@ ollama pull qwen3.5:9b-q4_K_M
 
 Veya Launcher'dan: **[Model Çek]** butonu
 
+Not: Bu sürümde LLM motoru yalnızca `ollama` olarak çalışır.
+
 ### 9. Başlat
 
 ```
@@ -216,9 +218,9 @@ Veya Launcher'dan: **[Model Çek]** butonu
 
 ---
 
-## 🤖 Süper Ajan Yetenekleri
+## Süper Ajan Yetenekleri
 
-### 🖥️ 1. EKRAN KONTROLÜ (Gör ve Etkile)
+### 1. EKRAN KONTROLÜ (Gör ve Etkile)
 
 Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
@@ -253,7 +255,7 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
 **Araçlar:**
 - `screenshot_desktop` - Masaüstü görüntüsü
-- `screenshot_webpage` - Web sayfası görüntüsü  
+- `screenshot_webpage` - Web sayfası görüntüsü 
 - `ocr_screenshot` - Ekrandan metin oku
 - `ocr_image` - Görüntüden metin oku
 - `find_image_on_screen` - Görüntü ara
@@ -272,7 +274,7 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
 ---
 
-### 🎤 2. SES KONTROLÜ (Dinle ve Konuş)
+### 2. SES KONTROLÜ (Dinle ve Konuş)
 
 **Ses Kaydı:**
 ```
@@ -300,7 +302,7 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
 ---
 
-### 📷 3. WEBCAM KONTROLÜ
+### 3. WEBCAM KONTROLÜ
 
 **Fotoğraf:**
 ```
@@ -321,7 +323,7 @@ Ajanınız ekranınızı görebilir ve kontrol edebilir!
 
 ---
 
-### 📁 4. DOSYA SİSTEMİ
+### 4. DOSYA SİSTEMİ
 
 Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
@@ -352,7 +354,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 📦 5. ZIP / ARŞİV
+### 5. ZIP / ARŞİV
 
 **ZIP Oluşturma:**
 ```
@@ -380,7 +382,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 📄 6. PDF YÖNETİMİ
+### 6. PDF YÖNETİMİ
 
 **PDF Okuma:**
 ```
@@ -407,7 +409,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 📝 7. WORD (DOCX)
+### 7. WORD (DOCX)
 
 **Word Oluşturma:**
 ```
@@ -434,7 +436,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 📊 8. EXCEL (XLSX)
+### 8. EXCEL (XLSX)
 
 **Excel Oluşturma:**
 ```
@@ -461,7 +463,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 
 ---
 
-### 💻 9. KOD ve PROJE ANALİZİ (Git + Uzaktan AI Kodlama)
+### 9. KOD ve PROJE ANALİZİ (Git + Uzaktan AI Kodlama)
 
 **Git İşlemleri:**
 ```
@@ -491,7 +493,7 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "pytest ile testleri koş"
 ```
 
-#### 🚀 Uzaktan AI Kodlama (Remote AI Coding)
+#### Uzaktan AI Kodlama (Remote AI Coding)
 
 OpenWorld'ün en güçlü özelliklerinden biri: **dışarıdayken bile bilgisayarınızdaki VS Code'u açıp, AI kod asistanlarını (KimiCode, Claude Code, Codex, Copilot) uzaktan komutlandırabilirsiniz.**
 
@@ -543,7 +545,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 🖥️ 10. SİSTEM YÖNETİMİ
+### 10. SİSTEM YÖNETİMİ
 
 **Sistem Bilgisi:**
 ```
@@ -583,7 +585,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 🔌 11. USB YÖNETİMİ
+### 11. USB YÖNETİMİ
 
 **USB Kontrolü:**
 ```
@@ -597,7 +599,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 👁️ 12. OCR (METİN TANIMA)
+### 12. OCR (METİN TANIMA)
 
 **Ekrandan Metin Okuma:**
 ```
@@ -612,7 +614,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 💬 13. DİYALOG PENCERELERİ
+### 13. DİYALOG PENCERELERİ
 
 **Kullanıcı Etkileşimi:**
 ```
@@ -628,7 +630,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 📅 14. GÖREV ve TAKVİM
+### 14. GÖREV ve TAKVİM
 
 **Görev Yönetimi:**
 ```
@@ -652,7 +654,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 📧 15. E-POSTA
+### 15. E-POSTA
 
 **Gmail/Outlook:**
 ```
@@ -667,7 +669,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 🌐 16. WEB ve ARAŞTIRMA
+### 16. WEB ve ARAŞTIRMA
 
 **Web:**
 ```
@@ -692,7 +694,7 @@ Telegram'dan tek bir mesajla:
 
 ---
 
-### 📝 17. NOT DEFTERİ SİSTEMİ (Checkpoint'ler)
+### 17. NOT DEFTERİ SİSTEMİ (Checkpoint'ler)
 
 Karmaşık görevleri **otomatik parçalama** ve **kaldığınız yerden devam etme**:
 
@@ -717,7 +719,7 @@ Karmaşık görevleri **otomatik parçalama** ve **kaldığınız yerden devam e
 
 ---
 
-### 🧠 18. HAFIZA SİSTEMİ
+### 18. HAFIZA SİSTEMİ
 
 Uzun süreli hafıza ve kullanıcı tercihleri:
 
@@ -757,46 +759,46 @@ Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüle
 
 ---
 
-### 🤖 20. ARKA PLAN SERVİSLERİ (Smart Life Assistant)
+### 20. ARKA PLAN SERVİSLERİ (Smart Life Assistant)
 
 Uygulama çalıştığı sürece arka planda aktif olan akıllı asistan servisleri. Hiçbir mesaj göndermenize gerek yok — otomatik çalışır ve önemli durumları Telegram'dan bildirir.
 
-#### 📧 E-posta Monitör
+#### E-posta Monitör
 
 Her 15 dakikada bir Gmail'deki **okunmamış** mailleri tarar, Ollama LLM ile önem derecesi belirler:
 
 | Derece | Açıklama | Bildirim |
 |--------|----------|----------|
-| 🔴 **KRİTİK** | İş ilanı (Frontend/İzmir/remote), AI model deprecation, güvenlik | ✅ Telegram |
-| 🟡 **ÖNEMLİ** | Kişisel yazışmalar, proje güncellemeleri | ✅ Telegram |
+| **KRİTİK** | İş ilanı (Frontend/İzmir/remote), AI model deprecation, güvenlik | ✅ Telegram |
+| **ÖNEMLİ** | Kişisel yazışmalar, proje güncellemeleri | ✅ Telegram |
 | ⚪ **NORMAL** | Bültenler, düzenli güncellemeler | Sessiz |
-| 🔇 **SPAM** | Reklam, pazarlama, tekrar eden ilanlar | Sessiz |
+| **SPAM** | Reklam, pazarlama, tekrar eden ilanlar | Sessiz |
 
 **Duplicate Filtreleme:** Aynı mail ID + %85+ konu benzerliği olan mailler otomatik elenir. 7 gün boyunca hatırlar.
 
-#### 🌤 Hava Durumu
+#### Hava Durumu
 
 Her sabah (07:00-09:00) şehrinizin hava durumunu ve giyim önerisini Telegram'dan gönderir.
 
-#### 🔥 GitHub Trending
+#### GitHub Trending
 
 6 saatte bir JavaScript, TypeScript ve Python'daki trending repoları izler, yenilerini bildirir.
 
-#### 📰 Teknoloji Haberleri
+#### Teknoloji Haberleri
 
 4 saatte bir AI model değişiklikleri, framework güncellemeleri, breaking change'leri takip eder.
 
-#### 🔔 Özel Uyarılar
+#### Özel Uyarılar
 
 30 dakikada bir `.env`'deki `BG_CUSTOM_ALERTS` terimleriyle haber arar (ör: `izmir frontend,gemini api`).
 
 **Konfigürasyon (`.env`):**
 ```
-BG_EMAIL_MONITOR=true          # Email monitör aktif/pasif
-BG_EMAIL_INTERVAL_MIN=15       # Tarama aralığı (dakika)
-BG_SMART_ASSISTANT=true        # Hava durumu, GitHub, teknoloji haberleri
-BG_WEATHER_CITY=Izmir          # Hava durumu şehri
-BG_CUSTOM_ALERTS=              # Özel aramalar (virgülle ayrılmış)
+BG_EMAIL_MONITOR=true # Email monitör aktif/pasif
+BG_EMAIL_INTERVAL_MIN=15 # Tarama aralığı (dakika)
+BG_SMART_ASSISTANT=true # Hava durumu, GitHub, teknoloji haberleri
+BG_WEATHER_CITY=Izmir # Hava durumu şehri
+BG_CUSTOM_ALERTS= # Özel aramalar (virgülle ayrılmış)
 ```
 
 **Arka Plan Motoru:** Arka plan servisleri artık `APScheduler` ile kurumsal standartlarda, thread-blocking yaratmadan Cron-benzeri çalışır. Durumlar `SQLite` tabanlarına (örn. `email_seen_log`, `smart_assistant_state`) kaydedilir.
@@ -808,7 +810,7 @@ GET http://127.0.0.1:8000/services/status
 
 ---
 
-## 💡 Kullanım Örnekleri
+## Kullanım Örnekleri
 
 ### Karmaşık Görevler
 
@@ -862,7 +864,7 @@ GET http://127.0.0.1:8000/services/status
 
 ---
 
-## 🔧 Sorun Giderme
+## Sorun Giderme
 
 ### "Python bulunamadı"
 Python kurulumunda "Add to PATH" işaretlememişsiniz. Yeniden kurun.
@@ -891,7 +893,7 @@ pipwin install pyaudio
 
 ---
 
-## 🏗️ Mimari
+## Mimari
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -929,13 +931,13 @@ pipwin install pyaudio
 |-----------|----------|
 | **Çok adımlı GUI otomasyonu** | "VS Code'u aç → KimiCode'a mesaj yaz" gibi zincirleme masaüstü otomasyonları modele bağlıdır. Yerel küçük modeller (Qwen 9B vb.) bu tür çok adımlı planlamada sınırlıdır; tek adımlık araç çağrıları (screenshot al, dosya oku) çok daha güvenilirdir. |
 | **LLM model kalitesi** | Araç seçimi ve parametre doğruluğu LLM modeline bağlıdır. Daha büyük modeller (70B+) karmaşık görevlerde daha başarılıdır; küçük modeller basit görevler için optimize edilmiştir. |
-| **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Zaman aşımı durumunda `research_async` aracı kullanın — arka planda çalışır, bitince Telegram'a PDF rapor gönderir. |
+| **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Zaman aşımı durumunda `research_async` aracını kullanın — arka planda çalışır, bitince Telegram'a PDF rapor gönderir. |
 | **Gmail token yenileme** | Gmail OAuth token'ları periyodik olarak yenilenmeli. Token süresi dolarsa, yenileme otomatik yapılır ama ilk kurulumda manuel OAuth akışı gerekir. |
 | **VS Code AI Extension'lar** | KimiCode ve GitHub Copilot tam otomatik desteklenir. Claude Code için hem `claude_code_ask` (CLI, doğrudan) hem de `vscode_command` (VS Code içinden) kullanılabilir. Tüm VS Code etkileşimleri OCR tabanlı onay izleme ile desteklenir. |
 
 ---
 
-## 🔒 Güvenlik
+## Güvenlik
 
 ### 4 Katmanlı Güvenlik Modeli
 
@@ -960,7 +962,7 @@ pipwin install pyaudio
 
 ---
 
-## 📦 Bağımlılıklar
+## Bağımlılıklar
 
 ```txt
 # HTTP/Network/API
@@ -999,7 +1001,7 @@ psutil, numpy
 
 ---
 
-## 🤝 Katkıda Bulunma
+## Katkıda Bulunma
 
 1. Fork yapın
 2. Feature branch oluşturun
@@ -1009,6 +1011,6 @@ psutil, numpy
 
 ---
 
-## 📜 Lisans
+## Lisans
 
 MIT License

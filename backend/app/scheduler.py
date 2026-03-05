@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.events import EVENT_JOB_ERROR
@@ -47,22 +48,24 @@ def start_scheduler():
     if not scheduler.running:
         email_interval = getattr(settings, "bg_email_interval_min", 15)
         
-        # Email monitor job
+        # Email monitor job — fires immediately, then every N minutes
         scheduler.add_job(
             _email_monitor_tick,
             trigger=IntervalTrigger(minutes=email_interval),
             id="email_monitor_job",
             replace_existing=True,
-            next_run_time=None # will run after 1 interval, or we can set it to run immediately
+            next_run_time=datetime.now() + timedelta(seconds=30),
+            misfire_grace_time=300,
         )
-        
-        # Smart assistant wrapper (runs every 10 mins, underlying functions have their own 6h/4h limits)
+
+        # Smart assistant — fires immediately, then every 10 mins
         scheduler.add_job(
             _smart_assistant_tick,
             trigger=IntervalTrigger(minutes=10),
             id="smart_assistant_job",
             replace_existing=True,
-            next_run_time=None
+            next_run_time=datetime.now() + timedelta(seconds=60),
+            misfire_grace_time=300,
         )
         
         scheduler.start()

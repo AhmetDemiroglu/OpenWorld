@@ -59,13 +59,12 @@ _TR_TRANSLATION = str.maketrans({
 
 _BASE_APPROVAL_CONTEXT_TERMS = {
     "permission", "permissions", "approve", "allow", "authorize", "access",
-    "trust", "secure", "safety", "agent", "extension", "run", "execute",
-    "debug", "breakpoint", "continue", "input", "session",
+    "trust", "secure", "safety", "agent", "extension",
     "onay", "izin", "guven", "yetki", "erisim", "calistir", "surdur", "oturum",
 }
 
 _BASE_APPROVAL_BUTTON_TERMS = {
-    "approve", "allow", "accept", "authorize", "grant", "continue", "yes", "ok",
+    "approve", "allow", "accept", "authorize", "grant", "yes", "ok",
     "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
     "run", "proceed", "expand",
 }
@@ -89,8 +88,6 @@ _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
 }
 
 _BASE_CONTEXT_FREE_ACTION_TERMS = {
-    "continue",
-    "run",
     "accept",
     "accept all",
     "accept changes",
@@ -100,9 +97,6 @@ _BASE_CONTEXT_FREE_ACTION_TERMS = {
     "onayla",
 }
 _BASE_CONTEXT_FREE_HINT_TERMS = {
-    "run",
-    "debug",
-    "breakpoint",
     "permission",
     "approve",
     "allow",
@@ -158,8 +152,16 @@ _RUN_PROMPT_CONTEXT_TERMS = {
 
 _STRICT_APPROVAL_CONTEXT_TERMS = {
     "permission", "permissions", "approve", "allow", "authorize", "access",
-    "requires input", "step requires input", "allow this bash command",
+    "requires input", "step requires input", "allow this bash command", "run command",
     "onay", "izin", "yetki", "erisim",
+}
+
+_MENU_BAR_TERMS_COMPACT = {
+    "file", "edit", "selection", "view", "go", "run", "terminal", "help",
+    "startdebugging", "runwithoutdebugging", "stopdebugging", "restartdebugging",
+    "openconfigurations", "addconfiguration", "stepover", "stepinto", "stepout",
+    "continue", "togglebreakpoint", "newbreakpoint", "enableallbreakpoints",
+    "disableallbreakpoints", "removeallbreakpoints", "installadditionaldebuggers",
 }
 
 _IDE_COMPLETION_TERMS = (
@@ -1165,7 +1167,7 @@ def _score_approval_candidate(
         score += 22.0
     if "yes" in token or token.startswith("allow") or token.startswith("accept"):
         score += 16.0
-    if token.startswith("run") or "continue" in token:
+    if run_prompt_context_hit and (token.startswith("run") or "continue" in token):
         score += 12.0
     # Buttons are usually lower-right in modal dialogs.
     score += float(candidate.get("top", 0)) * 0.0012
@@ -1191,7 +1193,9 @@ def _is_button_like_token(
     # Shortcut etiketleri: RunAltJ / AcceptAll / ContinueWithoutDebugging gibi birlesik OCR ciktisi.
     if compact.startswith("run") and (compact == "run" or "alt" in compact or "without" in compact):
         return True
-    if compact.startswith("accept") or compact.startswith("approve") or compact.startswith("continue") or compact.startswith("allow"):
+    if compact.startswith("accept") or compact.startswith("approve") or compact.startswith("allow"):
+        return True
+    if compact.startswith("continuewithout"):
         return True
     if compact.startswith("onay") or compact.startswith("kabul") or compact.startswith("devam"):
         return True
@@ -1216,6 +1220,27 @@ def _is_button_like_phrase(
     if compact.startswith("runwithoutdebugging") or compact.startswith("continuewithoutdebugging"):
         return True
     return False
+
+
+def _is_likely_menu_term(token: str) -> bool:
+    compact = _compact_normalized(token or "")
+    if not compact:
+        return False
+    if compact in _MENU_BAR_TERMS_COMPACT:
+        return True
+    if compact.startswith("runwithoutdebugging") or compact.startswith("startdebugging"):
+        return True
+    if compact.startswith("restartdebugging") or compact.startswith("openconfigurations"):
+        return True
+    return False
+
+
+def _in_top_menu_zone(candidate: Dict[str, Any], image_height: int) -> bool:
+    if image_height <= 0:
+        return False
+    top = int(candidate.get("top", 0))
+    threshold = max(64, min(140, int(image_height * 0.14)))
+    return top <= threshold
 
 
 def _get_window_region(title_pattern: str) -> Optional[Tuple[int, int, int, int]]:
@@ -1542,6 +1567,7 @@ def tool_wait_and_accept_approval(
         blob = " ".join(blob_parts)
         raw_blob = " ".join(raw_blob_parts)
         last_blob = (raw_blob or blob)[:1800]
+        image_height = int(getattr(screenshot, "height", 0) or 0)
         has_context = any(term in blob for term in context_terms)
         has_strict_context = any(term in blob for term in strict_context_terms)
         run_prompt_context_hit = any(term in blob for term in run_prompt_context_terms)
@@ -1637,6 +1663,21 @@ def tool_wait_and_accept_approval(
                         }
                     )
 
+        filtered_candidates: List[Dict[str, Any]] = []
+        for c in candidates:
+            norm_text = _normalize_for_ocr_match(str(c.get("norm", "")))
+            if not norm_text:
+                continue
+            is_menu_term = _is_likely_menu_term(norm_text)
+            if is_menu_term and not run_prompt_context_hit:
+                continue
+            if _in_top_menu_zone(c, image_height):
+                short_or_menu = len(_compact_normalized(norm_text)) <= 12 or is_menu_term
+                if short_or_menu and not (has_strict_context or run_prompt_context_hit):
+                    continue
+            filtered_candidates.append(c)
+        candidates = filtered_candidates
+
         should_click = bool(candidates and (has_strict_context or run_prompt_context_hit))
         hint_hit = False
         action_hit = False
@@ -1694,6 +1735,7 @@ def tool_wait_and_accept_approval(
                 try:
                     time.sleep(0.25)
                     screenshot2 = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+                    image2_height = int(getattr(screenshot2, "height", 0) or 0)
                     data2 = pytesseract.image_to_data(
                         screenshot2,
                         lang=lang,
@@ -1701,9 +1743,11 @@ def tool_wait_and_accept_approval(
                         config="--oem 3 --psm 6",
                     )
                     positives = {
-                        "run", "yes", "allow", "accept", "continue", "proceed", "ok",
+                        "yes", "allow", "accept", "proceed", "ok",
                         "evet", "onay", "onayla", "kabul", "devam",
                     }
+                    if run_prompt_context_hit:
+                        positives.add("run")
                     second_candidates: List[Dict[str, Any]] = []
                     count2 = len(data2.get("text", []))
                     for j in range(count2):
@@ -1720,18 +1764,24 @@ def tool_wait_and_accept_approval(
                             negative_compact=negative_terms_compact,
                         ):
                             continue
-                        if norm2 in positives or norm2.startswith("run") or norm2.startswith("allow") or norm2.startswith("accept"):
-                            second_candidates.append(
-                                {
-                                    "norm": norm2,
-                                    "raw": raw2,
-                                    "left": int(data2["left"][j]),
-                                    "top": int(data2["top"][j]),
-                                    "width": int(data2["width"][j]),
-                                    "height": int(data2["height"][j]),
-                                    "conf": float(data2["conf"][j]) if str(data2["conf"][j]).strip() else 0.0,
-                                }
-                            )
+                        candidate2 = {
+                            "norm": norm2,
+                            "raw": raw2,
+                            "left": int(data2["left"][j]),
+                            "top": int(data2["top"][j]),
+                            "width": int(data2["width"][j]),
+                            "height": int(data2["height"][j]),
+                            "conf": float(data2["conf"][j]) if str(data2["conf"][j]).strip() else 0.0,
+                        }
+                        if _is_likely_menu_term(norm2) and not run_prompt_context_hit:
+                            continue
+                        if _in_top_menu_zone(candidate2, image2_height):
+                            continue
+                        is_positive = norm2 in positives or norm2.startswith("allow") or norm2.startswith("accept")
+                        if run_prompt_context_hit and norm2.startswith("run"):
+                            is_positive = True
+                        if is_positive:
+                            second_candidates.append(candidate2)
                     if second_candidates:
                         second = sorted(second_candidates, key=lambda c: (c["top"], c["left"], c["conf"]), reverse=True)[0]
                         sx = int(second["left"] + (second["width"] / 2))

@@ -143,9 +143,8 @@ async def health() -> dict:
     return {
         "ok": True,
         "version": "0.1.0",
-        "llm_backend": settings.llm_backend,
+        "llm_backend": "ollama",
         "model": settings.ollama_model,
-        "llama_model_path": str(settings.llama_model_path_abs),
         "workspace": str(settings.workspace_path),
         "shell_tool": settings.enable_shell_tool,
         "uptime_seconds": round(uptime, 2),

@@ -164,7 +164,7 @@ def tool_research_async(
         safe_name = f"arastirma_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
 
     def _run():
-        from .notifier import notify
+        from ..notifier import notify
         from .notebook_tools import (
             tool_notebook_create,
             tool_notebook_add_note,
@@ -194,7 +194,11 @@ def tool_research_async(
                 f"Bitince PDF raporu buraya gonderecegim. (~3-8 dk)"
             )
         except Exception as exc:
-            notify(f"\u26a0\ufe0f Arastirma baslatilamadi: {exc}")
+            import logging, traceback
+            logging.getLogger(__name__).error(
+                "[research_async] Baslatma hatasi: %s\n%s", exc, traceback.format_exc()
+            )
+            notify(f"⚠️ Araştırma başlatılamadı ({safe_name}): {exc}")
             return
 
         try:
@@ -206,47 +210,77 @@ def tool_research_async(
             all_sources: list = []
             for q in queries:
                 try:
-                    res = execute_tool("search_news", {"query": q, "max_results": 5})
+                    res = execute_tool("search_news", {"query": q, "limit": 8})
                     items = res.get("results", []) or res.get("items", [])
                     all_sources.extend(items)
                     tool_notebook_add_note(name=safe_name, note=f"'{q}': {len(items)} kaynak")
+                    if res.get("error"):
+                        tool_notebook_add_note(name=safe_name, note=f"'{q}' search hatasi: {res['error']}")
                 except Exception as exc2:
+                    import logging as _log, traceback as _tb
+                    _log.getLogger(__name__).error("[research_async] search hatasi: %s\n%s", exc2, _tb.format_exc())
                     tool_notebook_add_note(name=safe_name, note=f"'{q}' hatasi: {exc2}")
 
             tool_notebook_complete_step(
                 name=safe_name, step_keyword="tara",
                 finding=f"{len(all_sources)} toplam kaynak"
             )
+            notify(
+                f"\U0001f50d <b>{topic[:60]}</b>\n"
+                f"{len(all_sources)} kaynak bulundu, içerikler okunuyor..."
+            )
 
             # 4. Kaynak iceriklerini oku
+            # NOT: RSS items "link" key kullanir, "url" degil!
             read_contents: list = []
             seen: set = set()
             for item in all_sources[:max_sources]:
-                url = item.get("url", "")
-                if not url or url in seen:
+                url = item.get("url", "") or item.get("link", "")  # RSS: "link"
+                title = item.get("title", "")
+
+                if url and url in seen:
                     continue
-                seen.add(url)
+                if url:
+                    seen.add(url)
+
+                # Web sayfasini cekmeden once RSS bilgilerini kullan
+                content = ""
                 try:
-                    page = execute_tool("fetch_web_page", {"url": url, "timeout": 15})
-                    content = (page.get("content", "") or page.get("text", ""))[:800]
-                    if content and len(content) > 150:
-                        read_contents.append({
-                            "title": item.get("title", url),
-                            "url": url,
-                            "content": content,
-                        })
-                        tool_notebook_add_note(
-                            name=safe_name,
-                            note=f"[KAYNAK] {item.get('title', url)[:50]}: {content[:250]}"
-                        )
+                    if url:
+                        page = execute_tool("fetch_web_page", {"url": url})
+                        fetched = (page.get("content", "") or page.get("text", ""))
+                        if len(fetched) > 100:
+                            content = fetched[:1500]
                 except Exception:
-                    pass
-                if time.time() - start_ts > 300:
+                    pass  # Sayfa cekilemediyse RSS basligini kullanacagiz
+
+                # Fallback: en azindan baslik + tarih + kaynak bilgisi
+                if not content:
+                    content = (
+                        f"Başlık: {title}\n"
+                        f"Yayın tarihi: {item.get('pub_date', 'Bilinmiyor')}\n"
+                        f"Ozet: {item.get('summary', 'Bilinmiyor')[:500]}\n"
+                        f"Kaynak: {item.get('source', 'Bilinmiyor')}"
+                    )
+
+                if title or url:
+                    read_contents.append({
+                        "title": title or url,
+                        "url": url,
+                        "content": content,
+                    })
+                    tool_notebook_add_note(
+                        name=safe_name,
+                        note=f"[KAYNAK] {title[:50]}: {content[:200]}"
+                    )
+
+                if time.time() - start_ts > 240:
+                    tool_notebook_add_note(name=safe_name, note="[UYARI] 4dk siniri: icerik okuma durduruldu")
                     break
 
             tool_notebook_complete_step(
                 name=safe_name, step_keyword="oku",
-                finding=f"{len(read_contents)} kaynak okundu"
+                finding=f"{len(read_contents)} kaynak islendi"
             )
 
             # 5. PDF olustur
@@ -282,10 +316,12 @@ def tool_research_async(
             )
 
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("[research_async] Hata: %s", exc, exc_info=True)
+            import logging, traceback
+            logging.getLogger(__name__).error(
+                "[research_async] Hata: %s\n%s", exc, traceback.format_exc()
+            )
             try:
-                notify(f"\u274c <b>Arastirma hatasi:</b> {exc}")
+                notify(f"❌ <b>Araştırma hatası ({safe_name}):</b>\n<code>{str(exc)[:300]}</code>")
             except Exception:
                 pass
 

@@ -52,6 +52,7 @@ openpyxl>=3.1.0
 # Sistem
 psutil>=5.9.0
 numpy>=1.24.0
+wmi>=1.5.1; platform_system == "Windows"
 
 # Telegram
 python-telegram-bot>=22.0

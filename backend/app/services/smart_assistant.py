@@ -36,15 +36,23 @@ def _save_state(state: Dict[str, Any]) -> None:
 
 async def _check_weather(state: Dict[str, Any]) -> None:
     city = getattr(settings, "bg_weather_city", "Izmir")
-    last_weather = state.get("last_weather", "")
-    today = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.now()
+    now_hour = now.hour
+    today = now.strftime("%Y-%m-%d")
 
-    if last_weather == today:
-        return
+    # Determine period: morning (7-9), noon (12-13), evening (18-19)
+    if 7 <= now_hour <= 9:
+        period = "morning"
+    elif 12 <= now_hour <= 13:
+        period = "noon"
+    elif 18 <= now_hour <= 19:
+        period = "evening"
+    else:
+        return  # Outside notification windows
 
-    now_hour = datetime.now().hour
-    if now_hour < 7 or now_hour > 9:
-        return  # Only send between 07:00-09:59
+    period_key = f"last_weather_{period}"
+    if state.get(period_key) == today:
+        return  # Already sent for this period today
 
     try:
         url = f"https://wttr.in/{quote_plus(city)}?format=j1"
@@ -91,9 +99,9 @@ async def _check_weather(state: Dict[str, Any]) -> None:
             f"{advice}"
         )
         await _send_telegram(text)
-        state["last_weather"] = today
+        state[period_key] = today
         _save_state(state)
-        logger.info(f"SmartAssistant: weather briefing sent for {city}")
+        logger.info(f"SmartAssistant: weather briefing sent for {city} ({period})")
 
     except Exception as exc:
         logger.warning(f"SmartAssistant: weather check failed: {exc}")

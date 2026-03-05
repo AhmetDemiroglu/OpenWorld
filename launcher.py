@@ -31,7 +31,6 @@ BACKEND_DIR = ROOT / "backend"
 BROKEN_VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
 VENV_PYTHON = BROKEN_VENV_PYTHON
 ENV_PATH = BACKEND_DIR / ".env"
-QWEN_INSTALL_SCRIPT = ROOT / "scripts" / "install-qwen35-9b.ps1"
 LOG_DIR = ROOT / "data" / "logs"
 DEFAULT_TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -309,18 +308,12 @@ SETUP_GUIDE = """\
    \u2022 \u201cModel \u00c7ek\u201d ile yeni modeli indirin
    \u2022 Desteklenen modeller: ollama.com/library
 
-   GGUF (ileri d\u00fczey):
-   \u2022 \u201cMotor\u201d alan\u0131n\u0131 \u201cllama_cpp\u201d yap\u0131n
-   \u2022 \u201cGGUF Yolu\u201d veya \u201cGGUF URL\u201d ile
-     kendi model dosyan\u0131z\u0131 kullanabilirsiniz
-
-
 \u2462  KURULUM  (Ba\u011f\u0131ml\u0131l\u0131klar\u0131 Y\u00fckle)
 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
    \u201cKurulum\u201d butonuna bas\u0131n. Bu i\u015flem:
    \u2022 Python sanal ortam\u0131 (venv) olu\u015fturur
    \u2022 Backend Python paketlerini y\u00fckler
-     (FastAPI, LangChain, Ollama vb.)
+     (FastAPI, OCR, Telegram vb.)
    \u2022 Frontend ba\u011f\u0131ml\u0131l\u0131klar\u0131n\u0131 y\u00fckler
      (npm install)
    \u2022 \u0130lk seferde 5-10 dk s\u00fcrebilir
@@ -454,12 +447,7 @@ class LauncherApp:
         self.outlook_client_id_var = tk.StringVar()
         self.outlook_tenant_var = tk.StringVar(value="common")
         self.outlook_conn_var = tk.StringVar(value="Durum: Bağlı değil")
-        self.backend_var = tk.StringVar(value="ollama")
         self.model_var = tk.StringVar(value="qwen3.5:9b-q4_K_M")
-        self.gguf_var = tk.StringVar(value="../models/Qwen3.5-9B-Q4_K_M.gguf")
-        self.gguf_url_var = tk.StringVar(
-            value="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf?download=true"
-        )
         self.owner_name_var = tk.StringVar(value="Ahmet")
         self.owner_profile_var = tk.StringVar(value="Teknoloji, otomasyon, urun gelistirme")
         self.web_domains_var = tk.StringVar(value="")
@@ -601,7 +589,7 @@ class LauncherApp:
 
         btn_ui = self._btn(quick, "Aray\u00fcz", self.open_ui, bg=ACCENT)
         btn_ui.pack(side="left", padx=(0, 4))
-        ToolTip(btn_ui, "Web arayüzünü tarayıcıda açar.\nÖnce Başlat butonuna basmalısınız.", title="🌐  Arayüz")
+        ToolTip(btn_ui, "Web arayüzünü tarayıcıda açar.\nÖnce Başlat butonuna basmalısınız.", title="Arayüz")
 
         btn_setup = self._btn(quick, "Kurulum", self.setup_all, bg="#64748b")
         btn_setup.pack(side="left", padx=(0, 4))
@@ -613,7 +601,7 @@ class LauncherApp:
 
         btn_save = self._btn(quick, "Kaydet", self.save_env, bg="#7c3aed")
         btn_save.pack(side="right")
-        ToolTip(btn_save, "Ekrandaki tüm ayarları .env dosyasına\nkaydeder. Tokenlar şifreli saklanır.", title="💾  Kaydet")
+        ToolTip(btn_save, "Ekrandaki tüm ayarları .env dosyasına\nkaydeder. Tokenlar şifreli saklanır.", title="Kaydet")
 
         # ═══ DURUM (Loglar en üste taşındı) ═══
         status_frame = tk.Frame(sf, bg=BG)
@@ -629,17 +617,27 @@ class LauncherApp:
 
         # === YAPAY ZEKA MODELI ===
         llm = _collapsible(sf, "Yapay Zek\u00e2 Modeli", expanded=True)
-        tk.Label(llm, text="Motor", fg=LABEL_FG, bg=CARD_BG,
-                 font=("Segoe UI", 9), anchor="w").grid(row=0, column=0, sticky="w", **pad)
-        tk.OptionMenu(llm, self.backend_var, "ollama", "llama_cpp").grid(row=0, column=1, sticky="w", **pad)
+        tk.Label(
+            llm,
+            text="Motor",
+            fg=LABEL_FG,
+            bg=CARD_BG,
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", **pad)
+        tk.Label(
+            llm,
+            text="ollama",
+            fg=TEXT_FG,
+            bg=CARD_BG,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", **pad)
         _field(llm, 1, "Model Ad\u0131", self.model_var)
-        _field(llm, 2, "GGUF Yolu", self.gguf_var)
-        _field(llm, 3, "GGUF URL", self.gguf_url_var)
 
         llm_btns = tk.Frame(llm, bg=CARD_BG)
-        llm_btns.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        llm_btns.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._btn(llm_btns, "Model \u00c7ek", self.pull_ollama_model, bg="#2563eb").pack(side="left", padx=(0, 4))
-        self._btn(llm_btns, "GGUF \u0130ndir", self.download_gguf, bg="#2563eb").pack(side="left", padx=(0, 4))
         self._btn(llm_btns, "Qwen3.5", self.install_qwen35, bg="#2563eb").pack(side="left", padx=(0, 4))
         self._btn(llm_btns, "Eski Sil", self.remove_old_model, bg="#7c3aed").pack(side="left")
 
@@ -660,7 +658,7 @@ class LauncherApp:
             font=("Segoe UI", 9, "bold"),
         )
         cb_internet.grid(row=2, column=0, columnspan=2, sticky="w", **pad)
-        ToolTip(cb_internet, "İşaretli: Ajan web'e erişebilir (arama, sayfa okuma vb.)\nİşaretsiz: Tüm ağ erişimi engellenir, tamamen offline.", title="🌐  İnternet Erişimi")
+        ToolTip(cb_internet, "İşaretli: Ajan web'e erişebilir (arama, sayfa okuma vb.)\nİşaretsiz: Tüm ağ erişimi engellenir, tamamen offline.", title="İnternet Erişimi")
 
         cb_private = tk.Checkbutton(
             sec,
@@ -671,7 +669,7 @@ class LauncherApp:
             font=("Segoe UI", 9),
         )
         cb_private.grid(row=3, column=0, columnspan=2, sticky="w", **pad)
-        ToolTip(cb_private, "İşaretli: 192.168.x.x, 10.x.x.x gibi yerel\nadresler engellenir (modem, NAS, yazıcı vb.)\nİşaretsiz: Yerel ağ tamamen serbest.", title="🛡  Yerel Ağ Koruması")
+        ToolTip(cb_private, "İşaretli: 192.168.x.x, 10.x.x.x gibi yerel\nadresler engellenir (modem, NAS, yazıcı vb.)\nİşaretsiz: Yerel ağ tamamen serbest.", title="Yerel Ağ Koruması")
 
         cb_shell = tk.Checkbutton(
             sec,
@@ -682,7 +680,7 @@ class LauncherApp:
             font=("Segoe UI", 9),
         )
         cb_shell.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
-        ToolTip(cb_shell, "İşaretli: Ajan PowerShell/CMD komutları\nçalıştırabilir (dosya, program vb.)\nİşaretsiz: Sisteme doğrudan erişemez.", title="🖥  Shell Erişimi")
+        ToolTip(cb_shell, "İşaretli: Ajan PowerShell/CMD komutları\nçalıştırabilir (dosya, program vb.)\nİşaretsiz: Sisteme doğrudan erişemez.", title="Shell Erişimi")
 
         # === OCR / TESSERACT ===
         ocr = _collapsible(sf, "OCR / Tesseract", expanded=False)
@@ -1059,9 +1057,7 @@ class LauncherApp:
         self.outlook_refresh_var.set(outlook_refresh)
         self.outlook_client_id_var.set(env_map.get("OUTLOOK_CLIENT_ID", ""))
         self.outlook_tenant_var.set(env_map.get("OUTLOOK_TENANT_ID", "common"))
-        self.backend_var.set(env_map.get("LLM_BACKEND", "ollama"))
         self.model_var.set(env_map.get("OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"))
-        self.gguf_var.set(env_map.get("LLAMA_MODEL_PATH", "../models/Qwen3.5-9B-Q4_K_M.gguf"))
         self.tesseract_cmd_var.set(env_map.get("TESSERACT_CMD", DEFAULT_TESSERACT_CMD))
         self.web_domains_var.set(env_map.get("WEB_ALLOWED_DOMAINS", ""))
         self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "true").strip().lower() == "true")
@@ -1109,9 +1105,7 @@ class LauncherApp:
             "OUTLOOK_REFRESH_TOKEN_ENC": outlook_refresh_enc,
             "OUTLOOK_CLIENT_ID": self.outlook_client_id_var.get().strip(),
             "OUTLOOK_TENANT_ID": self.outlook_tenant_var.get().strip() or "common",
-            "LLM_BACKEND": self.backend_var.get().strip() or "ollama",
             "OLLAMA_MODEL": self.model_var.get().strip() or "qwen3.5:9b-q4_K_M",
-            "LLAMA_MODEL_PATH": self.gguf_var.get().strip() or "../models/Qwen3.5-9B-Q4_K_M.gguf",
             "TESSERACT_CMD": self.tesseract_cmd_var.get().strip() or DEFAULT_TESSERACT_CMD,
             "WEB_ALLOWED_DOMAINS": self.web_domains_var.get().strip(),
             "WEB_BLOCK_PRIVATE_HOSTS": "true" if self.web_block_private_var.get() else "false",
@@ -1388,79 +1382,12 @@ class LauncherApp:
 
         self._run_bg(_job)
 
-    def download_gguf(self) -> None:
-        def _job() -> None:
-            ok, reason = self._check_python_env_health()
-            if not ok:
-                self._append_status(f"\u00d6nce Kurulum \u00e7al\u0131\u015ft\u0131r\u0131n. ({reason})")
-                return
-            url = self.gguf_url_var.get().strip()
-            path = Path(self.gguf_var.get().strip())
-            if not url:
-                self._append_status("GGUF URL bo\u015f olamaz.")
-                return
-            target = (ROOT / path).resolve() if not path.is_absolute() else path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            self._append_status(f"GGUF indiriliyor: {target.name}")
-            script = f"""
-import httpx
-from pathlib import Path
-import sys
-
-url = {url!r}
-out = Path(r"{str(target)}")
-
-try:
-    with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
-        response.raise_for_status()
-        total_size = int(response.headers.get("content-length", 0))
-        downloaded_size = 0
-        
-        with out.open("wb") as file_obj:
-            for chunk in response.iter_bytes(chunk_size=8192):
-                if chunk:
-                    file_obj.write(chunk)
-                    downloaded_size += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded_size / total_size) * 100
-                        sys.stdout.write(f"\\r{{progress:.1f}}% indirildi...")
-                    else:
-                        sys.stdout.write(f"\\r{{downloaded_size / (1024*1024):.1f}} MB indirildi...")
-                    sys.stdout.flush()
-    sys.stdout.write("\\n") # Newline after progress
-    print("ok")
-except Exception as e:
-    print(f"error: {{e}}", file=sys.stderr)
-    sys.exit(1)
-"""
-            proc = subprocess.Popen([str(VENV_PYTHON), "-c", script], cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
-            
-            output_lines = []
-            for line in proc.stdout:
-                line = line.rstrip()
-                if line:
-                    self._append_status(line)
-                output_lines.append(line)
-            proc.wait()
-
-            if proc.returncode == 0:
-                self._append_status("✅ GGUF indirildi.")
-            else:
-                error_msg = "GGUF indirme hatası."
-                # Try to find a more specific error from the script's output
-                for line in output_lines:
-                    if line.startswith("error:"):
-                        error_msg = f"GGUF indirme hatası: {line[6:].strip()}"
-                        break
-                self._append_status(f"❌ {error_msg}")
-
-        self._run_bg(_job)
-
     def install_qwen35(self) -> None:
         def _job() -> None:
-            self._append_status("Qwen3.5-9B GGUF kuruluyor...")
+            model = "qwen3.5:9b-q4_K_M"
+            self._append_status(f"Qwen3.5 modeli indiriliyor: {model}")
             proc = subprocess.Popen(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(QWEN_INSTALL_SCRIPT)],
+                ["ollama", "pull", model],
                 cwd=str(ROOT),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -1475,14 +1402,11 @@ except Exception as e:
                     self._append_status(line)
             proc.wait()
             if proc.returncode == 0:
-                self.model_var.set("qwen3.5:9b-q4_K_M")
-                self.backend_var.set("ollama")
-                self.gguf_var.set("../models/Qwen3.5-9B-Q4_K_M.gguf")
+                self.model_var.set(model)
                 self.save_env()
-                self._append_status("✅ Qwen3.5-9B kuruldu ve seçildi.")
+                self._append_status("Qwen3.5 modeli kuruldu ve varsayilan olarak secildi.")
             else:
-                self._append_status("❌ Model kurulumu başarısız.")
-
+                self._append_status("Qwen3.5 modeli indirilemedi.")
         self._run_bg(_job)
 
     def remove_old_model(self) -> None:

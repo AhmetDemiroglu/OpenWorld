@@ -5,12 +5,16 @@ Scans Gmail every N minutes, triages with Ollama LLM, sends Telegram notificatio
 from __future__ import annotations
 
 import asyncio
+import base64
+import email as email_lib
 import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,12 +30,14 @@ logger = logging.getLogger(__name__)
 # Importance levels
 # ---------------------------------------------------------------------------
 
-CRITICAL = "CRITICAL"
-IMPORTANT = "IMPORTANT"
-NORMAL = "NORMAL"
-SPAM = "SPAM"
+CRITICAL = "CRITICAL"   # Aksiyon gerektiriyor, hemen bil
+IMPORTANT = "IMPORTANT" # Oku, değerlendir
+NOTICE = "NOTICE"       # Bilgi amaçlı, gözden kaçırma (deprecation, repo silme, model kaldırma vs)
+NORMAL = "NORMAL"       # Atla
+SPAM = "SPAM"           # Atla
 
-_NOTIFY_LEVELS = {CRITICAL, IMPORTANT}
+_NOTIFY_LEVELS = {CRITICAL, IMPORTANT, NOTICE}
+_DRAFT_LEVELS = {CRITICAL}  # Sadece bu seviyeler için taslak üret
 
 
 def _get_secret(plain: str, encrypted: str) -> str:
@@ -74,10 +80,11 @@ def _get_gmail_token() -> str:
 # Gmail fetch – only UNREAD
 # ---------------------------------------------------------------------------
 
-def _fetch_unread_emails(token: str, max_results: int = 20) -> List[Dict[str, Any]]:
-    """Fetch unread emails from Gmail inbox."""
+def _fetch_unread_emails(token: str, max_results: int = 30) -> List[Dict[str, Any]]:
+    """Fetch unread emails from all tabs (inbox + promotions + updates + social)."""
     headers = {"Authorization": f"Bearer {token}"}
-    query = "is:unread in:inbox"
+    # Include all tabs — critical mails often land in Promotions or Updates
+    query = "is:unread (in:inbox OR in:promotions OR category:updates OR category:social) -in:spam -in:trash"
 
     with httpx.Client(timeout=30) as client:
         list_resp = client.get(
@@ -134,61 +141,94 @@ def _subject_similarity(a: str, b: str) -> float:
 
 class DuplicateFilter:
     def __init__(self) -> None:
+        self._seen_job_keys: set = set()
         self._refresh_cache()
 
     def _refresh_cache(self) -> None:
-        seen = get_seen_emails(days=7)
+        seen = get_seen_emails(days=30)
         self._seen_ids = {s["id"] for s in seen}
         self._seen_subjects = [s["subject"] for s in seen]
+        # Restore job keys from stored subjects (encoded as "JOB:key" prefix)
+        for s in seen:
+            subj = s.get("subject", "")
+            if subj.startswith("JOB:"):
+                self._seen_job_keys.add(subj[4:])
 
     def is_duplicate(self, mail_id: str, subject: str) -> bool:
         if mail_id in self._seen_ids:
             return True
         for seen_subj in self._seen_subjects:
+            if seen_subj.startswith("JOB:"):
+                continue  # job keys compared separately
             if _subject_similarity(seen_subj, subject) > 0.85:
                 return True
         return False
 
-    def mark_seen(self, mail_id: str, subject: str) -> None:
+    def is_duplicate_job(self, job_key: str) -> bool:
+        """Returns True if we've already seen this job (company+role)."""
+        return job_key.lower() in self._seen_job_keys
+
+    def mark_seen(self, mail_id: str, subject: str, job_key: Optional[str] = None) -> None:
         self._seen_ids.add(mail_id)
         self._seen_subjects.append(subject)
         mark_email_seen(mail_id, subject)
+        if job_key:
+            key = job_key.lower()
+            self._seen_job_keys.add(key)
+            # Also persist so it survives restart (encode in subject with prefix)
+            mark_email_seen(f"job_{key}", f"JOB:{key}")
 
 
 # ---------------------------------------------------------------------------
 # LLM Triage – calls Ollama directly (no tools needed, just text)
 # ---------------------------------------------------------------------------
 
-_TRIAGE_PROMPT = """Sen bir e-posta önem derecesi belirleyicisisin.
-Kullanıcı profili: Ahmet, Full-Stack Developer, İzmir'de yaşıyor, Frontend ağırlıklı (Vue.js, React, React Native, JS, CSS, HTML), Backend (C# .NET Core, SQL Server). AI/ML, yapay zeka modelleri, teknoloji trendleri ve yazılım iş ilanlarıyla yakından ilgileniyor.
+_TRIAGE_PROMPT = """Sen bir e-posta öncelik sınıflandırıcısısın.
+Kullanıcı profili: Ahmet, Full-Stack Developer, İzmir. Teknolojiler: Vue.js, React, React Native, JS/TS, CSS, C# .NET Core, SQL Server. AI/ML, yapay zeka modelleri ve yazılım iş ilanlarıyla ilgileniyor.
 
-Aşağıdaki e-postayı analiz et ve ÖNEMLİ olup olmadığını belirle.
+SINIFLANDIRMA KURALLARI (sırayla değerlendir):
 
-KRİTİK olan durumlar:
-- Yazılım iş ilanları (özellikle Frontend, İzmir, remote, React, Vue.js)
-- AI model değişiklikleri (deprecation, yeni model, API değişikliği)
-- Güvenlik uyarıları, hesap güvenliği
-- Acil kişisel yazışmalar
-- Fatura/ödeme bildirimleri
-- Google, GitHub, npm güvenlik bildirimleri
+CRITICAL – Hemen bilmesi gerekiyor, aksiyon gerektirebilir:
+- Hesap/güvenlik uyarıları (şifre sıfırlama, şüpheli giriş, 2FA)
+- Fatura, ödeme, abonelik bildirimleri
+- GitHub: repo silinecek, fork kaldırılacak, depo arşivlenecek
+- Google/AWS/Azure/Vercel: servis kapatılıyor, hesap askıya alındı
+- npm/PyPI/NuGet: paket deprecated veya kaldırılıyor (kullandığın teknolojiler için)
+- API değişikliği / breaking change bildirimleri (OpenAI, Anthropic, Google AI, Azure AI vb.)
+- Kişisel/acil yazışmalar (gerçek insanlardan, iş/proje bağlamında)
+- Yazılım iş ilanları (Frontend, React, Vue.js, İzmir veya remote pozisyonlar)
 
-ÖNEMLİ olan durumlar:
-- Teknoloji haberleri/bültenleri (gerçekten ilginç olanlar)
-- Proje güncellemeleri, PR bildirimleri
-- Öğrenme fırsatları (kurslar, konferanslar)
+IMPORTANT – Okuması gerekiyor ama hemen değil:
+- İlginç iş ilanları (yukarıdakiyle örtüşmeyen ama değerlendirilmesi gereken pozisyonlar)
+- Gerçekten değerli teknik içerik veya bülten (sadece konuya özel, genel reklam değil)
+- PR bildirimleri, proje güncellemeleri (kendi projeleri veya katkıda bulunduğu projeler)
+- Konferans/etkinlik bildirimleri (teknik, ücretsiz veya değerli)
 
-NORMAL olan durumlar:
-- Düzenli bültenler, haftalık özetler
-- Sosyal medya bildirimleri
-- Rutin güncellemeler
+NOTICE – Bilmesi gerekiyor ama aksiyon şart değil:
+- AI model güncellemeleri, yeni model duyuruları (GPT, Claude, Gemini, Mistral, Llama vb.)
+- Framework/kütüphane yeni sürüm duyuruları (React 19, Vue 4, Next.js vb.)
+- Deprecation bildirimleri (kısa/orta vadeli, hemen aksiyon gerektirmeyen)
+- Önemli teknoloji haberleri (acquisition, kapatma, büyük değişim)
+- GitHub Sponsors, açık kaynak duyuruları, topluluk haberleri
+- Servis fiyat değişiklikleri (kullandığı araçlar için)
 
-SPAM olan durumlar:
-- Reklam, pazarlama, promosyon
-- Tekrar eden/gereksiz bildirimler
-- Tanımadığın kişilerden gelen satış mailleri
+NORMAL – Atlansın:
+- Rutin bültenler, haftalık özetler, digest mailler
+- Sosyal medya bildirimleri (LinkedIn, Twitter vb.)
+- Rutin PR bildirimleri (önemsiz repolardan)
+- Otomatik sistem raporları (başarılı build, deploy vs.)
 
-CEVAP FORMATI (SADECE JSON, başka hiçbir şey yazma):
-{"level": "CRITICAL|IMPORTANT|NORMAL|SPAM", "reason": "kısa açıklama", "summary": "1-2 cümlelik özet"}
+SPAM – Kesinlikle atlansın:
+- Reklam, promosyon, indirim
+- Tanımadığı kişilerden satış mailleri
+- Alakasız listeler
+
+İŞ İLANI TEKRAR KONTROLÜ:
+Eğer bu email bir iş ilanıysa, job_key alanını doldur: "şirket_adı|pozisyon_başlığı" formatında (küçük harf, Türkçe karakter yok, boşluk yerine - kullan).
+Örnek: "xyztech|senior-frontend-developer"
+
+CEVAP FORMATI (SADECE JSON, başka hiçbir şey):
+{{"level": "CRITICAL|IMPORTANT|NOTICE|NORMAL|SPAM", "reason": "kısa Türkçe açıklama (max 15 kelime)", "summary": "1-2 cümlelik Türkçe özet", "job_key": null}}
 
 E-POSTA:
 Kimden: {sender}
@@ -225,14 +265,18 @@ async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
             if content.startswith("```"):
                 content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
             result = json.loads(content)
+            level = result.get("level", NORMAL)
+            if level not in (CRITICAL, IMPORTANT, NOTICE, NORMAL, SPAM):
+                level = NORMAL
             return {
-                "level": result.get("level", NORMAL),
+                "level": level,
                 "reason": result.get("reason", ""),
                 "summary": result.get("summary", ""),
+                "job_key": result.get("job_key") or None,
             }
     except Exception as exc:
         logger.warning(f"LLM triage failed: {exc}")
-        return {"level": NORMAL, "reason": "LLM triage failed", "summary": email.get("subject", "")}
+        return {"level": NORMAL, "reason": "LLM triage failed", "summary": email.get("subject", ""), "job_key": None}
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +286,15 @@ async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
 _LEVEL_EMOJI = {
     CRITICAL: "🔴",
     IMPORTANT: "🟡",
+    NOTICE: "📢",
     NORMAL: "⚪",
     SPAM: "🔇",
+}
+
+_LEVEL_LABEL = {
+    CRITICAL: "KRİTİK",
+    IMPORTANT: "ÖNEMLİ",
+    NOTICE: "BİLGİLENDİRME",
 }
 
 
@@ -272,9 +323,150 @@ async def _send_telegram(text: str) -> None:
         logger.error(f"Telegram send error: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Pending draft storage (shared with telegram_bridge via file)
+# ---------------------------------------------------------------------------
+
+def _drafts_file() -> Path:
+    from ..config import settings as _settings
+    p = _settings.data_path / "pending_drafts.json"
+    if not p.exists():
+        p.write_text("{}", encoding="utf-8")
+    return p
+
+
+def _load_drafts() -> Dict[str, Any]:
+    try:
+        return json.loads(_drafts_file().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_drafts(drafts: Dict[str, Any]) -> None:
+    _drafts_file().write_text(json.dumps(drafts, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_pending_draft(draft_id: str, data: Dict[str, Any]) -> None:
+    drafts = _load_drafts()
+    drafts[draft_id] = data
+    _save_drafts(drafts)
+
+
+def pop_pending_draft(draft_id: str) -> Optional[Dict[str, Any]]:
+    drafts = _load_drafts()
+    data = drafts.pop(draft_id, None)
+    if data is not None:
+        _save_drafts(drafts)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Gmail Send API
+# ---------------------------------------------------------------------------
+
+def send_email_via_gmail(token: str, to: str, subject: str, body: str, thread_id: Optional[str] = None) -> bool:
+    """Send an email via Gmail API. Returns True on success."""
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["to"] = to
+    msg["subject"] = subject
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    payload: Dict[str, Any] = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+            )
+            if resp.status_code == 401:
+                new_token = _refresh_token()
+                if not new_token:
+                    return False
+                resp = client.post(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                    headers={"Authorization": f"Bearer {new_token}"},
+                    json=payload,
+                )
+            resp.raise_for_status()
+            logger.info(f"Email sent to {to}: {subject}")
+            return True
+    except Exception as exc:
+        logger.error(f"Gmail send failed: {exc}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# LLM draft reply generation
+# ---------------------------------------------------------------------------
+
+_DRAFT_PROMPT = """Sen Ahmet'in e-posta asistanısın. Aşağıdaki e-postaya kısa, profesyonel ve Türkçe bir yanıt taslağı yaz.
+Yanıt 3-5 cümle olsun. Gereksiz uzatma. Sadece e-posta metnini yaz, başka hiçbir şey ekleme.
+
+E-POSTA:
+Kimden: {sender}
+Konu: {subject}
+Önizleme: {snippet}
+Önem: {level} – {reason}
+"""
+
+
+async def _generate_draft_reply(email: Dict[str, Any], triage: Dict[str, str]) -> str:
+    """LLM ile taslak e-posta yanıtı üret."""
+    prompt = _DRAFT_PROMPT.format(
+        sender=email.get("from", ""),
+        subject=email.get("subject", ""),
+        snippet=email.get("snippet", ""),
+        level=triage.get("level", ""),
+        reason=triage.get("reason", ""),
+    )
+    payload = {
+        "model": settings.ollama_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"temperature": 0.3, "num_predict": 300},
+    }
+    base = settings.ollama_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            resp = await client.post(f"{base}/api/chat", json=payload)
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content", "").strip()
+    except Exception as exc:
+        logger.warning(f"Draft generation failed: {exc}")
+        return ""
+
+
+async def _send_telegram_with_inline(text: str, buttons: List[List[Dict]]) -> None:
+    """Send a Telegram message with inline keyboard buttons."""
+    token = settings.telegram_bot_token or ""
+    if not token and settings.telegram_bot_token_enc:
+        token = decrypt_text(settings.telegram_bot_token_enc)
+    user_id = settings.telegram_allowed_user_id.strip()
+    if not token or not user_id:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": user_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": {"inline_keyboard": buttons},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                logger.error(f"Telegram inline send failed: {resp.text[:200]}")
+    except Exception as exc:
+        logger.error(f"Telegram inline send error: {exc}")
+
+
 def _format_notification(email: Dict[str, Any], triage: Dict[str, str]) -> str:
     level = triage.get("level", NORMAL)
     emoji = _LEVEL_EMOJI.get(level, "📧")
+    label = _LEVEL_LABEL.get(level, level)
     sender = email.get("from", "Bilinmeyen")
     subject = email.get("subject", "(Konu yok)")
     summary = triage.get("summary", "")
@@ -282,7 +474,7 @@ def _format_notification(email: Dict[str, Any], triage: Dict[str, str]) -> str:
     date_str = email.get("date", "")
 
     lines = [
-        f"{emoji} <b>{'KRİTİK' if level == CRITICAL else 'ÖNEMLİ'} MAİL!</b>",
+        f"{emoji} <b>{label} MAİL</b>",
         "",
         f"📧 <b>Kimden:</b> {sender}",
         f"📋 <b>Konu:</b> {subject}",
@@ -290,7 +482,7 @@ def _format_notification(email: Dict[str, Any], triage: Dict[str, str]) -> str:
     if summary:
         lines.append(f"📝 <b>Özet:</b> {summary}")
     if reason:
-        lines.append(f"💡 <b>Neden önemli:</b> {reason}")
+        lines.append(f"💡 {reason}")
     if date_str:
         lines.append(f"⏰ {date_str}")
     return "\n".join(lines)
@@ -364,33 +556,77 @@ class EmailMonitor:
             return
 
         logger.info(f"EmailMonitor: {len(emails)} unread emails found")
-        important_batch: List[str] = []
+        important_batch: List[str] = []  # IMPORTANT mails
+        notice_batch: List[str] = []     # NOTICE mails (FYI)
 
-        for email in emails:
-            mid = email["id"]
-            subject = email.get("subject", "")
+        for mail in emails:
+            mid = mail["id"]
+            subject = mail.get("subject", "")
 
-            # Duplicate check
+            # Duplicate check (ID + subject similarity)
             if self._dup_filter.is_duplicate(mid, subject):
                 continue
 
             # LLM triage
-            triage = await _triage_email(email)
+            triage = await _triage_email(mail)
             level = triage.get("level", NORMAL)
-            self._dup_filter.mark_seen(mid, subject)
+            job_key = triage.get("job_key")
 
-            if level in _NOTIFY_LEVELS:
-                notification = _format_notification(email, triage)
-                important_batch.append(notification)
-                self._notified_count += 1
-                logger.info(f"EmailMonitor: [{level}] {subject}")
-            else:
+            # Job listing duplicate check (same company+role already seen)
+            if job_key and self._dup_filter.is_duplicate_job(job_key):
+                logger.debug(f"EmailMonitor: duplicate job listing skipped: {job_key}")
+                self._dup_filter.mark_seen(mid, subject)  # mark ID seen to avoid re-triaging
+                continue
+
+            self._dup_filter.mark_seen(mid, subject, job_key=job_key)
+
+            if level not in _NOTIFY_LEVELS:
                 logger.debug(f"EmailMonitor: [{level}] {subject} (skipped)")
+                continue
 
-        # Send batched notifications
+            notification = _format_notification(mail, triage)
+            self._notified_count += 1
+            logger.info(f"EmailMonitor: [{level}] {subject}")
+
+            if level in _DRAFT_LEVELS:
+                # Generate draft reply + send with inline buttons (one-by-one for CRITICAL)
+                draft_body = await _generate_draft_reply(mail, triage)
+                if draft_body:
+                    draft_id = str(uuid.uuid4())[:8]
+                    sender_addr = mail.get("from", "")
+                    save_pending_draft(draft_id, {
+                        "to": sender_addr,
+                        "subject": f"Re: {subject}",
+                        "body": draft_body,
+                        "email_id": mid,
+                    })
+                    draft_msg = (
+                        f"{notification}\n\n"
+                        f"✉️ <b>Taslak Yanıt:</b>\n<i>{draft_body[:500]}</i>"
+                    )
+                    buttons = [[
+                        {"text": "✅ Gönder", "callback_data": f"draft_send:{draft_id}"},
+                        {"text": "❌ Atla", "callback_data": f"draft_skip:{draft_id}"},
+                    ]]
+                    await _send_telegram_with_inline(draft_msg, buttons)
+                else:
+                    important_batch.append(notification)
+            elif level == NOTICE:
+                notice_batch.append(notification)
+            else:  # IMPORTANT
+                important_batch.append(notification)
+
+        # Send batched IMPORTANT notifications
         if important_batch:
             batch_text = "\n\n━━━━━━━━━━━━━━━\n\n".join(important_batch)
             header = f"📬 <b>{len(important_batch)} önemli mailiniz var</b>\n\n"
             await _send_telegram(header + batch_text)
-        else:
+
+        # Send batched NOTICE notifications (FYI digest)
+        if notice_batch:
+            batch_text = "\n\n─────────────\n\n".join(notice_batch)
+            header = f"📢 <b>Bilgine ({len(notice_batch)} bilgilendirme)</b>\n\n"
+            await _send_telegram(header + batch_text)
+
+        if not important_batch and not notice_batch:
             logger.info("EmailMonitor: no important emails this cycle")

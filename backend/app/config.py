@@ -26,12 +26,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b-q4_K_M"
     ollama_max_steps: int = 25
-    llm_backend: str = "ollama"
-    llama_model_path: str = "../models/Qwen3.5-9B-Q4_K_M.gguf"
     tesseract_cmd: str = ""
-    llama_n_ctx: int = 8192
-    llama_n_gpu_layers: int = 0
-    llama_n_threads: int = 8
 
     workspace_root: str = "../data"
     sessions_dir: str = "../data/sessions"
@@ -111,10 +106,6 @@ class Settings(BaseSettings):
     @property
     def data_path(self) -> Path:
         return _resolve_from_backend(self.data_dir)
-
-    @property
-    def llama_model_path_abs(self) -> Path:
-        return _resolve_from_backend(self.llama_model_path)
 
     @field_validator("port")
     @classmethod

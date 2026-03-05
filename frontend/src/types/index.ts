@@ -35,7 +35,6 @@ export interface HealthStatus {
   ok: boolean;
   llm_backend: string;
   model: string;
-  llama_model_path: string;
   workspace: string;
   shell_tool: boolean;
 }

@@ -59,9 +59,8 @@ _MEDIA_TYPE_MAP = {
 async def health() -> dict:
     return {
         "ok": True,
-        "llm_backend": settings.llm_backend,
+        "llm_backend": "ollama",
         "model": settings.ollama_model,
-        "llama_model_path": str(settings.llama_model_path_abs),
         "workspace": str(settings.workspace_path),
         "shell_tool": settings.enable_shell_tool,
     }
