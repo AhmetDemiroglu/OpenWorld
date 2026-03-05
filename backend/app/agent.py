@@ -2582,7 +2582,24 @@ class AgentService:
         return any(k in normalized for k in ide_markers) and any(k in normalized for k in approval_markers) and any(k in normalized for k in action_markers)
 
     @staticmethod
-    def _watch_and_accept_ide_prompt(timeout: int = 25, allow_keyboard_fallback: bool = False) -> Dict[str, Any]:
+    def _infer_approval_profile_from_text(user_message: str) -> str:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if "claudecode" in normalized or "claude code" in normalized:
+            return "claudecode"
+        if "codex" in normalized:
+            return "codex"
+        if "kimicode" in normalized or "kimi code" in normalized:
+            return "kimicode"
+        if "gemini" in normalized:
+            return "gemini"
+        return "generic"
+
+    @staticmethod
+    def _watch_and_accept_ide_prompt(
+        timeout: int = 25,
+        allow_keyboard_fallback: bool = False,
+        profile: str = "generic",
+    ) -> Dict[str, Any]:
         try:
             from .tools.super_agent import tool_wait_and_accept_approval
         except Exception as exc:
@@ -2596,7 +2613,7 @@ class AgentService:
                 min_confidence=30.0,
                 lang="tur+eng",
                 allow_keyboard_fallback=bool(allow_keyboard_fallback),
-                profile="generic",
+                profile=AgentService._normalize_text_for_match(profile or "generic") or "generic",
             )
         except Exception as exc:
             return {"error": str(exc)}
@@ -2605,7 +2622,11 @@ class AgentService:
         if not self._is_ide_approval_help_request(user_message):
             return "", []
 
-        result = self._watch_and_accept_ide_prompt(timeout=35, allow_keyboard_fallback=True)
+        result = self._watch_and_accept_ide_prompt(
+            timeout=35,
+            allow_keyboard_fallback=True,
+            profile=self._infer_approval_profile_from_text(user_message),
+        )
         if result.get("error"):
             return f"Hata: IDE onay kontrolu basarisiz: {result['error']}", []
         if result.get("success"):
@@ -2769,16 +2790,7 @@ class AgentService:
         action = self._extract_approval_watcher_action(user_message)
         if not action:
             return "", []
-        profile = "generic"
-        normalized = self._normalize_text_for_match(user_message)
-        if "claudecode" in normalized or "claude code" in normalized:
-            profile = "claudecode"
-        elif "codex" in normalized:
-            profile = "codex"
-        elif "kimicode" in normalized or "kimi code" in normalized:
-            profile = "kimicode"
-        elif "gemini" in normalized:
-            profile = "gemini"
+        profile = self._infer_approval_profile_from_text(user_message)
         return self._run_approval_watcher_action(action, profile=profile)
 
     def _run_approval_watcher_action(self, action: str, profile: str = "generic") -> Tuple[str, List[str]]:

@@ -66,7 +66,7 @@ _BASE_APPROVAL_CONTEXT_TERMS = {
 _BASE_APPROVAL_BUTTON_TERMS = {
     "approve", "allow", "accept", "authorize", "grant", "yes", "ok",
     "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
-    "run", "proceed", "expand",
+    "proceed", "expand",
 }
 
 _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
@@ -75,7 +75,6 @@ _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
     "allow this conversation",
     "allow for this conversation",
     "allow this chat",
-    "run anyway",
     "allow anyway",
     "yes continue",
     "yes for this session",
@@ -83,8 +82,6 @@ _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
     "yes always",
     "accept all",
     "accept changes",
-    "run without debugging",
-    "continue without debugging",
     "izin ver",
     "kabul et",
     "devam et",
@@ -139,7 +136,8 @@ _APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
     },
     "codex": {
         "context": {"codex", "requires input", "run command"},
-        "button_multi": {"run alt j"},
+        "button_single": {"run"},
+        "button_multi": {"run alt j", "run anyway"},
         "context_hints": {"codex", "run", "accept"},
     },
     "kimicode": {
@@ -151,6 +149,16 @@ _APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
         "button_multi": {"allow once", "allow this conversation", "allow access"},
         "context_hints": {"gemini", "allow", "conversation"},
     },
+}
+
+_FORBIDDEN_APPROVAL_TERMS_COMPACT = {
+    "runwithoutdebugging",
+    "startdebugging",
+    "stopdebugging",
+    "restartdebugging",
+    "openconfigurations",
+    "addconfiguration",
+    "installadditionaldebuggers",
 }
 _RUN_PROMPT_CONTEXT_TERMS = {
     "1 step requires input",
@@ -218,7 +226,24 @@ _IDE_COMPLETION_DIRECT_TERMS = (
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "in progress", "loading", "analyzing",
+    "working", "synthesizing", "running", "searching", "checking",
     "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor", "bekleniyor",
+)
+
+_IDE_INPUT_REQUIRED_TERMS = (
+    "step requires input",
+    "requires input",
+    "1 step requires input",
+    "allow once",
+    "allow this conversation",
+    "allow access",
+    "allow directory access",
+    "run command",
+    "permission",
+    "authorize",
+    "onay",
+    "izin",
+    "yetki",
 )
 
 _APPROVAL_WATCHER_LOCK = threading.Lock()
@@ -1178,6 +1203,7 @@ def _is_negative_decision(
 def _score_approval_candidate(
     candidate: Dict[str, Any],
     *,
+    active_profile: str,
     has_context: bool,
     hint_hit: bool,
     run_prompt_context_hit: bool,
@@ -1192,14 +1218,18 @@ def _score_approval_candidate(
         score += 14.0
     if hint_hit:
         score += 8.0
-    if run_prompt_context_hit and ("run" in token or compact.startswith("run")):
+    run_friendly_profiles = {"codex", "claudecode"}
+    run_friendly = active_profile in run_friendly_profiles
+    if run_prompt_context_hit and run_friendly and ("run" in token or compact.startswith("run")):
         score += 28.0
     if token in button_terms_multi or compact in button_terms_multi_compact:
         score += 22.0
     if "yes" in token or token.startswith("allow") or token.startswith("accept"):
         score += 16.0
-    if run_prompt_context_hit and (token.startswith("run") or "continue" in token):
+    if run_prompt_context_hit and run_friendly and (token.startswith("run") or "continue" in token):
         score += 12.0
+    if not run_friendly and (token.startswith("run") or compact.startswith("run")):
+        score -= 22.0
     # Buttons are usually lower-right in modal dialogs.
     score += float(candidate.get("top", 0)) * 0.0012
     score += float(candidate.get("left", 0)) * 0.0008
@@ -1419,6 +1449,20 @@ def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
     return strong_hits >= 1 or direct_hits >= 1 or completion_hits >= 2
 
 
+def _looks_like_ide_busy_text(ocr_blob: str) -> bool:
+    blob = _normalize_for_ocr_match(ocr_blob or "")
+    if len(blob) < 8:
+        return False
+    return any(_normalize_for_ocr_match(term) in blob for term in _IDE_BUSY_TERMS)
+
+
+def _looks_like_input_required_text(ocr_blob: str) -> bool:
+    blob = _normalize_for_ocr_match(ocr_blob or "")
+    if len(blob) < 8:
+        return False
+    return any(_normalize_for_ocr_match(term) in blob for term in _IDE_INPUT_REQUIRED_TERMS)
+
+
 def tool_wait_and_accept_approval(
     window_pattern: str = "Visual Studio Code|Code - Insiders",
     timeout: int = 25,
@@ -1511,6 +1555,8 @@ def tool_wait_and_accept_approval(
     end_time = time.time() + timeout
     checks = 0
     last_blob = ""
+    last_input_required = False
+    last_busy = False
     region = None
 
     while time.time() < end_time:
@@ -1599,6 +1645,8 @@ def tool_wait_and_accept_approval(
         blob = " ".join(blob_parts)
         raw_blob = " ".join(raw_blob_parts)
         last_blob = (raw_blob or blob)[:1800]
+        last_input_required = _looks_like_input_required_text(last_blob)
+        last_busy = _looks_like_ide_busy_text(last_blob)
         image_height = int(getattr(screenshot, "height", 0) or 0)
         has_context = any(term in blob for term in context_terms)
         has_strict_context = any(term in blob for term in strict_context_terms)
@@ -1696,22 +1744,28 @@ def tool_wait_and_accept_approval(
                     )
 
         filtered_candidates: List[Dict[str, Any]] = []
+        run_friendly_profiles = {"codex", "claudecode"}
+        run_friendly = active_profile in run_friendly_profiles
         for c in candidates:
             norm_text = _normalize_for_ocr_match(str(c.get("norm", "")))
             if not norm_text:
                 continue
             is_menu_term = _is_likely_menu_term(norm_text)
             compact_text = _compact_normalized(norm_text)
+            if compact_text in _FORBIDDEN_APPROVAL_TERMS_COMPACT:
+                continue
             if compact_text in _DEBUG_MENU_COMMAND_TERMS_COMPACT:
+                continue
+            if (compact_text.startswith("run") or "withoutdebugging" in compact_text) and not run_friendly:
                 continue
             # VS Code ust menu / debug dropdown elemanlarini asla buton adayi yapma.
             # "1 Step Requires Input" aktifken bile menuye tiklama yanlisi olabiliyor.
             if is_menu_term and _in_top_menu_zone(c, image_height):
                 continue
             if _in_top_menu_zone(c, image_height):
-                short_or_menu = len(_compact_normalized(norm_text)) <= 12 or is_menu_term
-                if short_or_menu and not has_strict_context:
-                    continue
+                # Ust menu/toolbar bolgesindeki adimlara tiklamak pratikte yanlis pozitif urettigi icin
+                # bu bolgedeki tum adaylari disla.
+                continue
             filtered_candidates.append(c)
         candidates = filtered_candidates
 
@@ -1745,6 +1799,7 @@ def tool_wait_and_accept_approval(
                 c = dict(c)
                 c["score"] = _score_approval_candidate(
                     c,
+                    active_profile=active_profile,
                     has_context=has_context,
                     hint_hit=hint_hit,
                     run_prompt_context_hit=run_prompt_context_hit,
@@ -1783,7 +1838,7 @@ def tool_wait_and_accept_approval(
                         "yes", "allow", "accept", "proceed", "ok",
                         "evet", "onay", "onayla", "kabul", "devam",
                     }
-                    if run_prompt_context_hit:
+                    if run_prompt_context_hit and run_friendly:
                         positives.add("run")
                     second_candidates: List[Dict[str, Any]] = []
                     count2 = len(data2.get("text", []))
@@ -1801,6 +1856,9 @@ def tool_wait_and_accept_approval(
                             negative_compact=negative_terms_compact,
                         ):
                             continue
+                        compact2 = _compact_normalized(norm2)
+                        if compact2 in _FORBIDDEN_APPROVAL_TERMS_COMPACT:
+                            continue
                         candidate2 = {
                             "norm": norm2,
                             "raw": raw2,
@@ -1810,12 +1868,12 @@ def tool_wait_and_accept_approval(
                             "height": int(data2["height"][j]),
                             "conf": float(data2["conf"][j]) if str(data2["conf"][j]).strip() else 0.0,
                         }
-                        if _is_likely_menu_term(norm2) and not run_prompt_context_hit:
+                        if _is_likely_menu_term(norm2):
                             continue
                         if _in_top_menu_zone(candidate2, image2_height):
                             continue
                         is_positive = norm2 in positives or norm2.startswith("allow") or norm2.startswith("accept")
-                        if run_prompt_context_hit and norm2.startswith("run"):
+                        if run_prompt_context_hit and run_friendly and norm2.startswith("run"):
                             is_positive = True
                         if is_positive:
                             second_candidates.append(candidate2)
@@ -1843,12 +1901,15 @@ def tool_wait_and_accept_approval(
                 "score": round(float(best.get("score", 0.0)), 2),
                 "followup_clicked": followup_clicked,
                 "followup_text": followup_text,
+                "last_seen_text": last_blob,
+                "input_required_detected": last_input_required,
+                "busy_detected": last_busy,
             }
 
         # VS Code "1 Step Requires Input" modalinda Run butonu OCR'da kacinabiliyor.
         # Reject butonunu okuyabilirsek, Run butonu genellikle hemen sagindadir.
         if run_prompt_context_hit and words:
-            reject_tokens = {"reject", "reddet", "iptal"}
+            reject_tokens = {"reject", "deny", "decline", "reddet", "iptal", "hayir", "no"}
             reject_candidates = [w for w in words if w.get("norm", "") in reject_tokens]
             if reject_candidates:
                 rej = sorted(reject_candidates, key=lambda c: (c["conf"], c["top"], c["left"]), reverse=True)[0]
@@ -1877,7 +1938,7 @@ def tool_wait_and_accept_approval(
         # gorunen kisayolu klavyeden deneyelim.
         compact_blob = re.sub(r"\s+", "", blob)
         run_altj_seen = ("runaltj" in compact_blob or "runaltj" in compact_blob.replace("+", ""))
-        if run_altj_seen and (has_context or hint_hit or "debug" in compact_blob):
+        if run_altj_seen and run_friendly and (has_context or hint_hit or "debug" in compact_blob):
             try:
                 pyautogui.hotkey("alt", "j")
                 return {
@@ -1901,6 +1962,8 @@ def tool_wait_and_accept_approval(
         "profile": active_profile,
         "message": "Onay penceresi tespit edilmedi.",
         "last_seen_text": last_blob,
+        "input_required_detected": last_input_required,
+        "busy_detected": last_busy,
     }
 
 
@@ -1933,6 +1996,9 @@ def _approval_watcher_worker(
     stop_event: threading.Event,
 ) -> None:
     last_notify_try_ts = 0.0
+    saw_input_required = False
+    idle_clear_hits = 0
+    last_accept_ts = 0.0
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -1952,6 +2018,9 @@ def _approval_watcher_worker(
 
             if result.get("success"):
                 _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
+                last_accept_ts = time.time()
+                saw_input_required = True
+                idle_clear_hits = 0
                 clicked_text = str(result.get("clicked_text", "")).strip()
                 followup_text = str(result.get("followup_text", "")).strip()
                 followup_clicked = bool(result.get("followup_clicked"))
@@ -1976,6 +2045,21 @@ def _approval_watcher_worker(
                 _APPROVAL_WATCHER_STATE["last_event"] = "Onay bekleniyor"
 
             ocr_blob = str(result.get("last_seen_text", "") or "").strip()
+            input_required_hit = bool(result.get("input_required_detected")) or _looks_like_input_required_text(ocr_blob)
+            busy_hit = bool(result.get("busy_detected")) or _looks_like_ide_busy_text(ocr_blob)
+
+            if input_required_hit:
+                saw_input_required = True
+                idle_clear_hits = 0
+            elif busy_hit:
+                idle_clear_hits = 0
+            else:
+                enough_idle_delay = (time.time() - last_accept_ts) >= max(18.0, interval * 6.0)
+                if saw_input_required and enough_idle_delay and len(ocr_blob) >= 18:
+                    idle_clear_hits += 1
+                else:
+                    idle_clear_hits = 0
+
             if _looks_like_ide_completion_text(ocr_blob):
                 _APPROVAL_WATCHER_STATE["completion_hits"] = int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)) + 1
             else:
@@ -1985,12 +2069,19 @@ def _approval_watcher_worker(
             completion_prompt_sent = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
             notify_on_completion = bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True))
             auto_stop_on_completion = bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False))
+            heuristic_completion = bool(saw_input_required and idle_clear_hits >= 3 and not input_required_hit and not busy_hit)
+            completion_detected_now = completion_hits >= 2 or heuristic_completion
 
-            if completion_hits >= 2 and not completion_prompt_sent:
+            if completion_detected_now and not completion_prompt_sent:
+                saw_input_required = False
+                idle_clear_hits = 0
                 _APPROVAL_WATCHER_STATE["completion_detected"] = True
                 _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
                 _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
-                _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
+                if heuristic_completion and completion_hits < 2:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor (durum sezgisi)."
+                else:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
                 if notify_on_completion:
                     send_completion_prompt = True
                     notification_text = (

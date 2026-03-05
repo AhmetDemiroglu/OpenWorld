@@ -12,7 +12,7 @@ import shutil
 import socket
 import subprocess
 import uuid
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, parse_qs, unquote, urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple, Optional
@@ -1048,6 +1048,18 @@ def _parse_rss_date(date_str: str) -> Optional[datetime]:
     return None
 
 
+def _strip_html_to_text(raw: str) -> str:
+    text = raw or ""
+    if not text:
+        return ""
+    text = re.sub(r"<script.*?>.*?</script>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<style.*?>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _parse_news_items_from_rss(xml_text: str, limit: int, max_age_hours: int = 48) -> List[Dict[str, Any]]:
     root = ET.fromstring(xml_text)
     parsed: List[Dict[str, Any]] = []
@@ -1066,12 +1078,85 @@ def _parse_news_items_from_rss(xml_text: str, limit: int, max_age_hours: int = 4
                 age = now - pub_dt
                 if age.total_seconds() > max_age_hours * 3600:
                     continue
+        title = it.findtext("title", default="")
+        source_node = it.find("source")
+        source_name = ""
+        source_url = ""
+        if source_node is not None:
+            source_name = (source_node.text or "").strip()
+            source_url = str(source_node.attrib.get("url", "") or "").strip()
+        if not source_name and " - " in title:
+            source_name = title.rsplit(" - ", 1)[-1].strip()
+        summary = _strip_html_to_text(it.findtext("description", default=""))[:700]
+
         parsed.append(
             {
-                "title": it.findtext("title", default=""),
+                "title": title,
                 "link": it.findtext("link", default=""),
                 "pub_date": pub_date_str,
-                "source": it.findtext("source", default=""),
+                "source": source_name,
+                "source_url": source_url,
+                "summary": summary,
+            }
+        )
+    return parsed
+
+
+def _decode_bing_news_link(link: str) -> str:
+    raw = (link or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if "bing.com/news/apiclick" not in lowered:
+        return raw
+    try:
+        parsed = urlsplit(raw)
+        query = parse_qs(parsed.query)
+        direct = (query.get("url", [""])[0] or "").strip()
+        if not direct:
+            return raw
+        decoded = unquote(direct)
+        if decoded.startswith("http://") or decoded.startswith("https://"):
+            return decoded
+    except Exception:
+        return raw
+    return raw
+
+
+def _parse_bing_news_items_from_rss(xml_text: str, limit: int, max_age_hours: int = 48) -> List[Dict[str, Any]]:
+    root = ET.fromstring(xml_text)
+    parsed: List[Dict[str, Any]] = []
+    now = datetime.utcnow()
+    for it in root.findall(".//item"):
+        if len(parsed) >= limit:
+            break
+        pub_date_str = it.findtext("pubDate", default="")
+        if pub_date_str and max_age_hours > 0:
+            pub_dt = _parse_rss_date(pub_date_str)
+            if pub_dt is not None:
+                if pub_dt.tzinfo is not None:
+                    pub_dt = pub_dt.replace(tzinfo=None)
+                age = now - pub_dt
+                if age.total_seconds() > max_age_hours * 3600:
+                    continue
+
+        title = (it.findtext("title", default="") or "").strip()
+        raw_link = (it.findtext("link", default="") or "").strip()
+        direct_link = _decode_bing_news_link(raw_link)
+        summary = _strip_html_to_text(it.findtext("description", default=""))[:700]
+
+        source = ""
+        if " - " in title:
+            source = title.rsplit(" - ", 1)[-1].strip()
+
+        parsed.append(
+            {
+                "title": title,
+                "link": direct_link or raw_link,
+                "pub_date": pub_date_str,
+                "source": source,
+                "source_url": "",
+                "summary": summary,
             }
         )
     return parsed
@@ -1087,10 +1172,14 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
     timed_query = f"{safe_query} when:2d"
     feed_urls = [
         f"https://news.google.com/rss/search?q={quote_plus(timed_query)}&hl=tr&gl=TR&ceid=TR:tr",
+        f"https://www.bing.com/news/search?q={quote_plus(safe_query)}&format=rss&mkt=tr-TR",
     ]
     if any(k in safe_query.lower() for k in ("dunya", "world", "iran", "abd", "savas", "war")):
         feed_urls.append(
             f"https://news.google.com/rss/search?q={quote_plus(timed_query)}&hl=en-US&gl=US&ceid=US:en"
+        )
+        feed_urls.append(
+            f"https://www.bing.com/news/search?q={quote_plus(safe_query)}&format=rss&mkt=en-US"
         )
 
     merged: List[Dict[str, Any]] = []
@@ -1102,7 +1191,11 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
             try:
                 resp = client.get(feed_url)
                 resp.raise_for_status()
-                for item in _parse_news_items_from_rss(resp.text, lim):
+                if "bing.com/news/search" in feed_url:
+                    parsed_items = _parse_bing_news_items_from_rss(resp.text, lim)
+                else:
+                    parsed_items = _parse_news_items_from_rss(resp.text, lim)
+                for item in parsed_items:
                     link = str(item.get("link", "")).strip()
                     key = link or str(item.get("title", "")).strip().lower()
                     if not key or key in seen_links:
@@ -1130,7 +1223,7 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
 
 def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
     _validate_web_url(url)
-    with httpx.Client(timeout=25, follow_redirects=True, headers={"Usergent": "OpenWorldBot/0.1"}) as client:
+    with httpx.Client(timeout=25, follow_redirects=True, headers={"User-Agent": "OpenWorldBot/0.1"}) as client:
         resp = client.get(url)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "").lower()
@@ -2381,7 +2474,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                     "properties": {
                         "topic": {"type": "string", "description": "Arastirilacak konu (detayli belirtin)"},
                         "report_style": {"type": "string", "enum": ["standard", "technical", "academic", "brief"]},
-                        "max_sources": {"type": "integer", "description": "Max kaynak sayisi (varsayilan: 10)"},
+                        "max_sources": {"type": "integer", "description": "Max kaynak sayisi (varsayilan: 24)"},
                         "out_path": {"type": "string", "description": "Cikti dosyasi yolu (opsiyonel)"}
                     },
                     "required": ["topic"]
@@ -4121,8 +4214,5 @@ def serialize_tool_result(result: Dict[str, Any]) -> str:
     if len(text) > _MAX_TOOL_RESULT_CHARS:
         text = text[:_MAX_TOOL_RESULT_CHARS] + '... [truncated]"}'
     return text
-
-
-
 
 
