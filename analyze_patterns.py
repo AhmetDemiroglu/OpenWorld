@@ -63,7 +63,7 @@ pattern_c383c692 = b'\xc3\x83\xc6\x92'
 count = data.count(pattern_c383c692)
 print(f"\nPattern C3 83 C6 92 appears {count} times")
 
-# This pattern in CP1252 is: Ãƒ
+# This pattern in CP1252 is: \u00c3
 as_chars = pattern_c383c692.decode('cp1252')
 print(f"As CP1252 chars: {as_chars!r}")
 

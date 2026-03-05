@@ -55,7 +55,7 @@ export function SplashScreen({
   }, [minimumDisplayTime, onComplete]);
 
   return (
-    <div className={`splash-screen ${isExiting ? 'splash-exit' : ''}`}>
+    <div className={`splash-screen ${isExiting  'splash-exit' : ''}`}>
       <div className="splash-content">
         <div className="splash-logo">
           <OpenWorldLogo size={120} />

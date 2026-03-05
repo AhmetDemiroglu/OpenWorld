@@ -40,11 +40,11 @@ from datetime import datetime
 
 
 def tool_analyze_code(path: str) -> Dict[str, Any]:
-    """Kod dosyasÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±nÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± analiz et."""
+    """Kod dosyasını analiz et."""
     target = _resolve_path(path)
     
     if not target.exists() or not target.is_file():
-        return {"error": "Dosya bulunamadÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "path": str(target)}
+        return {"error": "Dosya bulunamadı", "path": str(target)}
     
     try:
         content = target.read_text(encoding='utf-8', errors='ignore')
@@ -111,6 +111,6 @@ def tool_find_code_patterns(path: str, pattern: str, language: str = "") -> Dict
 
 
 # =============================================================================
-# OFÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°S/RAPOR ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
+# OFİS/RAPOR ARAÇLARI
 # =============================================================================
 

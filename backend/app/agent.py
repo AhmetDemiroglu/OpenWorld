@@ -37,7 +37,7 @@ from .policy import (
     user_explicitly_authorized_tool,
 )
 from .system_prompt import build_system_prompt
-from .tools.registry import execute_tool, get_relevant_tools, get_tool_specs, serialize_tool_result
+from .tools.registry import execute_tool, get_relevant_tools, get_tool_specs, get_tools_by_names, serialize_tool_result
 
 _MEDIA_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
@@ -71,7 +71,13 @@ class AgentService:
         self._vscode_extension_presence_cache: Dict[str, bool] = {}
         self._pending_watcher_confirmation: Dict[str, Dict[str, Any]] = {}
 
-    async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
+    async def run(
+        self,
+        session_id: str,
+        user_message: str,
+        tool_subset: Optional[List[str]] = None,
+        prompt_suffix: str = "",
+    ) -> Tuple[str, int, List[str], List[str]]:
         current_task = asyncio.current_task()
         emergency = await self._try_handle_emergency_stop(session_id, user_message, current_task)
         if emergency is not None:
@@ -100,7 +106,7 @@ class AgentService:
                 if current_task is not None:
                     self._session_running_tasks[session_id] = current_task
             return await asyncio.wait_for(
-                self._run_locked(session_id, user_message),
+                self._run_locked(session_id, user_message, tool_subset=tool_subset, prompt_suffix=prompt_suffix),
                 timeout=self._request_timeout_seconds(user_message),
             )
         except asyncio.TimeoutError:
@@ -307,10 +313,16 @@ class AgentService:
         
         return None
 
-    async def _run_locked(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
+    async def _run_locked(
+        self,
+        session_id: str,
+        user_message: str,
+        tool_subset: Optional[List[str]] = None,
+        prompt_suffix: str = "",
+    ) -> Tuple[str, int, List[str], List[str]]:
         messages = self.store.load(session_id)
         if not messages:
-            messages.append(ChatMessage(role="system", content=build_system_prompt()))
+            messages.append(ChatMessage(role="system", content=build_system_prompt(suffix=prompt_suffix)))
             # Inject long-term memory context on session initialization
             try:
                 from .vector_memory import memory_get_context
@@ -529,7 +541,12 @@ class AgentService:
 
         messages.append(ChatMessage(role="user", content=user_message))
 
-        relevant_tools = get_relevant_tools(user_message)
+        # Sub-ajan profili verilmişse sadece o subset'ten araç kullan;
+        # yoksa semantic router tüm 100+ araç içinden filtreler.
+        if tool_subset:
+            relevant_tools = get_tools_by_names(tool_subset)
+        else:
+            relevant_tools = get_relevant_tools(user_message)
         allowed_tool_names = self._extract_allowed_tool_names(relevant_tools)
         if not allowed_tool_names:
             allowed_tool_names = set(self._known_tool_names)
@@ -1408,17 +1425,17 @@ class AgentService:
         cleaned = cleaned.replace("\u00a0", " ").replace("\u200b", "")
 
         replacements = {
-            "â€™": "'",
-            "â€œ": '"',
-            "â€": '"',
-            "â€“": "-",
-            "â€”": "-",
-            "â€¦": "...",
+            "\u00e2\u20ac\u2122": "'",
+            "\u00e2\u20ac\u0153": '"',
+            "\u00e2\u20ac\u009d": '"',
+            "\u00e2\u20ac\u201c": "-",
+            "\u00e2\u20ac\u201d": "-",
+            "\u00e2\u20ac\u00a6": "...",
         }
         for bad, good in replacements.items():
             cleaned = cleaned.replace(bad, good)
 
-        if any(marker in cleaned for marker in ("Ã", "Å", "Ä", "â")):
+        if any(marker in cleaned for marker in ("\u00c3", "\u00c5", "\u00c4", "\u00e2")):
             try:
                 repaired = cleaned.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
                 if repaired:
@@ -2134,13 +2151,9 @@ class AgentService:
         user_message: str,
         notebook_resume: Optional[Tuple[str, Dict[str, Any]]],
     ) -> Tuple[str, List[str], List[str]]:
-        if not self._should_auto_kickoff_notebook(user_message, notebook_resume):
-            return "", [], []
-
-        tools_used: List[str] = []
-        goal = (user_message or "").strip()
-        if not goal:
-            return "", [], []
+        # Hardcoded auto-pilot is disabled to allow the LLM to use the
+        # new asynchronous `tool_research_async`.
+        return "", [], []
 
         try:
             notebook_name = self._suggest_notebook_name(goal)
@@ -2541,6 +2554,7 @@ class AgentService:
                 min_confidence=30.0,
                 lang="tur+eng",
                 allow_keyboard_fallback=bool(allow_keyboard_fallback),
+                profile="generic",
             )
         except Exception as exc:
             return {"error": str(exc)}
@@ -2630,10 +2644,18 @@ class AgentService:
             return "no"
         return ""
 
-    def _set_pending_watcher_confirmation(self, session_id: str) -> None:
+    @staticmethod
+    def _watcher_profile_for_target(target: str) -> str:
+        key = AgentService._normalize_text_for_match(target or "")
+        if key in {"claudecode", "codex", "kimicode"}:
+            return key
+        return "generic"
+
+    def _set_pending_watcher_confirmation(self, session_id: str, profile: str = "generic") -> None:
         self._pending_watcher_confirmation[session_id] = {
             "created_at": time.time(),
             "kind": "watcher_confirmation",
+            "profile": self._watcher_profile_for_target(profile),
         }
 
     def _try_handle_pending_watcher_confirmation(self, session_id: str, user_message: str) -> Tuple[str, List[str], bool]:
@@ -2649,7 +2671,8 @@ class AgentService:
 
         self._pending_watcher_confirmation.pop(session_id, None)
         if decision == "yes":
-            reply, tools = self._run_approval_watcher_action("start")
+            profile = str(pending.get("profile", "generic") or "generic")
+            reply, tools = self._run_approval_watcher_action("start", profile=profile)
             return reply, tools, True
 
         reply, tools = self._run_approval_watcher_action("stop")
@@ -2690,11 +2713,19 @@ class AgentService:
         action = self._extract_approval_watcher_action(user_message)
         if not action:
             return "", []
+        profile = "generic"
+        normalized = self._normalize_text_for_match(user_message)
+        if "claudecode" in normalized or "claude code" in normalized:
+            profile = "claudecode"
+        elif "codex" in normalized:
+            profile = "codex"
+        elif "kimicode" in normalized or "kimi code" in normalized:
+            profile = "kimicode"
+        return self._run_approval_watcher_action(action, profile=profile)
 
-        return self._run_approval_watcher_action(action)
-
-    def _run_approval_watcher_action(self, action: str) -> Tuple[str, List[str]]:
+    def _run_approval_watcher_action(self, action: str, profile: str = "generic") -> Tuple[str, List[str]]:
         action = (action or "").strip().lower() or "status"
+        profile = self._watcher_profile_for_target(profile)
 
         required_tools = {"start_approval_watcher", "stop_approval_watcher", "approval_watcher_status"}
         if not required_tools.issubset(self._known_tool_names):
@@ -2707,7 +2738,10 @@ class AgentService:
         }
         tool_name = tool_map.get(action, "approval_watcher_status")
         try:
-            result = execute_tool(tool_name, {})
+            params: Dict[str, Any] = {}
+            if action == "start":
+                params["profile"] = profile
+            result = execute_tool(tool_name, params)
         except Exception as exc:
             return f"Hata: onay izleyici islemi basarisiz: {exc}", [tool_name]
 
@@ -2726,8 +2760,13 @@ class AgentService:
             return "\n".join(lines), [tool_name]
 
         if action == "start":
+            profile_note = ""
+            if isinstance(result, dict):
+                active_profile = str(result.get("profile", profile)).strip() or profile
+                profile_note = f" Profil: {active_profile}."
             return (
-                "Onay izleyici acildi. VS Code acik oldugu surece onay pencerelerini otomatik takip edip kabul etmeye calisacagim.",
+                "Onay izleyici acildi. VS Code acik oldugu surece onay pencerelerini otomatik takip edip kabul etmeye calisacagim."
+                + profile_note,
                 [tool_name],
             )
         if action == "stop":
@@ -2838,9 +2877,10 @@ class AgentService:
             return f"Hata: {exc}", list(dict.fromkeys(tools_used))
 
         tools_used = list(dict.fromkeys(tools_used))
-        self._set_pending_watcher_confirmation(session_id)
+        watcher_profile = self._watcher_profile_for_target(target)
+        self._set_pending_watcher_confirmation(session_id, profile=watcher_profile)
         reply = f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi."
-        reply += "\nBu görevde IDE onaylarını otomatik izleyip onaylamamı ister misiniz? (evet/hayır)"
+        reply += "\nBu gorevde IDE onaylarini otomatik izleyip onaylamami ister misiniz (evet/hayir)"
         return (reply, tools_used)
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:

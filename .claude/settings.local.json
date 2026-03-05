@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(cd:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

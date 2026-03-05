@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 # Importance levels
 # ---------------------------------------------------------------------------
 
+CRITICAL = "CRITICAL"
+IMPORTANT = "IMPORTANT"
+NORMAL = "NORMAL"
+SPAM = "SPAM"
+
+_NOTIFY_LEVELS = {CRITICAL, IMPORTANT}
+
+
 def _get_secret(plain: str, encrypted: str) -> str:
     if plain:
         return plain

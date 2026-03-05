@@ -82,7 +82,7 @@ Write-Host "OK" -ForegroundColor Green
 Write-Host ""
 Write-Host "ADIM 8: GitHub'a force push..." -ForegroundColor Cyan
 Write-Host "(Bu adim varolan GitHub history'sini silecek!)" -ForegroundColor Red
-$Confirm = Read-Host "Devam etmek istiyor musunuz? (E/H)"
+$Confirm = Read-Host "Devam etmek istiyor musunuz (E/H)"
 
 if ($Confirm -eq "E" -or $Confirm -eq "e") {
     git push origin main --force

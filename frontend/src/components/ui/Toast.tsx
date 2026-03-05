@@ -40,7 +40,7 @@ interface ToastItemProps {
 
 function ToastItem({ notification, onDismiss }: ToastItemProps) {
   useEffect(() => {
-    const duration = notification.duration ?? 5000;
+    const duration = notification.duration  5000;
     const timer = setTimeout(onDismiss, duration);
     return () => clearTimeout(timer);
   }, [notification.duration, onDismiss]);

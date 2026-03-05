@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any, Dict, Iterable, Set
@@ -159,7 +159,7 @@ TOOL_INTENT_KEYWORDS: Dict[str, Set[str]] = {
 
 
 def contains_forbidden_financial_intent(text: str) -> bool:
-    """Finansal işlem niyeti içeriyor mu? Bağlam duyarlı kontrol.
+    """Finansal işlem niyeti içeriyor mu Bağlam duyarlı kontrol.
     
     - Sadece finansal TERİMLER değil, İŞLEM fiilleri engellenir
     - Araştırma/analiz/rapor bağlamlarına izin verilir

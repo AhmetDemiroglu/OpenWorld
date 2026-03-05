@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from .agent import AgentService
+from .agent_router import route as _route_agent
+from .agent_profiles import AGENT_PROFILES
 from .config import settings
 from .database import init_database, migrate_json_sessions, get_tool_stats
 from .memory import SessionStore
@@ -208,8 +210,18 @@ async def chat(req: ChatRequest) -> ChatResponse:
     messages_total.inc(role="user", source=req.source)
     
     try:
+        # Sub-ajan routing: mesaja göre odaklanmış tool subset seç
+        _profile_name = _route_agent(req.message)
+        _profile = AGENT_PROFILES.get(_profile_name) if _profile_name else None
+        _tool_subset = _profile["tools"] if _profile else None
+        _prompt_suffix = _profile.get("system_prompt_suffix", "") if _profile else ""
+        if _profile_name:
+            logger.info(f"Agent routed to profile: {_profile_name}", extra={"session_id": session_id})
+
         with timer(llm_request_duration, model=settings.ollama_model):
-            reply, steps, used_tools, media_files = await agent.run(session_id, req.message)
+            reply, steps, used_tools, media_files = await agent.run(
+                session_id, req.message, tool_subset=_tool_subset, prompt_suffix=_prompt_suffix
+            )
         
         # Track LLM metrics (estimated)
         prompt_tokens = len(req.message.split()) + 100  # Rough estimate

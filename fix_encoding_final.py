@@ -84,10 +84,10 @@ def apply_replacement_map(text):
     
     # Let's decode the specific patterns we see:
     # From the hex dump: C3 83 C6 92 C3 86 E2 80 99 ... -> should be Ü
-    # This is actually: Ã (C3 83) ƒ (C6 92) Æ (C3 86) ’ (E2 80 99) -> Ü
+    # This is actually: \u00c3 (C3 83) ƒ (C6 92) Æ (C3 86) ' (E2 80 99) -> Ü
     
     # Let me trace through: Ü in UTF-8 is C3 9C
-    # Interpreted as Latin-1: Ãœ
+    # Interpreted as Latin-1: Ü
     # Re-encoded to UTF-8: C3 83 C5 93
     # That's for double encoding
     
@@ -99,58 +99,58 @@ def apply_replacement_map(text):
         # These need to be applied in order from longest to shortest
         
         # For 'Ü' (U+00DC) - observed pattern
-        'ÃƒÆ\'Ã¢â‚¬Å"': 'Ü',
+        '\u00c3Æ\'\u00e2€\u00c5"': 'Ü',
         
         # For 'ç' (U+00E7) - observed pattern
-        'ÃƒÆ\'Ã¢â‚¬Â¡': 'ç',
+        '\u00c3Æ\'‡': 'ç',
         
         # For 'ş' (U+015F) - observed pattern  
-        'ÅŸ': 'ş',
-        'Ã…Å¸': 'ş',
+        '\u00c5Ÿ': 'ş',
+        '\u00c5Ÿ': 'ş',
         
         # For 'ğ' (U+011F)
-        'ÄŸ': 'ğ',
-        'Ã„Å¸': 'ğ',
+        '\u00c4Ÿ': 'ğ',
+        '\u00c4Ÿ': 'ğ',
         
         # For 'ı' (U+0131)
-        'Ä±': 'ı',
-        'Ã„Â±': 'ı',
+        'ı': 'ı',
+        'ı': 'ı',
         
         # For 'ö' (U+00F6)
-        'Ã¶': 'ö',
-        'ÃƒÂ¶': 'ö',
+        'ö': 'ö',
+        'ö': 'ö',
         
         # For 'ü' (U+00FC)
-        'Ã¼': 'ü',
-        'ÃƒÂ¼': 'ü',
+        'ü': 'ü',
+        'ü': 'ü',
         
         # For 'Ç' (U+00C7)
-        'Ã‡': 'Ç',
-        'Ãƒâ€¡': 'Ç',
+        'Ç': 'Ç',
+        'Ç': 'Ç',
         
         # For 'Ğ' (U+011E)
-        'Äž': 'Ğ',
-        'Ã„Å¾': 'Ğ',
+        '\u00c4ž': 'Ğ',
+        '\u00c4ž': 'Ğ',
         
         # For 'İ' (U+0130)
-        'Ä°': 'İ',
-        'Ã„Â°': 'İ',
+        'İ': 'İ',
+        'İ': 'İ',
         
         # For 'Ö' (U+00D6)
-        'Ã–': 'Ö',
-        'Ãƒâ€“': 'Ö',
+        'Ö': 'Ö',
+        'Ö': 'Ö',
         
         # For 'Ş' (U+015E)
-        'Åž': 'Ş',
-        'Ã…Å¾': 'Ş',
+        '\u00c5ž': 'Ş',
+        '\u00c5ž': 'Ş',
         
         # For 'Ü' (U+00DC)
-        'Ãœ': 'Ü',
-        'ÃƒÅ“': 'Ü',
+        'Ü': 'Ü',
+        'Ü': 'Ü',
         
         # Cleanup patterns
-        'ÃƒÆ\'': '',  # Remove stray patterns
-        'Â': '',  # Remove spurious Â
+        '\u00c3Æ\'': '',  # Remove stray patterns
+        '': '',  # Remove spurious 
     }
     
     # Sort by length (longest first) to avoid partial replacements

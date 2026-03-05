@@ -21,30 +21,30 @@ All three files are now valid UTF-8 encoded:
 ### Remaining Issues
 - registry.py: ~939 remaining corruption indicators (complex multi-byte patterns)
 - The most severe corruption was on lines with complex patterns like:
-  - `SÃƒÆ'Ã†'Ãƒ...PER` which should be `SÜPER`
-  - `ARAÃƒ...LARI` which should be `ARAÇLARI`
+  - `S\u00c3Æ'Æ'\u00c3...PER` which should be `SÜPER`
+  - `ARA\u00c3...LARI` which should be `ARAÇLARI`
 
 ## What Was Fixed
 
 ### Common Mojibake Patterns Replaced:
-- `Ã§` → `ç`
-- `Ã¶` → `ö`
-- `Ã¼` → `ü`
-- `ÄŸ` → `ğ`
-- `Ä±` → `ı`
-- `ÅŸ` → `ş`
-- `Ã‡` → `Ç`
-- `Äž` → `Ğ`
-- `Ä°` → `İ`
-- `Ã–` → `Ö`
-- `Åž` → `Ş`
-- `Ãœ` → `Ü`
-- `â€œ` → `"`
-- `â€` → `"`
-- `â€™` → `'`
-- `â€¦` → `…`
-- `â€“` → `–`
-- `â€”` → `—`
+- `ç` → `ç`
+- `ö` → `ö`
+- `ü` → `ü`
+- `\u00c4Ÿ` → `ğ`
+- `ı` → `ı`
+- `\u00c5Ÿ` → `ş`
+- `Ç` → `Ç`
+- `\u00c4ž` → `Ğ`
+- `İ` → `İ`
+- `Ö` → `Ö`
+- `\u00c5ž` → `Ş`
+- `Ü` → `Ü`
+- `"` → `"`
+- `\u00e2€` → `"`
+- `'` → `'`
+- `…` → `…`
+- `–` → `–`
+- `—` → `—`
 
 ### Complex Multi-Byte Patterns Fixed:
 - Multiple patterns for İ, Ş, ş, ı, ç characters

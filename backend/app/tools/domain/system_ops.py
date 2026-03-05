@@ -70,7 +70,7 @@ def tool_get_system_info() -> Dict[str, Any]:
         return {"error": str(e)}
 
 def tool_list_processes(filter_name: str = "", limit: int = 20) -> Dict[str, Any]:
-    """ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸an process'leri listele."""
+    """Çalışan process'leri listele."""
     try:
         processes = []
         for proc in psutil.process_iter(['pid', 'name', 'status', 'cpu_percent', 'memory_percent', 'create_time']):
@@ -93,7 +93,7 @@ def tool_list_processes(filter_name: str = "", limit: int = 20) -> Dict[str, Any
         return {"error": str(e)}
 
 def tool_kill_process(pid: int, confirm: bool = False) -> Dict[str, Any]:
-    """Process sonlandÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r."""
+    """Process sonlandır."""
     if not confirm:
         return {"error": "confirm=true gerekli", "pid": pid}
     
@@ -107,15 +107,15 @@ def tool_kill_process(pid: int, confirm: bool = False) -> Dict[str, Any]:
 
 
 # =============================================================================
-# GELÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚ÂMÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â°ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â SHELL ARACI
+# GELİŞMİŞ SHELL ARACI
 # =============================================================================
 
 def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60) -> Dict[str, Any]:
-    """Komut ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§alÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±r - geliÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸miÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ shell eriÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸imi."""
+    """Komut çalıştır - gelişmiş shell erişimi."""
     if not settings.enable_shell_tool:
-        return {"error": "Shell tool devre dÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±. ENABLE_SHELL_TOOL=true ile etkinleÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸tirin."}
+        return {"error": "Shell tool devre dışı. ENABLE_SHELL_TOOL=true ile etkinleştirin."}
     
-    # Finansal komutlarÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â± engelle
+    # Finansal komutları engelle
     forbidden_patterns = [
         'payment', 'purchase', 'credit card', 'bank transfer',
         'wire transfer', 'crypto', 'bitcoin', 'wallet'
@@ -124,7 +124,7 @@ def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60)
     cmd_lower = command.lower()
     for pattern in forbidden_patterns:
         if pattern in cmd_lower:
-            return {"error": f"Finansal iÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸lem iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§eren komut engellendi: {pattern}"}
+            return {"error": f"Finansal işlem içeren komut engellendi: {pattern}"}
     
     try:
         cwd = _resolve_path(working_dir) if working_dir else Path.home()
@@ -151,17 +151,17 @@ def tool_execute_command(command: str, working_dir: str = "", timeout: int = 60)
             "stderr": result.stderr[:5000] if result.stderr else ""
         }
     except subprocess.TimeoutExpired:
-        return {"error": "Komut zaman aÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€¦Ã‚Â¸ÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±mÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±na uÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸radÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â±", "command": command}
+        return {"error": "Komut zaman aşımına uğradı", "command": command}
     except Exception as e:
         return {"error": str(e), "command": command}
 
 
 # =============================================================================
-# AÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LARI
+# AĞ ARAÇLARI
 # =============================================================================
 
 def tool_network_info() -> Dict[str, Any]:
-    """AÃƒÆ’Ã¢â‚¬ÂÃƒâ€¦Ã‚Â¸ bilgisi al."""
+    """Ag bilgisi al."""
     try:
         interfaces = {}
         for name, addrs in psutil.net_if_addrs().items():
@@ -203,6 +203,5 @@ def tool_ping_host(host: str, count: int = 4) -> Dict[str, Any]:
 
 
 # =============================================================================
-# ESKÃƒÆ’Ã¢â‚¬ÂÃƒâ€šÃ‚Â° ARAÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¡LAR (Geriye uyumluluk iÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§in)
+# ESKİ ARAÇLAR (Geriye uyumluluk için)
 # =============================================================================
-

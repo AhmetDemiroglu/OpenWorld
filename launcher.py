@@ -576,7 +576,7 @@ class LauncherApp:
         self._banner_frame = tk.Frame(sf, bg="#1e3a5f")
         self._banner_frame.pack(fill="x", padx=14, pady=(8, 2))
         tk.Label(
-            self._banner_frame, text="\u0130lk kez mi kullan\u0131yorsunuz? A\u015fa\u011f\u0131daki Yard\u0131m butonuna t\u0131klay\u0131n.",
+            self._banner_frame, text="\u0130lk kez mi kullan\u0131yorsunuz A\u015fa\u011f\u0131daki Yard\u0131m butonuna t\u0131klay\u0131n.",
             fg="#93c5fd", bg="#1e3a5f", font=("Segoe UI", 9), anchor="w",
         ).pack(side="left", padx=8, pady=6)
         tk.Button(
@@ -957,7 +957,7 @@ class LauncherApp:
         cmd = (
             "$procs = Get-CimInstance Win32_Process | Where-Object { "
             "$cl = ($_.CommandLine | Out-String); "
-            "$isOpenWorldTool = ($cl -like '*app.main:app*' -or $cl -like '*app.telegram_bridge*'); "
+            "$isOpenWorldTool = ($cl -like '*app.main_v2:app*' -or $cl -like '*app.main:app*' -or $cl -like '*app.telegram_bridge*'); "
             "$isOurRuntime = ($cl -like '*OpenWorld*' -or $cl -like '*OpenWorldRuntime*'); "
             "$isOpenWorldTool -and $isOurRuntime }; "
             "foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }"
@@ -1483,7 +1483,7 @@ except Exception as e:
             backend_out = open(LOG_DIR / "backend.out.log", "w", encoding="utf-8")
             backend_err = open(LOG_DIR / "backend.err.log", "w", encoding="utf-8")
             self.backend_proc = subprocess.Popen(
-                [str(VENV_PYTHON), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+                [str(VENV_PYTHON), "-m", "uvicorn", "app.main_v2:app", "--host", "127.0.0.1", "--port", "8000"],
                 cwd=str(BACKEND_DIR),
                 env=runtime_env,
                 stdout=backend_out,

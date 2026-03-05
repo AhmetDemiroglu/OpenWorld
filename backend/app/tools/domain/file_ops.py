@@ -40,14 +40,14 @@ from datetime import datetime
 
 
 def tool_list_directory(path: str = ".", recursive: bool = False, pattern: str = "") -> Dict[str, Any]:
-    """Dizin iÃƒÆ’Ã†'Ãƒ"šşeriİƒ…şini listele - tÃƒÆ’Ã†'Ãƒ"šşm disk eriÃƒÆ’Ã¢â‚¬¦Ãƒ…şimi."""
+    """Dizin icerigini listele - tum disk erisimi."""
     target = _resolve_path(path)
     
     if not target.exists():
-        return {"error": f"Dizin bulunamadİƒ"šı: {path}", "path": str(target)}
+        return {"error": f"Dizin bulunamadi: {path}", "path": str(target)}
     
     if not target.is_dir():
-        return {"error": f"Bu bir dizin deİƒ…şil: {path}", "path": str(target)}
+        return {"error": f"Bu bir dizin degil: {path}", "path": str(target)}
     
     try:
         items = []
@@ -95,14 +95,14 @@ def tool_list_directory(path: str = ".", recursive: bool = False, pattern: str =
         return {"error": str(e), "path": str(target)}
 
 def tool_read_file(path: str, offset: int = 0, limit: int = 50000) -> Dict[str, Any]:
-    """Dosya oku - tÃƒÆ’Ã†'Ãƒ"šşm disk eriÃƒÆ’Ã¢â‚¬¦Ãƒ…şimi (metin ve binary)."""
+    """Dosya oku - tum disk erisimi (metin ve binary)."""
     target = _resolve_path(path)
     
     if not target.exists():
-        return {"error": f"Dosya bulunamadİƒ"šı: {path}", "path": str(target)}
+        return {"error": f"Dosya bulunamadi: {path}", "path": str(target)}
     
     if not target.is_file():
-        return {"error": f"Bu bir dosya deİƒ…şil: {path}", "path": str(target)}
+        return {"error": f"Bu bir dosya degil: {path}", "path": str(target)}
     
     try:
         # Text file detection
@@ -142,11 +142,11 @@ def tool_read_file(path: str, offset: int = 0, limit: int = 50000) -> Dict[str, 
         return {"error": str(e), "path": str(target)}
 
 def tool_write_file(path: str, content: str, append: bool = False) -> Dict[str, Any]:
-    """Dosya yaz - tÃƒÆ’Ã†'Ãƒ"šşm disk eriÃƒÆ’Ã¢â‚¬¦Ãƒ…şimi."""
+    """Dosya yaz - tum disk erisimi."""
     target = _resolve_path(path)
     
     if not _is_safe_path(target):
-        return {"error": "Kritik sistem dosyasİƒ"šı - yazma engellendi", "path": str(target)}
+        return {"error": "Kritik sistem dosyasi - yazma engellendi", "path": str(target)}
     
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +171,7 @@ def tool_delete_file(path: str, confirm: bool = False) -> Dict[str, Any]:
     target = _resolve_path(path)
     
     if not _is_safe_path(target):
-        return {"error": "Kritik sistem dosyasİƒ"šı - silme engellendi", "path": str(target)}
+        return {"error": "Kritik sistem dosyasi - silme engellendi", "path": str(target)}
     
     try:
         if target.is_file():
@@ -181,7 +181,7 @@ def tool_delete_file(path: str, confirm: bool = False) -> Dict[str, Any]:
             shutil.rmtree(target)
             return {"deleted": str(target), "type": "directory"}
         else:
-            return {"error": "Dosya bulunamadİƒ"šı", "path": str(target)}
+            return {"error": "Dosya bulunamadi", "path": str(target)}
     except Exception as e:
         return {"error": str(e), "path": str(target)}
 
@@ -203,12 +203,12 @@ def tool_copy_file(source: str, destination: str) -> Dict[str, Any]:
         return {"error": str(e), "source": source, "destination": destination}
 
 def tool_move_file(source: str, destination: str) -> Dict[str, Any]:
-    """Dosya taÃƒÆ’Ã¢â‚¬¦Ãƒ…şİƒ"šı."""
+    """Dosya tasi."""
     src = _resolve_path(source)
     dst = _resolve_path(destination)
     
     if not _is_safe_path(src) or not _is_safe_path(dst):
-        return {"error": "Kritik sistem dosyasİƒ"šı - taÃƒÆ’Ã¢â‚¬¦Ãƒ…şİƒ"šıma engellendi"}
+        return {"error": "Kritik sistem dosyasi - tasima engellendi"}
     
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +218,7 @@ def tool_move_file(source: str, destination: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 def tool_search_files(path: str, pattern: str, file_type: str = "") -> Dict[str, Any]:
-    """Dosya ara - tÃƒÆ’Ã†'Ãƒ"šşm diskte."""
+    """Dosya ara - tum diskte."""
     target = _resolve_path(path)
     results = []
     
@@ -263,6 +263,6 @@ def tool_search_files(path: str, pattern: str, file_type: str = "") -> Dict[str,
 
 
 # =============================================================================
-# KOD ANALÃƒÆ’ŞZ ARAÃƒÆ’Ã†'Ãƒ¢Ã¢"š¬Ã‚¡LARI
+# KOD ANALIZ ARACLARI
 # =============================================================================
 

@@ -62,11 +62,11 @@ export function ChatMessage({ role, content, timestamp, toolsUsed }) {
   return (
     <div className={`message ${role}`}>
       <div className="message-header">
-        <span className="message-role">{isUser ? "Sen" : "OpenWorld"}</span>
+        <span className="message-role">{isUser  "Sen" : "OpenWorld"}</span>
         {timestamp && <span className="message-time">{timestamp}</span>}
       </div>
       <div className="message-body">
-        {isUser ? (
+        {isUser  (
           <p>{content}</p>
         ) : (
           <ReactMarkdown

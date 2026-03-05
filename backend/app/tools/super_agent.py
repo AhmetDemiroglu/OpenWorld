@@ -43,38 +43,41 @@ _USER_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\[^\\]+\\desktop(?:
 _PUBLIC_DESKTOP_RE = re.compile(r"^(?P<drive>[a-zA-Z]):\\users\\public\\desktop(?:\\(?P<tail>.*))?$", re.IGNORECASE)
 
 _TR_TRANSLATION = str.maketrans({
-    "ç": "c",
-    "ğ": "g",
-    "ı": "i",
-    "ö": "o",
-    "ş": "s",
-    "ü": "u",
-    "Ç": "c",
-    "Ğ": "g",
-    "İ": "i",
-    "Ö": "o",
-    "Ş": "s",
-    "Ü": "u",
+    "\u00e7": "c",
+    "\u011f": "g",
+    "\u0131": "i",
+    "\u00f6": "o",
+    "\u015f": "s",
+    "\u00fc": "u",
+    "\u00c7": "c",
+    "\u011e": "g",
+    "\u0130": "i",
+    "\u00d6": "o",
+    "\u015e": "s",
+    "\u00dc": "u",
 })
 
-_DEFAULT_APPROVAL_CONTEXT_TERMS = {
+_BASE_APPROVAL_CONTEXT_TERMS = {
     "permission", "permissions", "approve", "allow", "authorize", "access",
     "trust", "secure", "safety", "agent", "extension", "run", "execute",
-    "debug", "breakpoint", "continue",
-    "onay", "izin", "guven", "yetki", "erisim", "calistir", "surdur",
+    "debug", "breakpoint", "continue", "input", "session",
+    "onay", "izin", "guven", "yetki", "erisim", "calistir", "surdur", "oturum",
 }
 
-_DEFAULT_APPROVAL_BUTTON_TERMS = {
+_BASE_APPROVAL_BUTTON_TERMS = {
     "approve", "allow", "accept", "authorize", "grant", "continue", "yes", "ok",
     "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
     "run", "proceed", "expand",
 }
 
-_DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
+_BASE_APPROVAL_BUTTON_TERMS_MULTI = {
     "allow access",
     "run anyway",
     "allow anyway",
     "yes continue",
+    "yes for this session",
+    "yes for this run",
+    "yes always",
     "accept all",
     "accept changes",
     "run without debugging",
@@ -85,7 +88,7 @@ _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI = {
     "onay ver",
 }
 
-_CONTEXT_FREE_ACTION_TERMS = {
+_BASE_CONTEXT_FREE_ACTION_TERMS = {
     "continue",
     "run",
     "accept",
@@ -96,7 +99,7 @@ _CONTEXT_FREE_ACTION_TERMS = {
     "kabul et",
     "onayla",
 }
-_CONTEXT_FREE_HINT_TERMS = {
+_BASE_CONTEXT_FREE_HINT_TERMS = {
     "run",
     "debug",
     "breakpoint",
@@ -111,11 +114,52 @@ _CONTEXT_FREE_HINT_TERMS = {
     "onay",
     "izin",
 }
+
+_APPROVAL_NEGATIVE_TERMS = {
+    "no", "reject", "cancel", "deny", "decline", "dismiss", "block", "skip", "stop",
+    "hayir", "reddet", "iptal", "engelle", "vazgec", "dur",
+}
+
+_APPROVAL_NEGATIVE_TERMS_MULTI = {
+    "no for this session",
+    "no for this run",
+    "do not allow",
+    "dont allow",
+    "do not run",
+    "dont run",
+    "reject all",
+    "cancel run",
+}
+
+_APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
+    "generic": {},
+    "claudecode": {
+        "context": {"claude", "bash", "allow this bash command", "requires input", "step requires input"},
+        "button_single": {"yes"},
+        "button_multi": {"yes for this session", "yes for this run", "allow this bash command"},
+        "context_hints": {"bash", "command", "allow", "yes"},
+    },
+    "codex": {
+        "context": {"codex", "requires input", "run command"},
+        "button_multi": {"run alt j"},
+        "context_hints": {"codex", "run", "accept"},
+    },
+    "kimicode": {
+        "context": {"kimi", "requires input", "run command"},
+        "context_hints": {"kimi", "run", "continue"},
+    },
+}
 _RUN_PROMPT_CONTEXT_TERMS = {
     "1 step requires input",
     "step requires input",
     "requires input",
     "run command",
+}
+
+_STRICT_APPROVAL_CONTEXT_TERMS = {
+    "permission", "permissions", "approve", "allow", "authorize", "access",
+    "requires input", "step requires input", "allow this bash command",
+    "onay", "izin", "yetki", "erisim",
 }
 
 _IDE_COMPLETION_TERMS = (
@@ -139,6 +183,7 @@ _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
     "accepted": 0,
     "last_event": "",
     "window_pattern": "Visual Studio Code|Code - Insiders",
+    "profile": "generic",
     "interval": 1.0,
     "notify_on_completion": True,
     "auto_stop_on_completion": False,
@@ -152,6 +197,31 @@ _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
 
 _TESSERACT_INSTALL_URL = "https://github.com/UB-Mannheim/tesseract/wiki"
 _TESSERACT_INSTALL_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+
+def _approval_watcher_status_snapshot_unlocked() -> Dict[str, Any]:
+    thread = _APPROVAL_WATCHER_STATE.get("thread")
+    running = bool(_APPROVAL_WATCHER_STATE.get("running"))
+    alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())
+    return {
+        "running": running and alive,
+        "started_at": _APPROVAL_WATCHER_STATE.get("started_at", ""),
+        "checks": int(_APPROVAL_WATCHER_STATE.get("checks", 0)),
+        "accepted": int(_APPROVAL_WATCHER_STATE.get("accepted", 0)),
+        "last_event": _APPROVAL_WATCHER_STATE.get("last_event", ""),
+        "last_error": _APPROVAL_WATCHER_STATE.get("last_error", ""),
+        "window_pattern": _APPROVAL_WATCHER_STATE.get("window_pattern", ""),
+        "profile": _APPROVAL_WATCHER_STATE.get("profile", "generic"),
+        "interval": _APPROVAL_WATCHER_STATE.get("interval", 1.0),
+        "notify_on_completion": bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True)),
+        "auto_stop_on_completion": bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False)),
+        "completion_detected": bool(_APPROVAL_WATCHER_STATE.get("completion_detected", False)),
+        "completion_prompt_sent": bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent", False)),
+        "completion_hits": int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
+        "last_completion_text": _APPROVAL_WATCHER_STATE.get("last_completion_text", ""),
+        "last_notification_at": _APPROVAL_WATCHER_STATE.get("last_notification_at", ""),
+        "notification_error": _APPROVAL_WATCHER_STATE.get("notification_error", ""),
+    }
 
 
 def _map_desktop_tail_to_workspace(tail: str) -> Optional[Path]:
@@ -752,7 +822,7 @@ def tool_eject_usb_drive(drive_letter: str) -> Dict[str, Any]:
 
 
 # =============================================================================
-# GELIÅMIÅ OTOMASYON
+# GELIŞMIŞ OTOMASYON
 # =============================================================================
 
 def tool_mouse_position() -> Dict[str, Any]:
@@ -804,14 +874,14 @@ def tool_hotkey(*keys: str, keys_list: Optional[List[str]] = None) -> Dict[str, 
     """Klavye kisayolu calistir.
     
     Args:
-        *keys: Pozisyonel tuş argümanlari (ornegin: "ctrl", "c")
-        keys_list: Alternatif olarak tuş listesi (ornegin: ["ctrl", "c"])
+        *keys: Pozisyonel tus argumanlari (ornegin: "ctrl", "c")
+        keys_list: Alternatif olarak tus listesi (ornegin: ["ctrl", "c"])
     """
     try:
         # Eger keys_list verilmisse onu kullan, yoksa *keys'i kullan
         key_sequence = keys_list if keys_list else list(keys)
         if not key_sequence:
-            return {"error": "En az bir tuş belirtilmeli. Ornek: hotkey('ctrl', 'c') veya hotkey(keys_list=['ctrl', 'c'])"}
+            return {"error": "En az bir tus belirtilmeli. Ornek: hotkey('ctrl', 'c') veya hotkey(keys_list=['ctrl', 'c'])"}
         
         pyautogui.hotkey(*key_sequence)
         return {"success": True, "keys": key_sequence}
@@ -1007,6 +1077,86 @@ def _compact_normalized(text: str) -> str:
     return re.sub(r"\s+", "", _normalize_for_ocr_match(text or ""))
 
 
+def _build_approval_profile_terms(profile: str) -> Dict[str, set[str]]:
+    key = _normalize_for_ocr_match(profile or "generic") or "generic"
+    if key not in _APPROVAL_PROFILE_OVERRIDES:
+        key = "generic"
+    override = _APPROVAL_PROFILE_OVERRIDES.get(key, {})
+
+    context_terms = set(_BASE_APPROVAL_CONTEXT_TERMS)
+    button_single = set(_BASE_APPROVAL_BUTTON_TERMS)
+    button_multi = set(_BASE_APPROVAL_BUTTON_TERMS_MULTI)
+    context_actions = set(_BASE_CONTEXT_FREE_ACTION_TERMS)
+    context_hints = set(_BASE_CONTEXT_FREE_HINT_TERMS)
+
+    context_terms.update(override.get("context", set()))
+    button_single.update(override.get("button_single", set()))
+    button_multi.update(override.get("button_multi", set()))
+    context_actions.update(override.get("context_actions", set()))
+    context_hints.update(override.get("context_hints", set()))
+
+    return {
+        "profile": {key},
+        "context_terms": {_normalize_for_ocr_match(x) for x in context_terms if x},
+        "button_single": {_normalize_for_ocr_match(x) for x in button_single if x},
+        "button_multi": {_normalize_for_ocr_match(x) for x in button_multi if x},
+        "context_actions": {_normalize_for_ocr_match(x) for x in context_actions if x},
+        "context_hints": {_normalize_for_ocr_match(x) for x in context_hints if x},
+        "negative_single": {_normalize_for_ocr_match(x) for x in _APPROVAL_NEGATIVE_TERMS if x},
+        "negative_multi": {_normalize_for_ocr_match(x) for x in _APPROVAL_NEGATIVE_TERMS_MULTI if x},
+    }
+
+
+def _is_negative_decision(
+    text: str,
+    negative_single: set[str],
+    negative_multi: set[str],
+    negative_compact: set[str],
+) -> bool:
+    normalized = _normalize_for_ocr_match(text or "")
+    if not normalized:
+        return False
+    if normalized in negative_single or normalized in negative_multi:
+        return True
+    compact = _compact_normalized(normalized)
+    if compact in negative_compact:
+        return True
+    if compact.startswith(("reject", "cancel", "deny", "decline", "dismiss", "reddet", "iptal", "hayir")):
+        return True
+    return False
+
+
+def _score_approval_candidate(
+    candidate: Dict[str, Any],
+    *,
+    has_context: bool,
+    hint_hit: bool,
+    run_prompt_context_hit: bool,
+    button_terms_multi: set[str],
+    button_terms_multi_compact: set[str],
+) -> float:
+    token = _normalize_for_ocr_match(str(candidate.get("norm", "")))
+    compact = _compact_normalized(token)
+    conf = float(candidate.get("conf", 0.0))
+    score = conf
+    if has_context:
+        score += 14.0
+    if hint_hit:
+        score += 8.0
+    if run_prompt_context_hit and ("run" in token or compact.startswith("run")):
+        score += 28.0
+    if token in button_terms_multi or compact in button_terms_multi_compact:
+        score += 22.0
+    if "yes" in token or token.startswith("allow") or token.startswith("accept"):
+        score += 16.0
+    if token.startswith("run") or "continue" in token:
+        score += 12.0
+    # Buttons are usually lower-right in modal dialogs.
+    score += float(candidate.get("top", 0)) * 0.0012
+    score += float(candidate.get("left", 0)) * 0.0008
+    return score
+
+
 def _is_button_like_token(
     token: str,
     button_terms_single: set[str],
@@ -1200,6 +1350,7 @@ def tool_wait_and_accept_approval(
     min_confidence: float = 30.0,
     lang: str = "tur+eng",
     allow_keyboard_fallback: bool = False,
+    profile: str = "generic",
 ) -> Dict[str, Any]:
     """Bekleyen IDE onay penceresini OCR ile bulup kabul etmeye calis."""
     resolved_tesseract_cmd = ""
@@ -1265,14 +1416,20 @@ def tool_wait_and_accept_approval(
     interval = max(0.25, min(float(interval), 3.0))
     min_confidence = max(0.0, min(float(min_confidence), 100.0))
 
-    context_terms = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_CONTEXT_TERMS}
-    button_terms_single = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS}
-    button_terms_multi = {_normalize_for_ocr_match(x) for x in _DEFAULT_APPROVAL_BUTTON_TERMS_MULTI}
-    context_free_action_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_ACTION_TERMS}
-    context_free_hint_terms = {_normalize_for_ocr_match(x) for x in _CONTEXT_FREE_HINT_TERMS}
+    profile_terms = _build_approval_profile_terms(profile)
+    active_profile = next(iter(profile_terms.get("profile", {"generic"})))
+    context_terms = set(profile_terms.get("context_terms", set()))
+    button_terms_single = set(profile_terms.get("button_single", set()))
+    button_terms_multi = set(profile_terms.get("button_multi", set()))
+    context_free_action_terms = set(profile_terms.get("context_actions", set()))
+    context_free_hint_terms = set(profile_terms.get("context_hints", set()))
+    negative_terms_single = set(profile_terms.get("negative_single", set()))
+    negative_terms_multi = set(profile_terms.get("negative_multi", set()))
     run_prompt_context_terms = {_normalize_for_ocr_match(x) for x in _RUN_PROMPT_CONTEXT_TERMS}
+    strict_context_terms = {_normalize_for_ocr_match(x) for x in _STRICT_APPROVAL_CONTEXT_TERMS}
     button_terms_multi_compact = {_compact_normalized(x) for x in button_terms_multi}
     button_terms_compact = {_compact_normalized(x) for x in (button_terms_single | context_free_action_terms | button_terms_multi)}
+    negative_terms_compact = {_compact_normalized(x) for x in (negative_terms_single | negative_terms_multi)}
     button_hint_confidence = max(18.0, min_confidence - 15.0)
 
     end_time = time.time() + timeout
@@ -1364,6 +1521,8 @@ def tool_wait_and_accept_approval(
         blob = " ".join(blob_parts)
         last_blob = blob[:500]
         has_context = any(term in blob for term in context_terms)
+        has_strict_context = any(term in blob for term in strict_context_terms)
+        run_prompt_context_hit = any(term in blob for term in run_prompt_context_terms)
         if not words:
             time.sleep(interval)
             continue
@@ -1371,6 +1530,13 @@ def tool_wait_and_accept_approval(
         candidates: List[Dict[str, Any]] = []
         for i, current in enumerate(words):
             token = current["norm"]
+            if _is_negative_decision(
+                token,
+                negative_single=negative_terms_single,
+                negative_multi=negative_terms_multi,
+                negative_compact=negative_terms_compact,
+            ):
+                continue
             if _is_button_like_token(
                 token,
                 button_terms_single=button_terms_single,
@@ -1381,6 +1547,13 @@ def tool_wait_and_accept_approval(
 
             if i + 1 < len(words):
                 pair = f"{token} {words[i + 1]['norm']}"
+                if _is_negative_decision(
+                    pair,
+                    negative_single=negative_terms_single,
+                    negative_multi=negative_terms_multi,
+                    negative_compact=negative_terms_compact,
+                ):
+                    continue
                 if _is_button_like_phrase(
                     pair,
                     button_terms_multi=button_terms_multi,
@@ -1403,22 +1576,86 @@ def tool_wait_and_accept_approval(
                         }
                     )
 
-        should_click = bool(has_context and candidates)
+            if i + 2 < len(words):
+                phrase3 = f"{token} {words[i + 1]['norm']} {words[i + 2]['norm']}"
+                if _is_negative_decision(
+                    phrase3,
+                    negative_single=negative_terms_single,
+                    negative_multi=negative_terms_multi,
+                    negative_compact=negative_terms_compact,
+                ):
+                    continue
+                if _is_button_like_phrase(
+                    phrase3,
+                    button_terms_multi=button_terms_multi,
+                    button_terms_multi_compact=button_terms_multi_compact,
+                    button_terms_compact=button_terms_compact,
+                ):
+                    left = min(current["left"], words[i + 1]["left"], words[i + 2]["left"])
+                    top = min(current["top"], words[i + 1]["top"], words[i + 2]["top"])
+                    right = max(
+                        current["left"] + current["width"],
+                        words[i + 1]["left"] + words[i + 1]["width"],
+                        words[i + 2]["left"] + words[i + 2]["width"],
+                    )
+                    bottom = max(
+                        current["top"] + current["height"],
+                        words[i + 1]["top"] + words[i + 1]["height"],
+                        words[i + 2]["top"] + words[i + 2]["height"],
+                    )
+                    candidates.append(
+                        {
+                            "norm": phrase3,
+                            "raw": f"{current['raw']} {words[i + 1]['raw']} {words[i + 2]['raw']}",
+                            "left": left,
+                            "top": top,
+                            "width": max(1, right - left),
+                            "height": max(1, bottom - top),
+                            "conf": min(current["conf"], words[i + 1]["conf"], words[i + 2]["conf"]),
+                        }
+                    )
+
+        should_click = bool(candidates and (has_strict_context or run_prompt_context_hit))
         hint_hit = False
         action_hit = False
-        run_prompt_context_hit = any(term in blob for term in run_prompt_context_terms)
         if not should_click and candidates:
             hint_hit = any(h in blob for h in context_free_hint_terms)
-            action_hit = any(c.get("norm", "") in context_free_action_terms for c in candidates)
+            action_hit = any(
+                _is_button_like_token(
+                    _normalize_for_ocr_match(str(c.get("norm", ""))),
+                    button_terms_single=button_terms_single,
+                    context_free_action_terms=context_free_action_terms,
+                    button_terms_compact=button_terms_compact,
+                )
+                for c in candidates
+            )
             should_click = bool(hint_hit and action_hit)
 
         if should_click and candidates:
-            # Dialog buttons generally appear in the lower-right area.
-            best = sorted(
-                candidates,
-                key=lambda c: (c["top"], c["left"], c["conf"]),
-                reverse=True,
-            )[0]
+            scored_candidates: List[Dict[str, Any]] = []
+            for c in candidates:
+                norm_text = _normalize_for_ocr_match(str(c.get("norm", "")))
+                if _is_negative_decision(
+                    norm_text,
+                    negative_single=negative_terms_single,
+                    negative_multi=negative_terms_multi,
+                    negative_compact=negative_terms_compact,
+                ):
+                    continue
+                c = dict(c)
+                c["score"] = _score_approval_candidate(
+                    c,
+                    has_context=has_context,
+                    hint_hit=hint_hit,
+                    run_prompt_context_hit=run_prompt_context_hit,
+                    button_terms_multi=button_terms_multi,
+                    button_terms_multi_compact=button_terms_multi_compact,
+                )
+                scored_candidates.append(c)
+            if not scored_candidates:
+                time.sleep(interval)
+                continue
+            best = sorted(scored_candidates, key=lambda c: c.get("score", 0.0), reverse=True)[0]
 
             click_x = int(best["left"] + (best["width"] / 2))
             click_y = int(best["top"] + (best["height"] / 2))
@@ -1435,6 +1672,8 @@ def tool_wait_and_accept_approval(
                 "x": click_x,
                 "y": click_y,
                 "method": "ocr_click",
+                "profile": active_profile,
+                "score": round(float(best.get("score", 0.0)), 2),
             }
 
         # VS Code "1 Step Requires Input" modalinda Run butonu OCR'da kacinabiliyor.
@@ -1459,6 +1698,7 @@ def tool_wait_and_accept_approval(
                         "method": "reject_offset_click",
                         "x": click_x,
                         "y": click_y,
+                        "profile": active_profile,
                         "note": "Run butonu Reject referansi ile tahmini tiklandi.",
                     }
                 except Exception:
@@ -1479,6 +1719,7 @@ def tool_wait_and_accept_approval(
                     "window_pattern": window_pattern,
                     "method": "keyboard_shortcut",
                     "shortcut": "alt+j",
+                    "profile": active_profile,
                     "note": "OCR metninden Run Alt+J kisayolu algilandi.",
                 }
             except Exception:
@@ -1490,6 +1731,7 @@ def tool_wait_and_accept_approval(
         "success": False,
         "checks": checks,
         "window_pattern": window_pattern,
+        "profile": active_profile,
         "message": "Onay penceresi tespit edilmedi.",
         "last_seen_text": last_blob,
     }
@@ -1515,7 +1757,14 @@ def _tesseract_ready() -> Tuple[bool, str]:
         return False, str(exc)
 
 
-def _approval_watcher_worker(window_pattern: str, interval: float, min_confidence: float, lang: str, stop_event: threading.Event) -> None:
+def _approval_watcher_worker(
+    window_pattern: str,
+    interval: float,
+    min_confidence: float,
+    lang: str,
+    profile: str,
+    stop_event: threading.Event,
+) -> None:
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -1524,6 +1773,7 @@ def _approval_watcher_worker(window_pattern: str, interval: float, min_confidenc
             min_confidence=min_confidence,
             lang=lang,
             allow_keyboard_fallback=False,
+            profile=profile,
         )
 
         send_completion_prompt = False
@@ -1606,12 +1856,16 @@ def tool_start_approval_watcher(
     interval: float = 1.0,
     min_confidence: float = 30.0,
     lang: str = "tur+eng",
+    profile: str = "generic",
     notify_on_completion: bool = True,
     auto_stop_on_completion: bool = False,
 ) -> Dict[str, Any]:
     """Arka planda IDE onay pencerelerini surekli izleyip otomatik kabul et."""
     interval = max(0.4, min(float(interval), 5.0))
     min_confidence = max(0.0, min(float(min_confidence), 100.0))
+    profile_key = _normalize_for_ocr_match(profile or "generic") or "generic"
+    if profile_key not in _APPROVAL_PROFILE_OVERRIDES:
+        profile_key = "generic"
     notify_on_completion = bool(notify_on_completion)
     auto_stop_on_completion = bool(auto_stop_on_completion)
 
@@ -1623,17 +1877,18 @@ def tool_start_approval_watcher(
     with _APPROVAL_WATCHER_LOCK:
         thread = _APPROVAL_WATCHER_STATE.get("thread")
         if _APPROVAL_WATCHER_STATE.get("running") and isinstance(thread, threading.Thread) and thread.is_alive():
+            status_snapshot = _approval_watcher_status_snapshot_unlocked()
             return {
                 "success": True,
                 "running": True,
                 "message": "Onay izleyici zaten aktif.",
-                "status": tool_approval_watcher_status(),
+                "status": status_snapshot,
             }
 
         stop_event = threading.Event()
         worker = threading.Thread(
             target=_approval_watcher_worker,
-            args=(window_pattern, interval, min_confidence, lang, stop_event),
+            args=(window_pattern, interval, min_confidence, lang, profile_key, stop_event),
             daemon=True,
             name="OpenWorldApprovalWatcher",
         )
@@ -1645,6 +1900,7 @@ def tool_start_approval_watcher(
         _APPROVAL_WATCHER_STATE["last_error"] = ""
         _APPROVAL_WATCHER_STATE["last_event"] = "Baslatildi"
         _APPROVAL_WATCHER_STATE["window_pattern"] = window_pattern
+        _APPROVAL_WATCHER_STATE["profile"] = profile_key
         _APPROVAL_WATCHER_STATE["interval"] = interval
         _APPROVAL_WATCHER_STATE["checks"] = 0
         _APPROVAL_WATCHER_STATE["accepted"] = 0
@@ -1664,6 +1920,7 @@ def tool_start_approval_watcher(
         "running": True,
         "message": "Onay izleyici baslatildi.",
         "window_pattern": window_pattern,
+        "profile": profile_key,
         "interval": interval,
         "notify_on_completion": notify_on_completion,
         "auto_stop_on_completion": auto_stop_on_completion,
@@ -1699,27 +1956,7 @@ def tool_stop_approval_watcher() -> Dict[str, Any]:
 def tool_approval_watcher_status() -> Dict[str, Any]:
     """IDE onay izleyici durumunu getir."""
     with _APPROVAL_WATCHER_LOCK:
-        thread = _APPROVAL_WATCHER_STATE.get("thread")
-        running = bool(_APPROVAL_WATCHER_STATE.get("running"))
-        alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())
-        return {
-            "running": running and alive,
-            "started_at": _APPROVAL_WATCHER_STATE.get("started_at", ""),
-            "checks": int(_APPROVAL_WATCHER_STATE.get("checks", 0)),
-            "accepted": int(_APPROVAL_WATCHER_STATE.get("accepted", 0)),
-            "last_event": _APPROVAL_WATCHER_STATE.get("last_event", ""),
-            "last_error": _APPROVAL_WATCHER_STATE.get("last_error", ""),
-            "window_pattern": _APPROVAL_WATCHER_STATE.get("window_pattern", ""),
-            "interval": _APPROVAL_WATCHER_STATE.get("interval", 1.0),
-            "notify_on_completion": bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True)),
-            "auto_stop_on_completion": bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False)),
-            "completion_detected": bool(_APPROVAL_WATCHER_STATE.get("completion_detected", False)),
-            "completion_prompt_sent": bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent", False)),
-            "completion_hits": int(_APPROVAL_WATCHER_STATE.get("completion_hits", 0)),
-            "last_completion_text": _APPROVAL_WATCHER_STATE.get("last_completion_text", ""),
-            "last_notification_at": _APPROVAL_WATCHER_STATE.get("last_notification_at", ""),
-            "notification_error": _APPROVAL_WATCHER_STATE.get("notification_error", ""),
-        }
+        return _approval_watcher_status_snapshot_unlocked()
 
 
 def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, Any]:

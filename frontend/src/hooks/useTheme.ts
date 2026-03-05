@@ -14,7 +14,7 @@ export function useTheme() {
   }, []);
 
   // Get effective theme (resolve 'system' to actual theme)
-  const effectiveTheme = theme.mode === 'system' ? getSystemTheme() : theme.mode;
+  const effectiveTheme = theme.mode === 'system'  getSystemTheme() : theme.mode;
 
   // Apply theme to document
   useEffect(() => {
@@ -30,7 +30,7 @@ export function useTheme() {
     root.style.colorScheme = effectiveTheme;
     
     // Apply CSS variables
-    const colors = effectiveTheme === 'dark' ? darkColors : lightColors;
+    const colors = effectiveTheme === 'dark'  darkColors : lightColors;
     Object.entries(colors).forEach(([key, value]) => {
       root.style.setProperty(`--color-${key}`, value);
     });

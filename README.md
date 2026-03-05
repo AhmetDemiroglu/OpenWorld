@@ -685,7 +685,8 @@ Telegram'dan tek bir mesajla:
 **Araçlar:**
 - `search_news` - Haber ara
 - `fetch_web_page` - Sayfa çek
-- `research_and_report` - Detaylı araştırma raporu
+- `research_and_report` - Detaylı araştırma raporu (senkron, sonucu chat'te gösterir)
+- `research_async` - **Otonom arka plan araştırması** — anında "başladı" yanıtı döner, ~3-8 dk sonra Telegram'a özet mesaj + PDF rapor gönderir
 - `compare_topics` - İki konuyu karşılaştır
 - `research_note` - Araştırma notu al
 
@@ -926,10 +927,11 @@ pipwin install pyaudio
 
 | Kısıtlama | Açıklama |
 |-----------|----------|
-| **Çok adımlı GUI otomasyonu** | "VS Code'u aç → Codex'i bul → mesaj yaz" gibi zincirleme masaüstü otomasyonları her zaman başarılı olmayabilir. Yerel LLM modelleri (Qwen 9B vb.) bu tür çok adımlı planlamada sınırlıdır; tek adımlık araç çağrıları (screenshot al, dosya oku) çok daha güvenilirdir. |
+| **Çok adımlı GUI otomasyonu** | "VS Code'u aç → KimiCode'a mesaj yaz" gibi zincirleme masaüstü otomasyonları modele bağlıdır. Yerel küçük modeller (Qwen 9B vb.) bu tür çok adımlı planlamada sınırlıdır; tek adımlık araç çağrıları (screenshot al, dosya oku) çok daha güvenilirdir. |
 | **LLM model kalitesi** | Araç seçimi ve parametre doğruluğu LLM modeline bağlıdır. Daha büyük modeller (70B+) karmaşık görevlerde daha başarılıdır; küçük modeller basit görevler için optimize edilmiştir. |
-| **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Eğer yanıt gelmezse görev zaman aşımına uğramış olabilir — tekrar denenebilir. |
+| **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Zaman aşımı durumunda `research_async` aracı kullanın — arka planda çalışır, bitince Telegram'a PDF rapor gönderir. |
 | **Gmail token yenileme** | Gmail OAuth token'ları periyodik olarak yenilenmeli. Token süresi dolarsa, yenileme otomatik yapılır ama ilk kurulumda manuel OAuth akışı gerekir. |
+| **VS Code AI Extension'lar** | KimiCode ve GitHub Copilot tam otomatik desteklenir. Claude Code için hem `claude_code_ask` (CLI, doğrudan) hem de `vscode_command` (VS Code içinden) kullanılabilir. Tüm VS Code etkileşimleri OCR tabanlı onay izleme ile desteklenir. |
 
 ---
 

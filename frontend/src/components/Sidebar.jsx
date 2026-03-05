@@ -33,17 +33,17 @@ export function Sidebar({ activeTab, onTabChange, onQuickAction, sessionId, onSe
     <aside className="sidebar">
       <div className="sidebar-tabs">
         <button
-          className={`sidebar-tab ${activeTab === "actions" ? "active" : ""}`}
+          className={`sidebar-tab ${activeTab === "actions"  "active" : ""}`}
           onClick={() => onTabChange("actions")}
           title="Hızlı İşlemler"
         >⚡</button>
         <button
-          className={`sidebar-tab ${activeTab === "sessions" ? "active" : ""}`}
+          className={`sidebar-tab ${activeTab === "sessions"  "active" : ""}`}
           onClick={() => onTabChange("sessions")}
           title="Oturumlar"
         >💬</button>
         <button
-          className={`sidebar-tab ${activeTab === "files" ? "active" : ""}`}
+          className={`sidebar-tab ${activeTab === "files"  "active" : ""}`}
           onClick={() => onTabChange("files")}
           title="Dosyalar"
         >📂</button>
@@ -75,7 +75,7 @@ export function Sidebar({ activeTab, onTabChange, onQuickAction, sessionId, onSe
               {sessions.map((s) => (
                 <button
                   key={s}
-                  className={`session-item ${s === sessionId ? "active" : ""}`}
+                  className={`session-item ${s === sessionId  "active" : ""}`}
                   onClick={() => onSessionChange(s)}
                 >
                   <span className="session-name">{s}</span>

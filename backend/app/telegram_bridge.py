@@ -3,14 +3,25 @@ from __future__ import annotations
 import atexit
 import asyncio
 import html as html_lib
+import io
+import logging
 import os
 import re
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 import httpx
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from .config import settings
 from .secrets import decrypt_text
@@ -18,6 +29,32 @@ from .secrets import decrypt_text
 _LOCK_PATH = settings.data_path / "telegram_bridge.lock"
 _LOCK_FD: int | None = None
 _TIMEOUT_NOTEBOOK_HINT_CACHE: dict[str, str] = {}
+
+# ─── Rate limiter (BLOK 8) ───────────────────────────────────────────────────
+_rate_window: dict[str, list] = defaultdict(list)
+_RATE_MAX = 10  # 60 saniyede max komut
+
+
+def _check_rate_limit(user_id: str) -> bool:
+    now = time.time()
+    history = _rate_window[user_id]
+    history[:] = [t for t in history if now - t < 60]
+    if len(history) >= _RATE_MAX:
+        return False
+    history.append(now)
+    return True
+
+
+# ─── Audit log (BLOK 8) ──────────────────────────────────────────────────────
+_audit_logger = logging.getLogger("openworld.audit")
+
+
+def _audit(user_id: str, cmd: str, status: str = "ok") -> None:
+    _audit_logger.info("[AUDIT] user=%s cmd=%r status=%s", user_id, cmd[:120], status)
+
+
+# ─── Onay akışı durumu (BLOK 4) ──────────────────────────────────────────────
+_pending_approvals: dict[str, "asyncio.Future"] = {}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -238,6 +275,281 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("OpenWorld aktif. Mesaj at, agent cevap versin.")
 
 
+# ─── BLOK 2: /ekran ──────────────────────────────────────────────────────────
+
+async def ekran_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ekran [x y w h] — Ekran görüntüsü al, Telegram'a fotoğraf olarak gönder."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut. Biraz bekle.")
+        return
+    _audit(user_id, f"/ekran {' '.join(context.args or [])}")
+    status = await update.message.reply_text("📸 Ekran görüntüsü alınıyor...")
+    try:
+        import pyautogui
+        args = context.args or []
+        if len(args) == 4:
+            region = (int(args[0]), int(args[1]), int(args[2]), int(args[3]))
+            shot = pyautogui.screenshot(region=region)
+        else:
+            shot = pyautogui.screenshot()
+        buf = io.BytesIO()
+        shot.save(buf, format="PNG")
+        buf.seek(0)
+        await status.delete()
+        await update.message.reply_photo(photo=buf, caption="📸 Ekran görüntüsü")
+    except Exception as exc:
+        await status.edit_text(f"❌ Ekran hatası: {exc}")
+
+
+# ─── BLOK 3: /tikla, /yaz, /tus ─────────────────────────────────────────────
+
+async def tikla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tikla X Y — Verilen koordinata sol tıkla."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text("Kullanım: /tikla X Y\nÖrnek: /tikla 960 540")
+        return
+    _audit(user_id, f"/tikla {args[0]} {args[1]}")
+    try:
+        import pyautogui
+        x, y = int(args[0]), int(args[1])
+        pyautogui.click(x, y)
+        await update.message.reply_text(f"✅ Tıklandı: ({x}, {y})")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+async def yaz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/yaz [metin] — Aktif pencereye metin yaz (clipboard üzerinden, Unicode destekli)."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("Kullanım: /yaz [metin]\nÖrnek: /yaz Merhaba dünya")
+        return
+    _audit(user_id, f"/yaz {text[:50]}")
+    try:
+        import pyautogui
+        import subprocess
+        time.sleep(0.3)
+        # Windows clipboard — Unicode (Türkçe dahil) desteği için
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+            win32clipboard.CloseClipboard()
+        except ImportError:
+            proc = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+            proc.communicate(input=text.encode("utf-16"))
+        pyautogui.hotkey("ctrl", "v")
+        await update.message.reply_text(f"✅ Yazıldı: {text[:80]}")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+async def tus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tus [tuş] — Tuş bas. Kombiler: /tus ctrl+s, /tus alt+f4."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    key = " ".join(context.args or []).strip().lower()
+    if not key:
+        await update.message.reply_text(
+            "Kullanım: /tus [tuş]\n"
+            "Örnekler: /tus enter · /tus escape · /tus ctrl+s · /tus alt+f4"
+        )
+        return
+    _audit(user_id, f"/tus {key}")
+    try:
+        import pyautogui
+        if "+" in key:
+            parts = [p.strip() for p in key.split("+")]
+            pyautogui.hotkey(*parts)
+        else:
+            pyautogui.press(key)
+        await update.message.reply_text(f"✅ Tuş basıldı: {key}")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+# ─── BLOK 4: Onay akışı ──────────────────────────────────────────────────────
+
+async def send_approval_request(
+    bot,
+    chat_id: str,
+    tool_name: str,
+    description: str,
+    timeout: float = 60.0,
+) -> bool:
+    """High-impact araç için Telegram inline buton onayı iste.
+    True döner → onaylandı. False → reddedildi veya timeout."""
+    key = f"approval_{tool_name}"
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Onayla", callback_data=f"approve:{key}"),
+        InlineKeyboardButton("❌ İptal",  callback_data=f"reject:{key}"),
+    ]])
+    sent = await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"⚠️ <b>Onay Gerekiyor</b>\n\n"
+            f"<b>Araç:</b> <code>{tool_name}</code>\n"
+            f"<b>İşlem:</b> {description[:300]}\n\n"
+            f"Bu işlemi onaylıyor musun ({int(timeout)} sn içinde yanıtla)"
+        ),
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    loop = asyncio.get_event_loop()
+    future: asyncio.Future = loop.create_future()
+    _pending_approvals[key] = future
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            await sent.edit_text(
+                f"⏱️ Onay zaman aşımı — işlem iptal edildi: <code>{tool_name}</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        return False
+    finally:
+        _pending_approvals.pop(key, None)
+
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline buton callback'lerini işle (onay/ret + 'başka bir şey?' yanıtı)."""
+    if not _is_allowed(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    user_id = str(update.effective_user.id)
+    _audit(user_id, f"callback:{data[:60]}")
+
+    # BLOK 4: Araç onayı / reddi
+    if data.startswith("approve:") or data.startswith("reject:"):
+        key = data.split(":", 1)[1]
+        future = _pending_approvals.get(key)
+        if future and not future.done():
+            future.set_result(data.startswith("approve"))
+        if data.startswith("approve"):
+            await query.edit_message_text(
+                f"✅ Onaylandı: <code>{key}</code>", parse_mode="HTML"
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ İptal edildi: <code>{key}</code>", parse_mode="HTML"
+            )
+        return
+
+    # BLOK 7: "Başka bir şey?" yanıtı
+    if data == "more_yes":
+        await query.edit_message_text("Tabii! Ne yapmamı istersin?")
+    elif data == "more_no":
+        await query.edit_message_text("Anlaşıldı, beklemedeyim. İhtiyaç olursa yaz.")
+
+
+# ─── BLOK 6: /araştır ────────────────────────────────────────────────────────
+
+async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/araştır [konu] — Arka planda araştırma başlat; bitince Telegram'a PDF rapor gelir."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla komut.")
+        return
+    topic = " ".join(context.args or []).strip()
+    if not topic:
+        await update.message.reply_text(
+            "Kullanım: /araştır [konu]\n"
+            "Örnek: /araştır yapay zeka trendleri 2025"
+        )
+        return
+    _audit(user_id, f"/araştır {topic[:80]}")
+    try:
+        from .tools.registry import execute_tool
+        result = execute_tool("research_async", {"topic": topic})
+        if result.get("success"):
+            await update.message.reply_text(
+                f"📚 <b>Araştırma başlatıldı!</b>\n\n"
+                f"Konu: <b>{topic[:100]}</b>\n"
+                f"Not defteri: <code>{result.get('notebook', '')}</code>\n\n"
+                f"Bitince Telegram'a özet + PDF rapor gönderilecek (~3-8 dk).",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Araştırma başlatılamadı: {result.get('error', '?')}"
+            )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+# ─── BLOK 1: /durum ──────────────────────────────────────────────────────────
+
+async def durum_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/durum — Bot, servisler ve sistem durumunu göster."""
+    if not _is_allowed(update):
+        return
+    _audit(str(update.effective_user.id), "/durum")
+    lines = ["📊 <b>Sistem Durumu</b>\n"]
+
+    # CPU / RAM
+    try:
+        import psutil
+        cpu = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory()
+        lines.append(f"🖥️ CPU: <b>{cpu}%</b>")
+        lines.append(
+            f"💾 RAM: <b>{ram.percent}%</b> "
+            f"({ram.used // 1024 // 1024} MB / {ram.total // 1024 // 1024} MB)"
+        )
+    except ImportError:
+        lines.append("ℹ️ Sistem bilgisi: psutil yüklü değil")
+
+    # Servis durumları
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"http://{settings.host}:{settings.port}/services/status"
+            )
+            if resp.status_code == 200:
+                svcs = resp.json()
+                lines.append("")
+                for name, info in svcs.items():
+                    if isinstance(info, dict):
+                        icon = "✅" if info.get("running") else "❌"
+                        lines.append(f"{icon} {name}")
+    except Exception:
+        lines.append("\n❌ Servis durumları alınamadı")
+
+    # Rate limiter özeti
+    user_id = str(update.effective_user.id)
+    recent = len([t for t in _rate_window.get(user_id, []) if time.time() - t < 60])
+    lines.append(f"\n📈 Son 60s komut: {recent}/{_RATE_MAX}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
 async def _process_image_with_ocr(image_bytes: bytes, caption: str = "") -> str:
     """Gorseli OCR ile isleyip metin cikar. Zaman asimi korumali."""
     import tempfile
@@ -344,7 +656,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if update.message is None:
         return
-    
+
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("⏳ Çok fazla mesaj. Biraz bekle.")
+        return
+
     session_id = f"telegram_{update.effective_user.id}"
     user_message = ""
     
@@ -472,26 +789,25 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         media_list = []
 
     # Send media first.
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"[TELEGRAM] Sending {len(media_list)} media files")
+    _logger = logging.getLogger(__name__)
+    _logger.info(f"[TELEGRAM] Sending {len(media_list)} media files")
     
     base_url = f"http://{settings.host}:{settings.port}"
     for m in media_list:
         media_url = m.get("url", "")
         media_type = m.get("type", "")
         caption = m.get("caption", m.get("filename", ""))
-        logger.info(f"[TELEGRAM] Sending media: type={media_type}, url={media_url}")
+        _logger.info(f"[TELEGRAM] Sending media: type={media_type}, url={media_url}")
         
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
                 file_resp = await client.get(f"{base_url}{media_url}")
-                logger.info(f"[TELEGRAM] Download response: {file_resp.status_code}")
+                _logger.info(f"[TELEGRAM] Download response: {file_resp.status_code}")
                 if file_resp.status_code != 200:
-                    logger.error(f"[TELEGRAM] Failed to download media: {file_resp.status_code}")
+                    _logger.error(f"[TELEGRAM] Failed to download media: {file_resp.status_code}")
                     continue
                 file_bytes = file_resp.content
-                logger.info(f"[TELEGRAM] Downloaded {len(file_bytes)} bytes")
+                _logger.info(f"[TELEGRAM] Downloaded {len(file_bytes)} bytes")
 
             filename = m.get("filename", "file")
 
@@ -529,6 +845,28 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:
         await update.message.reply_text(reply[:4000])
 
+    # BLOK 7: Görev tamamlama → "Başka bir şey?" inline butonu
+    _done_hints = (
+        "tamamland", "başarıyla", "basariyla", "hazır", "hazir",
+        "oluşturuldu", "olusturuldu", "gönderildi", "gonderildi",
+        "kaydedildi", "çalıştırıldı", "calıstirildi", "yazıldı",
+        "yazildi", "açıldı", "acildi", "silindi", "bitti",
+    )
+    if reply and len(reply) > 200 and any(h in reply.lower() for h in _done_hints):
+        try:
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Evet", callback_data="more_yes"),
+                InlineKeyboardButton("❌ Hayır", callback_data="more_no"),
+            ]])
+            await update.message.reply_text(
+                "Başka bir şey ister misin?",
+                reply_markup=keyboard,
+            )
+        except Exception:
+            pass
+
+    _audit(user_id, user_message[:100] if user_message else "(media)")
+
 
 async def main() -> None:
     _acquire_single_instance_lock()
@@ -543,6 +881,19 @@ async def main() -> None:
     try:
         app = Application.builder().token(token).build()
         app.add_handler(CommandHandler("start", start_cmd))
+        # BLOK 2: Ekran görüntüsü
+        app.add_handler(CommandHandler("ekran", ekran_cmd))
+        # BLOK 3: Ekran etkileşimi
+        app.add_handler(CommandHandler("tikla", tikla_cmd))
+        app.add_handler(CommandHandler("yaz", yaz_cmd))
+        app.add_handler(CommandHandler("tus", tus_cmd))
+        # BLOK 6: Araştırma
+        # Telegram komut adlari ASCII olmalidir.
+        app.add_handler(CommandHandler(["arastir", "ara"], arastir_cmd))
+        # BLOK 1: Durum
+        app.add_handler(CommandHandler("durum", durum_cmd))
+        # BLOK 4 + 7: Inline buton callback'leri
+        app.add_handler(CallbackQueryHandler(callback_handler))
         # Hem metin hem fotoğraf mesajlarını dinle
         app.add_handler(MessageHandler(
             (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND, 

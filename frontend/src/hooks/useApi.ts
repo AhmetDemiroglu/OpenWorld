@@ -40,7 +40,7 @@ export function useApi() {
       return await response.json() as T;
     } catch (err) {
       const apiError: ApiError = {
-        message: err instanceof Error ? err.message : 'Unknown error',
+        message: err instanceof Error  err.message : 'Unknown error',
         status: (err as ApiError)?.status,
       };
       setError(apiError);
