@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     ollama_max_steps: int = 25
     llm_backend: str = "ollama"
     llama_model_path: str = "../models/Qwen3.5-9B-Q4_K_M.gguf"
+    tesseract_cmd: str = ""
     llama_n_ctx: int = 8192
     llama_n_gpu_layers: int = 0
     llama_n_threads: int = 8

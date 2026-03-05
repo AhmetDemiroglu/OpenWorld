@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -89,6 +90,9 @@ _APPROVAL_WATCHER_STATE: Dict[str, Any] = {
     "window_pattern": "Visual Studio Code|Code - Insiders",
     "interval": 1.0,
 }
+
+_TESSERACT_INSTALL_URL = "https://github.com/UB-Mannheim/tesseract/wiki"
+_TESSERACT_INSTALL_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 def _map_desktop_tail_to_workspace(tail: str) -> Optional[Path]:
@@ -972,6 +976,67 @@ def _get_window_region(title_pattern: str) -> Optional[Tuple[int, int, int, int]
         return None
 
 
+def _build_tesseract_error(
+    detail: str = "",
+    attempted_path: str = "",
+    configured_path: str = "",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "error": "Tesseract OCR bulunamadı veya çalışmıyor.",
+        "install_path": _TESSERACT_INSTALL_CMD,
+        "install_url": _TESSERACT_INSTALL_URL,
+    }
+    if detail:
+        payload["detail"] = str(detail)[:260]
+    if attempted_path:
+        payload["attempted_path"] = attempted_path
+    if configured_path:
+        payload["configured_path"] = configured_path
+    return payload
+
+
+def _resolve_tesseract_binary() -> Tuple[Optional[str], Dict[str, Any]]:
+    configured_raw = str(getattr(settings, "tesseract_cmd", "") or "").strip().strip('"').strip("'")
+    if configured_raw:
+        configured_candidate = Path(configured_raw).expanduser()
+        if configured_candidate.is_dir():
+            configured_candidate = configured_candidate / ("tesseract.exe" if os.name == "nt" else "tesseract")
+        if configured_candidate.exists() and configured_candidate.is_file():
+            return str(configured_candidate.resolve()), {}
+        return None, _build_tesseract_error(
+            detail="TESSERACT_CMD yolu geçersiz.",
+            attempted_path=str(configured_candidate),
+            configured_path=configured_raw,
+        )
+
+    from_path = shutil.which("tesseract")
+    if from_path:
+        return from_path, {}
+
+    return None, _build_tesseract_error(detail="PATH üzerinde tesseract bulunamadı.")
+
+
+def _configure_tesseract_runtime(pytesseract_module: Any) -> Dict[str, Any]:
+    resolved_cmd, err_payload = _resolve_tesseract_binary()
+    if not resolved_cmd:
+        return {"ok": False, **err_payload}
+
+    try:
+        pytesseract_module.pytesseract.tesseract_cmd = resolved_cmd
+        _ = pytesseract_module.get_tesseract_version()
+    except Exception as exc:
+        return {
+            "ok": False,
+            **_build_tesseract_error(
+                detail=str(exc),
+                attempted_path=resolved_cmd,
+                configured_path=str(getattr(settings, "tesseract_cmd", "") or "").strip(),
+            ),
+        }
+
+    return {"ok": True, "resolved_cmd": resolved_cmd}
+
+
 def tool_wait_and_accept_approval(
     window_pattern: str = "Visual Studio Code|Code - Insiders",
     timeout: int = 25,
@@ -981,6 +1046,7 @@ def tool_wait_and_accept_approval(
     allow_keyboard_fallback: bool = False,
 ) -> Dict[str, Any]:
     """Bekleyen IDE onay penceresini OCR ile bulup kabul etmeye calis."""
+    resolved_tesseract_cmd = ""
     try:
         import pytesseract
         from pytesseract import Output
@@ -1007,10 +1073,37 @@ def tool_wait_and_accept_approval(
                 }
             except Exception as fallback_exc:
                 return {"error": str(fallback_exc)}
-        return {
-            "error": str(exc),
-            "note": "pytesseract kurulu olmadan onay otomasyonu calismaz.",
-        }
+        return _build_tesseract_error(detail=f"pytesseract modülü yüklü değil: {exc}")
+
+    tesseract_runtime = _configure_tesseract_runtime(pytesseract)
+    if not tesseract_runtime.get("ok"):
+        if allow_keyboard_fallback:
+            try:
+                if window_pattern:
+                    activation = tool_activate_window(window_pattern)
+                    if isinstance(activation, dict) and not activation.get("success"):
+                        return {
+                            "success": False,
+                            "window_pattern": window_pattern,
+                            "method": "keyboard_fallback",
+                            "note": "OCR hazır değil; fallback denemesi yapılmadı çünkü hedef pencere bulunamadı.",
+                            **{k: v for k, v in tesseract_runtime.items() if k != "ok"},
+                        }
+                pyautogui.hotkey("alt", "y")
+                time.sleep(0.1)
+                pyautogui.press("enter")
+                return {
+                    "success": True,
+                    "window_pattern": window_pattern,
+                    "method": "keyboard_fallback",
+                    "note": "OCR hazır değildi, Alt+Y + Enter denendi.",
+                    **{k: v for k, v in tesseract_runtime.items() if k != "ok"},
+                }
+            except Exception as fallback_exc:
+                return {"error": str(fallback_exc), **{k: v for k, v in tesseract_runtime.items() if k != "ok"}}
+        return {k: v for k, v in tesseract_runtime.items() if k != "ok"}
+
+    resolved_tesseract_cmd = str(tesseract_runtime.get("resolved_cmd", "")).strip()
 
     timeout = max(2, min(int(timeout), 180))
     interval = max(0.25, min(float(interval), 3.0))
@@ -1059,11 +1152,12 @@ def tool_wait_and_accept_approval(
                         "note": "OCR calismadigi icin klavye fallback denendi.",
                     }
                 except Exception as fallback_exc:
-                    return {"error": str(fallback_exc)}
-            return {
-                "error": str(exc),
-                "note": "Tesseract OCR bulunamadi veya calismiyor. Onay otomasyonu devre disi.",
-            }
+                    return {"error": str(fallback_exc), "attempted_path": resolved_tesseract_cmd}
+            return _build_tesseract_error(
+                detail=str(exc),
+                attempted_path=resolved_tesseract_cmd,
+                configured_path=str(getattr(settings, "tesseract_cmd", "") or "").strip(),
+            )
 
         words: List[Dict[str, Any]] = []
         blob_parts: List[str] = []
@@ -1165,8 +1259,19 @@ def tool_wait_and_accept_approval(
 def _tesseract_ready() -> Tuple[bool, str]:
     try:
         import pytesseract
-        _ = pytesseract.get_tesseract_version()
-        return True, ""
+        status = _configure_tesseract_runtime(pytesseract)
+        if status.get("ok"):
+            return True, ""
+        detail_parts = [
+            str(status.get("error", "")).strip(),
+            f"Denenen yol: {status.get('attempted_path', '')}".strip(),
+            f"Kurulum: {status.get('install_path', '')}".strip(),
+            f"Indirme: {status.get('install_url', '')}".strip(),
+        ]
+        detail = " | ".join(p for p in detail_parts if p and not p.endswith(":"))
+        if status.get("detail"):
+            detail = f"{detail} | Detay: {status.get('detail')}" if detail else f"Detay: {status.get('detail')}"
+        return False, detail
     except Exception as exc:
         return False, str(exc)
 
@@ -1220,13 +1325,8 @@ def tool_start_approval_watcher(
 
     ok, err = _tesseract_ready()
     if not ok:
-        return {
-            "success": False,
-            "error": "Tesseract OCR bulunamadi.",
-            "detail": err[:240],
-            "install_path": r"C:\Program Files\Tesseract-OCR",
-            "install_url": "https://github.com/UB-Mannheim/tesseract/wiki",
-        }
+        payload = _build_tesseract_error(detail=err[:260])
+        return {"success": False, **payload}
 
     with _APPROVAL_WATCHER_LOCK:
         thread = _APPROVAL_WATCHER_STATE.get("thread")
@@ -1320,7 +1420,10 @@ def tool_ocr_screenshot(region: List[int] = None, lang: str = "tur") -> Dict[str
     """Ekran goruntusunden metin oku."""
     try:
         import pytesseract
-        
+        runtime = _configure_tesseract_runtime(pytesseract)
+        if not runtime.get("ok"):
+            return {k: v for k, v in runtime.items() if k != "ok"}
+
         # Ekran goruntusu al
         if region and len(region) == 4:
             screenshot = pyautogui.screenshot(region=tuple(region))
@@ -1333,11 +1436,18 @@ def tool_ocr_screenshot(region: List[int] = None, lang: str = "tur") -> Dict[str
         return {
             "text": text,
             "language": lang,
-            "character_count": len(text)
+            "character_count": len(text),
+            "tesseract_cmd": runtime.get("resolved_cmd", ""),
         }
-        
+
     except Exception as e:
-        return {"error": str(e), "note": "Tesseract OCR kurulu oldugundan emin olun"}
+        err_text = str(e)
+        if "tesseract" in err_text.lower():
+            return _build_tesseract_error(
+                detail=err_text,
+                configured_path=str(getattr(settings, "tesseract_cmd", "") or "").strip(),
+            )
+        return {"error": err_text}
 
 
 def tool_ocr_image(image_path: str, lang: str = "tur") -> Dict[str, Any]:
@@ -1345,15 +1455,25 @@ def tool_ocr_image(image_path: str, lang: str = "tur") -> Dict[str, Any]:
     try:
         import pytesseract
         from PIL import Image
-        
+        runtime = _configure_tesseract_runtime(pytesseract)
+        if not runtime.get("ok"):
+            return {k: v for k, v in runtime.items() if k != "ok"}
+
         image = Image.open(image_path)
         text = pytesseract.image_to_string(image, lang=lang)
-        
+
         return {
             "text": text,
             "language": lang,
-            "character_count": len(text)
+            "character_count": len(text),
+            "tesseract_cmd": runtime.get("resolved_cmd", ""),
         }
-        
+
     except Exception as e:
-        return {"error": str(e)}
+        err_text = str(e)
+        if "tesseract" in err_text.lower():
+            return _build_tesseract_error(
+                detail=err_text,
+                configured_path=str(getattr(settings, "tesseract_cmd", "") or "").strip(),
+            )
+        return {"error": err_text}

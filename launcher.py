@@ -21,6 +21,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox
 
+try:
+    import winreg
+except Exception:  # pragma: no cover - Windows disi ortamlarda fallback
+    winreg = None
+
 ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
 BROKEN_VENV_PYTHON = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
@@ -28,6 +33,7 @@ VENV_PYTHON = BROKEN_VENV_PYTHON
 ENV_PATH = BACKEND_DIR / ".env"
 QWEN_INSTALL_SCRIPT = ROOT / "scripts" / "install-qwen35-9b.ps1"
 LOG_DIR = ROOT / "data" / "logs"
+DEFAULT_TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -256,8 +262,10 @@ SETUP_GUIDE = """\
 
    Tesseract OCR (\u00f6nerilir):
    \u2022 \u0130ndirme: https://github.com/UB-Mannheim/tesseract/wiki
-   \u2022 Kurulum yolu: C:\\Program Files\\Tesseract-OCR
+   \u2022 Kurulum dosyas\u0131: C:\\Program Files\\Tesseract-OCR\\tesseract.exe
    \u2022 PATH'e eklenecek klas\u00f6r: C:\\Program Files\\Tesseract-OCR
+   \u2022 Launcher > OCR / Tesseract > Tesseract Yolu alan\u0131na
+     `C:\\Program Files\\Tesseract-OCR\\tesseract.exe` yaz\u0131n ve Kaydet'e bas\u0131n
    \u2022 Do\u011frulama: terminalde `tesseract --version`
    \u2022 Vision \u00f6zelli\u011fi olmayan modellerde OCR
      (g\u00f6rselden metin okuma) i\u00e7in zorunludur
@@ -393,7 +401,8 @@ SETUP_GUIDE = """\
 
    \u2716 \u201cTesseract is not installed\u201d hatas\u0131
      \u2192 Tesseract'\u0131 C:\\Program Files\\Tesseract-OCR klas\u00f6r\u00fcne kurun
-     \u2192 PATH'e C:\\Program Files\\Tesseract-OCR ekleyin
+     \u2192 Launcher > OCR / Tesseract alan\u0131na
+       C:\\Program Files\\Tesseract-OCR\\tesseract.exe yaz\u0131n ve Kaydet'e bas\u0131n
      \u2192 Yeni terminal a\u00e7\u0131p `tesseract --version` ile kontrol edin
 
 
@@ -443,6 +452,7 @@ class LauncherApp:
         self.owner_name_var = tk.StringVar(value="Ahmet")
         self.owner_profile_var = tk.StringVar(value="Teknoloji, otomasyon, urun gelistirme")
         self.web_domains_var = tk.StringVar(value="")
+        self.tesseract_cmd_var = tk.StringVar(value=DEFAULT_TESSERACT_CMD)
         self.web_allow_internet_var = tk.BooleanVar(value=True)  # Internet baglantisi acik/kapali
         self.web_block_private_var = tk.BooleanVar(value=False)  # Yerel ağ erişimine izin ver
         self.enable_shell_var = tk.BooleanVar(value=True)  # Shell tool varsayılan açık
@@ -663,6 +673,20 @@ class LauncherApp:
         cb_shell.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
         ToolTip(cb_shell, "İşaretli: Ajan PowerShell/CMD komutları\nçalıştırabilir (dosya, program vb.)\nİşaretsiz: Sisteme doğrudan erişemez.", title="🖥  Shell Erişimi")
 
+        # === OCR / TESSERACT ===
+        ocr = _collapsible(sf, "OCR / Tesseract", expanded=False)
+        _field(
+            ocr,
+            0,
+            "Tesseract Yolu",
+            self.tesseract_cmd_var,
+            hint="Örnek: C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+        )
+        ocr_btns = tk.Frame(ocr, bg=CARD_BG)
+        ocr_btns.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._btn(ocr_btns, "Varsayılan Doldur", self._fill_default_tesseract_path, bg="#2563eb").pack(side="left", padx=(0, 4))
+        self._btn(ocr_btns, "Doğrula", self._validate_tesseract_path, bg="#475569").pack(side="left")
+
         # === GMAIL ===
         gm = _collapsible(sf, "Gmail Entegrasyonu  (\u0130ste\u011fe Ba\u011fl\u0131)", expanded=False)
         _field(gm, 0, "Client ID", self.gmail_client_id_var, hint="xxx.apps.googleusercontent.com")
@@ -765,10 +789,105 @@ class LauncherApp:
         env["WORKSPACE_ROOT"] = str(data_root)
         env["SESSIONS_DIR"] = str(sessions_root)
         env["DATA_DIR"] = str(data_root)
+        env["TESSERACT_CMD"] = self.tesseract_cmd_var.get().strip()
         # Unicode path/icerik bozulmalarini azalt.
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
+
+    @staticmethod
+    def _normalize_path_token(path_value: str) -> str:
+        clean = (path_value or "").strip().strip('"').strip("'")
+        if not clean:
+            return ""
+        try:
+            return os.path.normcase(os.path.normpath(clean))
+        except Exception:
+            return clean.lower()
+
+    def _resolve_tesseract_cmd(self) -> tuple[Path | None, str]:
+        raw = os.path.expandvars((self.tesseract_cmd_var.get() or "").strip().strip('"').strip("'"))
+        if not raw:
+            return None, "Geçersiz yol: Tesseract yolu boş."
+
+        candidate = Path(raw).expanduser()
+        if candidate.is_dir():
+            exe_path = (candidate / "tesseract.exe").resolve()
+        else:
+            exe_path = candidate.resolve()
+
+        if exe_path.exists() and exe_path.is_file():
+            if exe_path.name.lower() != "tesseract.exe":
+                return None, f"Geçersiz yol: {exe_path} bir tesseract.exe dosyası değil."
+            return exe_path, ""
+
+        if candidate.is_dir():
+            return None, f"Geçersiz yol: {candidate} klasörü içinde tesseract.exe bulunamadı."
+        return None, f"Geçersiz yol: {candidate} bulunamadı."
+
+    def _update_user_path_for_tesseract(self, tesseract_exe: Path) -> str:
+        tesseract_dir = str(tesseract_exe.parent)
+        if os.name != "nt" or winreg is None:
+            return "Bilgi: PATH güncellemesi sadece Windows kullanıcı PATH'i için destekleniyor."
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ) as key:
+                current_path, value_type = winreg.QueryValueEx(key, "Path")
+        except (FileNotFoundError, OSError):
+            current_path = ""
+            value_type = winreg.REG_EXPAND_SZ
+
+        existing_parts = [p.strip() for p in str(current_path).split(";") if p.strip()]
+        existing_norm = {self._normalize_path_token(p) for p in existing_parts}
+        target_norm = self._normalize_path_token(tesseract_dir)
+
+        process_path = os.environ.get("PATH", "")
+        process_parts = [p.strip() for p in process_path.split(";") if p.strip()]
+        process_norm = {self._normalize_path_token(p) for p in process_parts}
+
+        if target_norm in existing_norm:
+            if target_norm not in process_norm:
+                os.environ["PATH"] = f"{process_path};{tesseract_dir}" if process_path else tesseract_dir
+            return f"Tesseract PATH zaten mevcut: {tesseract_dir}"
+
+        updated_parts = existing_parts + [tesseract_dir]
+        updated_path = ";".join(updated_parts)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            winreg.SetValueEx(key, "Path", 0, value_type, updated_path)
+
+        if target_norm not in process_norm:
+            os.environ["PATH"] = f"{process_path};{tesseract_dir}" if process_path else tesseract_dir
+
+        try:
+            HWND_BROADCAST = 0xFFFF
+            WM_SETTINGCHANGE = 0x001A
+            SMTO_ABORTIFHUNG = 0x0002
+            ctypes.windll.user32.SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                "Environment",
+                SMTO_ABORTIFHUNG,
+                1000,
+                None,
+            )
+        except Exception:
+            pass
+
+        return f"Tesseract PATH eklendi: {tesseract_dir}"
+
+    def _fill_default_tesseract_path(self) -> None:
+        self.tesseract_cmd_var.set(DEFAULT_TESSERACT_CMD)
+        self._append_status(f"Tesseract yolu varsayılana alındı: {DEFAULT_TESSERACT_CMD}")
+
+    def _validate_tesseract_path(self) -> None:
+        exe_path, err = self._resolve_tesseract_cmd()
+        if exe_path is None:
+            self._append_status(err)
+            messagebox.showerror("Tesseract Doğrulama", err)
+            return
+        self._append_status(f"Tesseract yolu doğrulandı: {exe_path}")
+        messagebox.showinfo("Tesseract Doğrulama", f"Doğrulandı:\n{exe_path}")
 
     def _check_python_env_health(self) -> tuple[bool, str]:
         py = VENV_PYTHON
@@ -872,6 +991,7 @@ class LauncherApp:
         self.backend_var.set(env_map.get("LLM_BACKEND", "ollama"))
         self.model_var.set(env_map.get("OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"))
         self.gguf_var.set(env_map.get("LLAMA_MODEL_PATH", "../models/Qwen3.5-9B-Q4_K_M.gguf"))
+        self.tesseract_cmd_var.set(env_map.get("TESSERACT_CMD", DEFAULT_TESSERACT_CMD))
         self.web_domains_var.set(env_map.get("WEB_ALLOWED_DOMAINS", ""))
         self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "true").strip().lower() == "true")
         self.web_allow_internet_var.set(env_map.get("WEB_ALLOW_INTERNET", "true").strip().lower() == "true")
@@ -921,6 +1041,7 @@ class LauncherApp:
             "LLM_BACKEND": self.backend_var.get().strip() or "ollama",
             "OLLAMA_MODEL": self.model_var.get().strip() or "qwen3.5:9b-q4_K_M",
             "LLAMA_MODEL_PATH": self.gguf_var.get().strip() or "../models/Qwen3.5-9B-Q4_K_M.gguf",
+            "TESSERACT_CMD": self.tesseract_cmd_var.get().strip() or DEFAULT_TESSERACT_CMD,
             "WEB_ALLOWED_DOMAINS": self.web_domains_var.get().strip(),
             "WEB_BLOCK_PRIVATE_HOSTS": "true" if self.web_block_private_var.get() else "false",
             "WEB_ALLOW_INTERNET": "true" if self.web_allow_internet_var.get() else "false",
@@ -946,6 +1067,15 @@ class LauncherApp:
 
         ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
         self._update_connection_badges()
+        tesseract_exe, tesseract_error = self._resolve_tesseract_cmd()
+        if tesseract_exe is None:
+            self._append_status(tesseract_error)
+        else:
+            try:
+                path_status = self._update_user_path_for_tesseract(tesseract_exe)
+                self._append_status(path_status)
+            except Exception as exc:
+                self._append_status(f"Tesseract PATH güncellenemedi: {exc}")
         self._append_status("Ayarlar kaydedildi. Token \u015fifreli sakland\u0131.")
 
     def _validate_gmail_inputs(self, client_id: str) -> str:

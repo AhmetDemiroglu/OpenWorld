@@ -68,6 +68,7 @@ class AgentService:
         self._session_locks_guard = asyncio.Lock()
         self._known_tool_names = self._extract_tool_names()
         self._vscode_extension_presence_cache: Dict[str, bool] = {}
+        self._pending_watcher_confirmation: Dict[str, Dict[str, Any]] = {}
 
     async def run(self, session_id: str, user_message: str) -> Tuple[str, int, List[str], List[str]]:
         lock = await self._get_session_lock(session_id)
@@ -246,6 +247,16 @@ class AgentService:
             self.store.save(session_id, messages)
             return refusal, 0, [], []
 
+        pending_reply, pending_tools, pending_consumed = self._try_handle_pending_watcher_confirmation(
+            session_id,
+            user_message,
+        )
+        if pending_consumed:
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=pending_reply))
+            self.store.save(session_id, messages)
+            return pending_reply, 1, pending_tools, []
+
         if self._is_no_action_check_request(user_message):
             reply = (
                 "Kontrol modu acik: otomasyon araci calistirmadim.\n"
@@ -264,7 +275,7 @@ class AgentService:
             self.store.save(session_id, messages)
             return list_reply, 1, list_tools, []
 
-        vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(user_message)
+        vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(session_id, user_message)
         if vscode_chat_reply:
             messages.append(ChatMessage(role="user", content=user_message))
             messages.append(ChatMessage(role="assistant", content=vscode_chat_reply))
@@ -278,7 +289,7 @@ class AgentService:
             self.store.save(session_id, messages)
             return ide_approval_reply, 1, ide_approval_tools, []
 
-        approval_watcher_reply, approval_watcher_tools = self._try_fast_approval_watcher_control(user_message, messages)
+        approval_watcher_reply, approval_watcher_tools = self._try_fast_approval_watcher_control(user_message)
         if approval_watcher_reply:
             messages.append(ChatMessage(role="user", content=user_message))
             messages.append(ChatMessage(role="assistant", content=approval_watcher_reply))
@@ -2482,32 +2493,67 @@ class AgentService:
         return "status"
 
     @staticmethod
-    def _is_positive_approval_followup(messages: List[ChatMessage], user_message: str) -> bool:
+    def _classify_watcher_confirmation_answer(user_message: str) -> str:
         normalized = AgentService._normalize_text_for_match(user_message)
-        yes_tokens = {"evet", "olur", "tamam", "ac", "acalim", "acabilirsin", "aktif et"}
         words = [w for w in re.findall(r"[^\W_]+", normalized, flags=re.UNICODE) if w]
-        if not words:
-            return False
-        if len(words) > 3:
-            return False
-        if not all(w in yes_tokens for w in words):
-            return False
+        if not words or len(words) > 5:
+            return ""
 
-        last_assistant = ""
-        for msg in reversed(messages[-6:]):
-            if msg.role == "assistant":
-                last_assistant = AgentService._normalize_text_for_match(msg.content or "")
-                break
-        if not last_assistant:
-            return False
-        return "onay izlemeyi ac" in last_assistant or "onay izleyici" in last_assistant
+        joined = " ".join(words)
+        yes_phrases = {
+            "evet", "olur", "tamam", "ac", "baslat", "aktif et", "etkinlestir",
+            "acabilirsin", "onayliyorum",
+        }
+        no_phrases = {
+            "hayir", "gerek yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin",
+        }
+        if joined in yes_phrases:
+            return "yes"
+        if joined in no_phrases:
+            return "no"
 
-    def _try_fast_approval_watcher_control(self, user_message: str, messages: List[ChatMessage]) -> Tuple[str, List[str]]:
+        yes_tokens = {"evet", "olur", "tamam", "ac", "baslat", "aktif", "et", "etkinlestir", "lutfen"}
+        no_tokens = {"hayir", "gerek", "yok", "acma", "kapat", "durdur", "istemiyorum", "iptal", "olmasin", "lutfen"}
+        if all(w in yes_tokens for w in words):
+            return "yes"
+        if all(w in no_tokens for w in words):
+            return "no"
+        return ""
+
+    def _set_pending_watcher_confirmation(self, session_id: str) -> None:
+        self._pending_watcher_confirmation[session_id] = {
+            "created_at": time.time(),
+            "kind": "watcher_confirmation",
+        }
+
+    def _try_handle_pending_watcher_confirmation(self, session_id: str, user_message: str) -> Tuple[str, List[str], bool]:
+        pending = self._pending_watcher_confirmation.get(session_id)
+        if not pending:
+            return "", [], False
+
+        decision = self._classify_watcher_confirmation_answer(user_message)
+        if not decision:
+            # Kullanici baska bir komuta gecti; bekleyen soruyu dusur.
+            self._pending_watcher_confirmation.pop(session_id, None)
+            return "", [], False
+
+        self._pending_watcher_confirmation.pop(session_id, None)
+        if decision == "yes":
+            reply, tools = self._run_approval_watcher_action("start")
+            return reply, tools, True
+
+        reply, tools = self._run_approval_watcher_action("stop")
+        return reply, tools, True
+
+    def _try_fast_approval_watcher_control(self, user_message: str) -> Tuple[str, List[str]]:
         action = self._extract_approval_watcher_action(user_message)
-        if not action and self._is_positive_approval_followup(messages, user_message):
-            action = "start"
         if not action:
             return "", []
+
+        return self._run_approval_watcher_action(action)
+
+    def _run_approval_watcher_action(self, action: str) -> Tuple[str, List[str]]:
+        action = (action or "").strip().lower() or "status"
 
         required_tools = {"start_approval_watcher", "stop_approval_watcher", "approval_watcher_status"}
         if not required_tools.issubset(self._known_tool_names):
@@ -2552,7 +2598,7 @@ class AgentService:
         status_text = "acik" if running else "kapali"
         return f"Onay izleyici durumu: {status_text}. Kontrol: {checks}, kabul edilen onay: {accepted}.", [tool_name]
 
-    def _try_fast_vscode_agent_chat_write(self, user_message: str) -> Tuple[str, List[str]]:
+    def _try_fast_vscode_agent_chat_write(self, session_id: str, user_message: str) -> Tuple[str, List[str]]:
         request = self._extract_vscode_agent_write_request(user_message)
         if not request:
             return "", []
@@ -2647,17 +2693,13 @@ class AgentService:
             _run_gui_tool("type_text", {"text": safe_prompt, "interval": 0.0035})
             _run_gui_tool("press_key", {"key": "enter"})
         except RuntimeError as exc:
+            self._pending_watcher_confirmation.pop(session_id, None)
             return f"Hata: {exc}", list(dict.fromkeys(tools_used))
 
-        approval_result = self._watch_and_accept_ide_prompt(timeout=30, allow_keyboard_fallback=False)
-        if approval_result.get("success"):
-            tools_used.append("wait_and_accept_approval")
-
         tools_used = list(dict.fromkeys(tools_used))
+        self._set_pending_watcher_confirmation(session_id)
         reply = f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi."
-        if approval_result.get("success"):
-            reply += "\nNot: IDE onay penceresi otomatik tespit edilip kabul edildi."
-        reply += "\nEger uzun sureli takip istiyorsaniz \"onay izlemeyi ac\" yazabilirsiniz."
+        reply += "\nBu görevde IDE onaylarını otomatik izleyip onaylamamı ister misiniz? (evet/hayır)"
         return (reply, tools_used)
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:

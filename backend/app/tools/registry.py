@@ -2951,7 +2951,7 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
     ),
     
     # ============================================================
-    # SA’A…-S“PER AJAN ARA’A¢a¬A¡LARI - OCR
+    # SUPER AJAN ARACLARI - OCR
     # ============================================================
     "ocr_screenshot": (
         tool_ocr_screenshot,
@@ -2959,11 +2959,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "ocr_screenshot",
-                "description": "Ekran gA’AsrA’AsntA’AssA’Asnden metin oku (OCR).",
+                "description": "Ekran goruntusunden metin oku (OCR).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "region": {"type": "array", "description": "BA’Aslge [x, y, width, height]", "items": {"type": "integer"}},
+                        "region": {"type": "array", "description": "Bolge [x, y, width, height]", "items": {"type": "integer"}},
                         "lang": {"type": "string", "description": "Dil (tur, eng)"}
                     }
                 }
@@ -2976,11 +2976,11 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             "type": "function",
             "function": {
                 "name": "ocr_image",
-                "description": "GA’AsrA’AsntA’As dosyasindan metin oku (OCR).",
+                "description": "Goruntu dosyasindan metin oku (OCR).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "image_path": {"type": "string", "description": "GA’AsrA’AsntA’As dosyasi yolu"},
+                        "image_path": {"type": "string", "description": "Goruntu dosyasi yolu"},
                         "lang": {"type": "string", "description": "Dil (tur, eng)"}
                     },
                     "required": ["image_path"]
@@ -2988,7 +2988,6 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
             }
         }
     ),
-    
     # ============================================================
     # OFIS’SS ve ARA’-¦A’SV ARA’A¢a¬A¡LARI
     # ============================================================
@@ -4104,6 +4103,7 @@ def serialize_tool_result(result: Dict[str, Any]) -> str:
     if len(text) > _MAX_TOOL_RESULT_CHARS:
         text = text[:_MAX_TOOL_RESULT_CHARS] + '... [truncated]"}'
     return text
+
 
 
 
