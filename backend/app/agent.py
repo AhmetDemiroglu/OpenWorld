@@ -86,6 +86,21 @@ class AgentService:
         lock = await self._get_session_lock(session_id)
 
         if lock.locked():
+            if self._is_global_stop_request(user_message):
+                await self._cancel_running_task(session_id, current_task)
+                lines: List[str] = ["Aktif isleme iptal sinyali gonderildi."]
+                used_tools: List[str] = []
+                if "stop_approval_watcher" in self._known_tool_names:
+                    try:
+                        stop_result = execute_tool("stop_approval_watcher", {})
+                        used_tools.append("stop_approval_watcher")
+                        if isinstance(stop_result, dict):
+                            stop_message = str(stop_result.get("message", "")).strip()
+                            if stop_message:
+                                lines.append(stop_message)
+                    except Exception:
+                        lines.append("Onay izleyici durdurulamadi.")
+                return "\n".join(lines), 1, used_tools, []
             quick_stop_reply, quick_stop_tools = self._try_force_watcher_stop_while_busy(user_message)
             if quick_stop_reply:
                 return quick_stop_reply, 1, quick_stop_tools, []
@@ -233,16 +248,16 @@ class AgentService:
     def _request_timeout_seconds(self, user_message: str) -> float:
         normalized = self._normalize_text_for_match(user_message)
         if any(k in normalized for k in ("screenshot", "ekran goruntusu", "webcam", "kamera", "ses kaydi")):
-            return 25.0
+            return float(max(20, int(getattr(settings, "agent_timeout_media_sec", 25))))
         if any(k in normalized for k in ("vscode", "vs code", "kimicode", "kimi code", "codex", "claude code", "claudecode")) and any(
             k in normalized for k in ("yaz", "session", "oturum", "onay", "kabul", "izin", "approve", "allow")
         ):
-            return 95.0
+            return float(max(90, int(getattr(settings, "agent_timeout_automation_sec", 180))))
         if self._is_resume_like_request(user_message):
-            return 60.0
+            return float(max(90, int(getattr(settings, "agent_timeout_resume_sec", 180))))
         if any(k in normalized for k in ("arastir", "detayli", "analiz", "rapor")):
-            return 80.0
-        return 65.0
+            return float(max(120, int(getattr(settings, "agent_timeout_research_sec", 420))))
+        return float(max(90, int(getattr(settings, "agent_timeout_default_sec", 240))))
 
     def _build_busy_reply(self, user_message: str) -> str:
         if self._is_resume_like_request(user_message):
@@ -264,7 +279,10 @@ class AgentService:
                     "Ayni adimi tekrar denemek icin \"devam et\" yazabilirsiniz."
                 )
             return "Devam adimi zaman asimina ugradi. Lutfen tekrar \"devam et\" yazin."
-        return "Islem cok uzun surdu ve durduruldu. Lutfen istegi tekrar gonderin."
+        return (
+            "Islem zaman asimina ugradi. Model uzun sure dusunuyor olabilir.\n"
+            "Ayni istegi tekrar gonderebilir veya \"devam et\" yazarak kaldigi yerden surdurmeyi deneyebilirsiniz."
+        )
 
     def _should_interrupt_running_task(self, user_message: str) -> bool:
         # Resume/ilerleme mesajlari onceki akisi bozmamali; yeni gorevler onceki uzun islemi kesebilsin.
@@ -2845,8 +2863,21 @@ class AgentService:
         running = bool(result.get("running")) if isinstance(result, dict) else False
         checks = int(result.get("checks", 0)) if isinstance(result, dict) else 0
         accepted = int(result.get("accepted", 0)) if isinstance(result, dict) else 0
+        last_event = str(result.get("last_event", "")).strip() if isinstance(result, dict) else ""
+        completion_prompt_sent = bool(result.get("completion_prompt_sent")) if isinstance(result, dict) else False
+        last_notification_at = str(result.get("last_notification_at", "")).strip() if isinstance(result, dict) else ""
+        notification_error = str(result.get("notification_error", "")).strip() if isinstance(result, dict) else ""
         status_text = "acik" if running else "kapali"
-        return f"Onay izleyici durumu: {status_text}. Kontrol: {checks}, kabul edilen onay: {accepted}.", [tool_name]
+        parts = [f"Onay izleyici durumu: {status_text}.", f"Kontrol: {checks}", f"kabul edilen onay: {accepted}"]
+        if last_event:
+            parts.append(f"son olay: {last_event}")
+        if completion_prompt_sent:
+            parts.append("tamamlanma bildirimi bekliyor")
+        if last_notification_at:
+            parts.append(f"son bildirim: {last_notification_at}")
+        if notification_error:
+            parts.append(f"bildirim hatasi: {notification_error}")
+        return " | ".join(parts), [tool_name]
 
     def _try_fast_vscode_agent_chat_write(self, session_id: str, user_message: str) -> Tuple[str, List[str]]:
         request = self._extract_vscode_agent_write_request(user_message)

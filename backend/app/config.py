@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3.5:9b-q4_K_M"
     ollama_max_steps: int = 25
+    ollama_request_timeout_sec: float = 600.0
+    ollama_connect_timeout_sec: float = 20.0
     tesseract_cmd: str = ""
 
     workspace_root: str = "../data"
@@ -70,6 +72,19 @@ class Settings(BaseSettings):
     bg_smart_assistant: bool = True
     bg_weather_city: str = "Izmir"
     bg_custom_alerts: str = ""
+
+    # Agent / Telegram timeout tunables
+    agent_timeout_default_sec: int = 240
+    agent_timeout_research_sec: int = 420
+    agent_timeout_resume_sec: int = 180
+    agent_timeout_automation_sec: int = 180
+    agent_timeout_media_sec: int = 25
+
+    telegram_timeout_default_sec: int = 300
+    telegram_timeout_research_sec: int = 420
+    telegram_timeout_resume_sec: int = 420
+    telegram_timeout_automation_sec: int = 240
+    telegram_timeout_fast_sec: int = 45
 
     @property
     def cors_origins_list(self) -> List[str]:

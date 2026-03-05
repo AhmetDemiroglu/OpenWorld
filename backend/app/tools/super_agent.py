@@ -226,7 +226,7 @@ _IDE_COMPLETION_DIRECT_TERMS = (
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "in progress", "loading", "analyzing",
-    "working", "synthesizing", "running", "searching", "checking",
+    "synthesizing",
     "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor", "bekleniyor",
 )
 
@@ -1296,6 +1296,19 @@ def _is_likely_menu_term(token: str) -> bool:
     return False
 
 
+def _is_yes_like_candidate(text: str) -> bool:
+    norm = _normalize_for_ocr_match(text or "")
+    if not norm:
+        return False
+    if norm in {"yes", "evet"}:
+        return True
+    if norm.startswith("yes ") or norm.startswith("evet "):
+        return True
+    if norm.startswith("1 yes") or norm.startswith("1 evet"):
+        return True
+    return False
+
+
 def _in_top_menu_zone(candidate: Dict[str, Any], image_height: int) -> bool:
     if image_height <= 0:
         return False
@@ -1644,6 +1657,7 @@ def tool_wait_and_accept_approval(
 
         blob = " ".join(blob_parts)
         raw_blob = " ".join(raw_blob_parts)
+        compact_blob = re.sub(r"\s+", "", blob)
         last_blob = (raw_blob or blob)[:1800]
         last_input_required = _looks_like_input_required_text(last_blob)
         last_busy = _looks_like_ide_busy_text(last_blob)
@@ -1768,6 +1782,42 @@ def tool_wait_and_accept_approval(
                 continue
             filtered_candidates.append(c)
         candidates = filtered_candidates
+
+        # Claude Code "Allow this bash command?" ekraninda dogru secim birinci "Yes" opsiyonudur.
+        # "Allow ..." secenegine tiklamak siklikla etkisiz kalabildigi icin yes adayini zorunlu onceliklendir.
+        claude_bash_prompt_hit = (
+            "allowthisbashcommand" in compact_blob
+            or ("allowpython" in compact_blob and "forthisproject" in compact_blob)
+        )
+        if claude_bash_prompt_hit and candidates:
+            yes_candidates = [c for c in candidates if _is_yes_like_candidate(str(c.get("norm", "")))]
+            if yes_candidates:
+                best_yes = sorted(
+                    yes_candidates,
+                    key=lambda c: (int(c.get("top", 0)), int(c.get("left", 0)), -float(c.get("conf", 0.0))),
+                )[0]
+                click_x = int(best_yes["left"] + (best_yes["width"] / 2))
+                click_y = int(best_yes["top"] + (best_yes["height"] / 2))
+                if region:
+                    click_x += int(region[0])
+                    click_y += int(region[1])
+                pyautogui.click(click_x, click_y)
+                return {
+                    "success": True,
+                    "checks": checks,
+                    "window_pattern": window_pattern,
+                    "clicked_text": best_yes["raw"],
+                    "x": click_x,
+                    "y": click_y,
+                    "method": "ocr_click",
+                    "profile": active_profile,
+                    "score": 999.0,
+                    "followup_clicked": False,
+                    "followup_text": "",
+                    "last_seen_text": last_blob,
+                    "input_required_detected": last_input_required,
+                    "busy_detected": last_busy,
+                }
 
         should_click = bool(candidates and (has_strict_context or run_prompt_context_hit))
         hint_hit = False
@@ -1936,7 +1986,6 @@ def tool_wait_and_accept_approval(
 
         # Ozellikle VS Code "Run Alt+J" akisinda OCR buton koordinati kacarsa,
         # gorunen kisayolu klavyeden deneyelim.
-        compact_blob = re.sub(r"\s+", "", blob)
         run_altj_seen = ("runaltj" in compact_blob or "runaltj" in compact_blob.replace("+", ""))
         if run_altj_seen and run_friendly and (has_context or hint_hit or "debug" in compact_blob):
             try:
@@ -1999,6 +2048,7 @@ def _approval_watcher_worker(
     saw_input_required = False
     idle_clear_hits = 0
     last_accept_ts = 0.0
+    no_input_required_since = 0.0
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -2047,15 +2097,21 @@ def _approval_watcher_worker(
             ocr_blob = str(result.get("last_seen_text", "") or "").strip()
             input_required_hit = bool(result.get("input_required_detected")) or _looks_like_input_required_text(ocr_blob)
             busy_hit = bool(result.get("busy_detected")) or _looks_like_ide_busy_text(ocr_blob)
+            now_ts = time.time()
 
             if input_required_hit:
                 saw_input_required = True
                 idle_clear_hits = 0
+                no_input_required_since = 0.0
             elif busy_hit:
                 idle_clear_hits = 0
+                if no_input_required_since <= 0.0:
+                    no_input_required_since = now_ts
             else:
                 enough_idle_delay = (time.time() - last_accept_ts) >= max(18.0, interval * 6.0)
-                if saw_input_required and enough_idle_delay and len(ocr_blob) >= 18:
+                if no_input_required_since <= 0.0:
+                    no_input_required_since = now_ts
+                if saw_input_required and enough_idle_delay:
                     idle_clear_hits += 1
                 else:
                     idle_clear_hits = 0
@@ -2070,18 +2126,26 @@ def _approval_watcher_worker(
             notify_on_completion = bool(_APPROVAL_WATCHER_STATE.get("notify_on_completion", True))
             auto_stop_on_completion = bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion", False))
             heuristic_completion = bool(saw_input_required and idle_clear_hits >= 3 and not input_required_hit and not busy_hit)
-            completion_detected_now = completion_hits >= 2 or heuristic_completion
+            silent_seconds = (now_ts - no_input_required_since) if no_input_required_since > 0.0 else 0.0
+            silent_completion = bool(saw_input_required and not input_required_hit and silent_seconds >= max(60.0, interval * 30.0))
+            stale_completion = bool(saw_input_required and not input_required_hit and (now_ts - last_accept_ts) >= max(150.0, interval * 80.0))
+            completion_detected_now = completion_hits >= 2 or heuristic_completion or silent_completion or stale_completion
 
             if completion_detected_now and not completion_prompt_sent:
                 saw_input_required = False
                 idle_clear_hits = 0
+                no_input_required_since = 0.0
                 _APPROVAL_WATCHER_STATE["completion_detected"] = True
                 _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
                 _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
-                if heuristic_completion and completion_hits < 2:
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor (durum sezgisi)."
-                else:
+                if completion_hits >= 2:
                     _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
+                elif heuristic_completion:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor (durum sezgisi)."
+                elif silent_completion:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari tamamlandi gibi gorunuyor (sessiz durum)."
+                else:
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari uzun suredir gorunmuyor; tamamlandi varsayildi."
                 if notify_on_completion:
                     send_completion_prompt = True
                     notification_text = (
@@ -2108,8 +2172,9 @@ def _approval_watcher_worker(
                 else:
                     _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
                     _APPROVAL_WATCHER_STATE["completion_detected"] = True
-                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
-                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi."
+                    # Bildirim gecici hata ile gidemeyebilir; sonraki dongude tekrar dene.
+                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi (tekrar denenecek)."
 
         if auto_stop_now:
             with _APPROVAL_WATCHER_LOCK:

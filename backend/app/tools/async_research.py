@@ -28,60 +28,128 @@ def _normalize_ascii(value: str) -> str:
     return value
 
 
-def _generate_smart_queries(topic: str) -> list:
-    """Konuya ozgu, genis kapsama sahip alt sorgular uret."""
+def _extract_topic_keywords(topic: str) -> list[str]:
+    """Konudan anlamli anahtar kelimeleri cikar (stop-word temizlemesi ile)."""
     stop_words = {
-        "bir", "ve", "ile", "icin", "hakkinda", "konulu", "detayli", "arastirma", "rapor",
+        # Turkce
+        "bir", "ve", "ile", "icin", "ise", "olan", "ben", "sen", "biz", "siz",
+        "hakkinda", "konulu", "konusu", "konusunda", "detayli", "arastirma", "rapor",
         "istiyorum", "yapmani", "hazirla", "bana", "gonder", "olusturmani", "yazacagin",
         "cevirecek", "buradan", "gondermeni", "lutfen", "bul", "getir", "nihai", "durumda",
-        "pdfe", "pdf", "worde", "word", "olasi", "mevcut",
+        "pdfe", "pdf", "worde", "word", "olasi", "mevcut", "uzerine", "uzerinde",
+        "kapsamli", "ilgili", "nasil", "tarih", "itibariyle", "konulu", "yapmayi",
+        "itibari", "ihtimali", "onumuzdeki", "icerisinde", "arasinda",
+        "yapilan", "yapman", "hazirla", "gonder", "olustur", "yaz",
+        # Ingilizce
+        "the", "and", "for", "with", "about", "from", "that", "this", "have", "will",
+        "can", "how", "what", "which", "their", "there", "been", "would", "could",
     }
     raw_words = re.findall(r"[^\W_]+", topic, flags=re.UNICODE)
-    words = [w for w in raw_words if len(w) > 2 and _normalize_ascii(w).lower() not in stop_words]
-    base = " ".join(words[:12]).strip() or topic[:180].strip()
-    base_ascii = _normalize_ascii(base)
+    keywords = [w for w in raw_words if len(w) > 2 and _normalize_ascii(w).lower() not in stop_words]
+    return keywords
+
+
+def _topic_has_keyword(topic_lower: str, keywords: list[str]) -> bool:
+    """Kelime siniri kontrolu ile keyword varligini test eder (substring hatasi onlenir)."""
+    for kw in keywords:
+        # \b kullanarak tam kelime eslestirmesi
+        if re.search(r'\b' + re.escape(kw) + r'\b', topic_lower):
+            return True
+    return False
+
+
+def _generate_smart_queries(topic: str) -> list:
+    """Konuya ozgu, KISA ve odakli alt sorgular uret.
+
+    Kurallar:
+    - Her sorgu max 6-8 kelime (Google News kisa sorgularda daha iyi calisir)
+    - Turkce + Ingilizce varyantlar
+    - Konu kategorisine gore ozel sorgular
+    - Hardcoded alakasiz sorgular YASAK
+    """
+    keywords = _extract_topic_keywords(topic)
+    # Cekirdek anahtar kelimeler (en onemli 6)
+    core = keywords[:6]
+    if not core:
+        core = topic.split()[:4]
+
+    # Kisa temel sorgu (max 6 kelime)
+    base_tr = " ".join(core[:6]).strip()
+    base_en = _normalize_ascii(base_tr)
 
     queries: list[str] = []
-    for q in (base, base_ascii):
-        if q and q not in queries:
-            queries.append(q)
 
-    lower_topic = _normalize_ascii(topic).lower()
-    if any(k in lower_topic for k in ("iran", "israil", "israel", "abd", "us", "savas", "war", "catisma")):
-        queries.extend(
-            [
-                f"{base_ascii} son dakika gelismeler",
-                f"{base_ascii} military situation latest",
-                f"{base_ascii} conflict timeline",
-                "Iran Israel US war latest updates",
-            ]
-        )
-    if any(k in lower_topic for k in ("finans", "piyasa", "borsa", "doviz", "emtia", "petrol", "altin", "ekonomi")):
-        queries.extend(
-            [
-                f"{base_ascii} finansal etkiler",
-                f"{base_ascii} market impact analysis",
-                f"{base_ascii} oil gold forex reaction",
-                "Iran Israel war financial market impact",
-            ]
-        )
+    # 1. Temel sorgular (kisa)
+    if base_tr:
+        queries.append(base_tr)
+    if base_en and base_en != base_tr:
+        queries.append(base_en)
 
-    queries.extend(
-        [
-            f"{base_ascii} analiz",
-            f"{base_ascii} experts commentary",
-        ]
-    )
+    # 2. Daha da kisa versiyon (ilk 3 kelime)
+    short_tr = " ".join(core[:3]).strip()
+    short_en = _normalize_ascii(short_tr)
+    if short_tr and short_tr != base_tr:
+        queries.append(short_tr)
+    if short_en and short_en != short_tr and short_en != base_en:
+        queries.append(short_en)
+
+    # 3. Konu kategorisine gore EK sorgular
+    topic_lower = _normalize_ascii(topic).lower()
+    topic_words = set(re.findall(r'\b\w{3,}\b', topic_lower))
+
+    geopolitik_kw = {"iran", "israil", "israel", "abd", "savas", "war", "catisma", "conflict",
+                     "nato", "ordu", "army", "military", "missile", "fuzesi"}
+    finans_kw = {"finans", "piyasa", "borsa", "doviz", "emtia", "petrol", "altin", "ekonomi",
+                 "market", "stock", "gold", "oil", "forex", "economy"}
+    saglik_kw = {"kanser", "cancer", "tedavi", "treatment", "ilac", "drug", "saglik", "health",
+                 "hastalik", "disease", "bilimsel", "scientific", "tibbi", "medical"}
+    teknoloji_kw = {"yapay", "zeka", "llm", "ajanlar", "agents", "teknoloji", "technology",
+                    "yazilim", "software", "bilgisayar", "computer", "robot", "otomasyon"}
+
+    if topic_words & geopolitik_kw:
+        queries.extend([
+            f"{short_en} latest updates",
+            f"{short_en} son gelismeler",
+            f"{short_en} analysis",
+        ])
+    if topic_words & finans_kw:
+        queries.extend([
+            f"{short_en} market impact",
+            f"{short_en} financial analysis",
+            f"{short_en} piyasa etkisi",
+        ])
+    if topic_words & saglik_kw:
+        queries.extend([
+            f"{short_en} research breakthroughs",
+            f"{short_en} bilimsel gelismeler",
+            f"{short_en} clinical trials 2026",
+        ])
+    if topic_words & teknoloji_kw:
+        queries.extend([
+            f"{short_en} future predictions",
+            f"{short_en} gelecek trendleri",
+            f"{short_en} latest developments 2026",
+        ])
+
+    # Kategori eslesmedi ise genel sorgular
+    all_category_kw = geopolitik_kw | finans_kw | saglik_kw | teknoloji_kw
+    if not (topic_words & all_category_kw):
+        queries.extend([
+            f"{short_en} analysis",
+            f"{short_en} latest news",
+        ])
+
+    # 4. Dedup ve sinirla
     dedup: list[str] = []
     seen: set[str] = set()
     for q in queries:
         cleaned = re.sub(r"\s+", " ", q).strip()
         key = cleaned.lower()
-        if not cleaned or key in seen:
+        if not cleaned or key in seen or len(cleaned) < 4:
             continue
         seen.add(key)
         dedup.append(cleaned)
-    return dedup[:8]
+    return dedup[:10]
 
 
 def _decode_bing_click_url(url: str) -> str:
@@ -139,12 +207,16 @@ def _is_low_signal_content(text: str) -> bool:
     return alpha_count < 110
 
 
-def _build_fallback_synthesis(topic: str, read_contents: list[dict], max_items: int = 12) -> str:
+def _build_fallback_synthesis(topic: str, read_contents: list[dict], max_items: int = 15) -> str:
+    """LLM sentezi başarısız olduğunda kaynak başlık + temiz özet bazlı rapor üret.
+
+    Ham HTML/JS icerigini KESINLIKLE dahil etmez — sadece anlamli cumleler secilir.
+    """
     lines: list[str] = [
-        f"## Yonetici Ozeti",
-        f"Bu rapor, `{topic}` konusu icin toplanan kaynaklardan derlenmistir.",
+        "## Yönetici Özeti",
+        f"Bu rapor '{topic}' konusu için toplanan kaynaklardan derlendi.",
         "",
-        "## Temel Bulgular",
+        "## Bulunan Kaynaklar ve Özetleri",
     ]
     used = 0
     for idx, rc in enumerate(read_contents[:max_items], start=1):
@@ -152,22 +224,49 @@ def _build_fallback_synthesis(topic: str, read_contents: list[dict], max_items: 
         source = str(rc.get("source", "")).strip() or "Bilinmiyor"
         pub_date = str(rc.get("pub_date", "")).strip() or "Bilinmiyor"
         content = str(rc.get("content", "")).strip()
-        summary = content[:420].replace("\n", " ")
-        lines.append(f"- **[S{idx}] {title}** ({source}, {pub_date})")
-        if summary:
-            lines.append(f"  - Ozet: {summary}")
+
+        # Icerigi tekrar temizle (fallback icin ekstra guvenlik)
+        content = _clean_web_content(content)
+
+        # Anlamli cumleleri sec (noktalama ile biten, yeterince uzun, alfabe orani yuksek)
+        sentences = re.split(r'(?<=[.!?])\s+', content[:2000])
+        good_sentences: list[str] = []
+        for s in sentences:
+            s = s.strip()
+            if len(s) < 40:
+                continue
+            alpha_ratio = sum(1 for c in s if c.isalpha()) / max(len(s), 1)
+            if alpha_ratio < 0.5:
+                continue
+            # JS/CSS artigi iceren cumleleri at
+            if any(junk in s.lower() for junk in ("function(", "var ", "const ", "document.", "window.",
+                                                     "observer", "innerhtml", ".classname", "appendchild")):
+                continue
+            good_sentences.append(s)
+            if len(good_sentences) >= 3:
+                break
+
+        summary = " ".join(good_sentences) if good_sentences else ""
+
+        # Ozet hala bossa sadece basligi yaz
+        if not summary or len(summary) < 30:
+            lines.append(f"\n### [K{idx}] {title}")
+            lines.append(f"*Kaynak: {source} | Tarih: {pub_date}*")
+        else:
+            lines.append(f"\n### [K{idx}] {title}")
+            lines.append(f"*Kaynak: {source} | Tarih: {pub_date}*")
+            lines.append(summary)
         used += 1
+
     if used == 0:
-        lines.append("- Kullanilabilir kaynak icerigi bulunamadi.")
-    lines.extend(
-        [
-            "",
-            "## Sinirlar ve Guven",
-            "- Bazi kaynaklarda icerik cekimi sinirli olabilir.",
-            "- Bulgu seti, erisilebilen kaynak metinleri ile sinirlidir.",
-            "- Kritik kararlar oncesinde birincil kaynaklardan manuel dogrulama onerilir.",
-        ]
-    )
+        lines.append("Kullanılabilir kaynak içeriği bulunamadı.")
+
+    lines.extend([
+        "",
+        "## Değerlendirme",
+        "- Bu rapor otomatik kaynak taramasına dayanmaktadır.",
+        "- Kritik kararlar için birincil kaynaklardan doğrulama önerilir.",
+    ])
     return "\n".join(lines).strip()
 
 
@@ -177,6 +276,78 @@ def _error_brief(exc: Exception) -> str:
         return text
     name = type(exc).__name__
     return name or "UnknownError"
+
+
+def _clean_web_content(text: str) -> str:
+    """Web sayfasından çekilen içerikten JS/CSS artıklarını, navigasyon çöplerini temizle."""
+    if not text:
+        return ""
+    # HTML tag artiklari (kalanlar)
+    text = re.sub(r'<[^>]{0,500}>', ' ', text)
+    # JS obje literalleri: { key: value, ... }
+    text = re.sub(r'\{[^{}]{0,600}\}', ' ', text)
+    # Kalan süslü parantezler
+    text = re.sub(r'[{}]', ' ', text)
+    # JS fonksiyon / method kaliplari
+    text = re.sub(
+        r'\b(?:addEventListener|querySelector|getAttribute|setAttribute|'
+        r'attributeFilter|MutationObserver|ResizeObserver|IntersectionObserver|'
+        r'document\.\w+|window\.\w+|console\.\w+|function\s*\(|var\s+\w+\s*=|'
+        r'let\s+\w+\s*=|const\s+\w+\s*=|return\s+\w+|typeof\s+\w+|'
+        r'observer\.observe|\.innerHTML|\.textContent|\.className|'
+        r'\.parentNode|\.childNodes|\.appendChild)\b[^.;]{0,200}[;)]?', ' ', text)
+    # data-* attribute kalıpları
+    text = re.sub(r'data-[\w-]+=[\"\'][^\"\']{0,200}[\"\']', ' ', text)
+    # Inline CSS / style / attribute artıkları
+    text = re.sub(r'(?:style|class|href|src|onclick|onload|onerror|aria-\w+)\s*=\s*["\'][^"\']{0,300}["\']', ' ', text)
+    # CSS seçicileri ve kuralları
+    text = re.sub(r'[.#][\w-]+\s*\{[^}]{0,500}\}', ' ', text)
+    text = re.sub(r'@media[^{]*\{[^}]{0,1000}\}', ' ', text)
+    # URL'ler (cok uzun olanlar kesinlikle nav/resource link)
+    text = re.sub(r'https?://\S{60,}', ' ', text)
+    # Parantez icinde JS argumanlari: (document.documentElement, )
+    text = re.sub(r'\([^)]{0,300}(?:document|window|Element|Node|observer)[^)]{0,300}\)', ' ', text)
+    # "DİĞER Röportaj Teknoloji Kültür-Sanat" tipi nav menu satirlari
+    # Ardisik kisa kelimelerin (2-15 karakter) 5+ tekrari = menu
+    text = re.sub(r'(?:\b\w{2,15}\b\s+){5,}(?=\b\w{2,15}\b\s*$)', ' ', text, flags=re.MULTILINE)
+    # Cookie/consent banner metinleri
+    text = re.sub(r'(?i)(?:cookie|consent|privacy policy|terms of use|accept all|reject all)[^.]{0,200}\.?', ' ', text)
+    # Çok kısa satırları (menü öğeleri, nav linkler) filtrele
+    lines = text.split('\n')
+    good_lines = []
+    for ln in lines:
+        ln = ln.strip()
+        if len(ln) < 25:
+            continue
+        # Cok fazla ozel karakter iceren satirlari at (JS/CSS artigi)
+        alpha_ratio = sum(1 for c in ln if c.isalpha()) / max(len(ln), 1)
+        if alpha_ratio < 0.4:
+            continue
+        good_lines.append(ln)
+    text = ' '.join(good_lines)
+    # Tekrar eden boşluklar
+    text = re.sub(r'\s{2,}', ' ', text).strip()
+    return text
+
+
+def _source_is_relevant(title: str, content: str, topic_keywords: list[str]) -> bool:
+    """Kaynağın araştırma konusuyla alakalı olup olmadığını kontrol eder.
+
+    En az 1 anahtar kelimenin başlık veya içerikte geçmesi yeterli.
+    Cok katı olmamak lazım - ama tamamen alakasız kaynakları elemeli.
+    """
+    if not topic_keywords:
+        return True  # Keyword yoksa filtreleme yapma
+    combined = (title + " " + content[:500]).lower()
+    combined_ascii = _normalize_ascii(combined)
+    matches = 0
+    for kw in topic_keywords:
+        kw_lower = kw.lower()
+        kw_ascii = _normalize_ascii(kw_lower)
+        if kw_lower in combined or kw_ascii in combined_ascii:
+            matches += 1
+    # En az 1 keyword eslesmesi gerekli
+    return matches >= 1
 
 
 def _looks_like_turkish_text(text: str) -> bool:
@@ -389,8 +560,10 @@ def tool_research_async(
 
         try:
             # 2. Konuya ozgu sorgular
+            topic_keywords = _extract_topic_keywords(topic)[:8]
             queries = _generate_smart_queries(topic)
             tool_notebook_add_note(name=safe_name, note=f"Alt sorgular: {queries}")
+            tool_notebook_add_note(name=safe_name, note=f"Konu anahtar kelimeleri: {topic_keywords[:6]}")
             try:
                 tool_notebook_complete_step(
                     name=safe_name,
@@ -400,10 +573,47 @@ def tool_research_async(
             except Exception:
                 pass
 
-            # 3. Haber/web ara
+            # 3. Haber/web ara — geniş kaynak yelpazesi
             all_sources: list = []
             seen_source_keys: set = set()
-            per_query_limit = max(8, min(int(max_sources or 24), 25))
+            per_query_limit = 30  # Google News RSS zaten 20-30 sonuç döndürür, yapay kısıt yok
+
+            def _add_sources_from_items(items: list, label: str) -> int:
+                added = 0
+                skipped_irrelevant = 0
+                for item in items:
+                    raw_url = item.get("url", "") or item.get("link", "")
+                    url = _decode_bing_click_url(str(raw_url))
+                    title = str(item.get("title", "") or "").strip()
+                    source = str(item.get("source", "") or "").strip()
+                    source_url = str(item.get("source_url", "") or "").strip()
+                    summary = str(item.get("summary", "") or "").strip()
+                    key = (url or title).strip().lower()
+                    if not key or key in seen_source_keys:
+                        continue
+                    # Konu ilgililik filtresi
+                    if not _source_is_relevant(title, summary, topic_keywords):
+                        skipped_irrelevant += 1
+                        continue
+                    seen_source_keys.add(key)
+                    all_sources.append({
+                        "title": title,
+                        "url": url,
+                        "link": url,
+                        "pub_date": str(item.get("pub_date", "") or "").strip(),
+                        "source": source or label,
+                        "source_url": source_url,
+                        "summary": summary,
+                    })
+                    added += 1
+                if skipped_irrelevant:
+                    tool_notebook_add_note(
+                        name=safe_name,
+                        note=f"[FİLTRE] {skipped_irrelevant} alakasız kaynak elendi",
+                    )
+                return added
+
+            # 3a. Google News RSS (Türkçe + İngilizce sorgular)
             for q in queries:
                 try:
                     res = execute_tool("search_news", {"query": q, "limit": per_query_limit})
@@ -411,50 +621,91 @@ def tool_research_async(
                     feed_warnings = res.get("feed_warnings", []) or []
                     for fw in feed_warnings[:2]:
                         tool_notebook_add_note(name=safe_name, note=f"[UYARI] {fw[:180]}")
-                    added_now = 0
-                    for item in items:
-                        raw_url = item.get("url", "") or item.get("link", "")
-                        url = _decode_bing_click_url(str(raw_url))
-                        title = str(item.get("title", "") or "").strip()
-                        source = str(item.get("source", "") or "").strip()
-                        source_url = str(item.get("source_url", "") or "").strip()
-                        key = (url or title).strip().lower()
-                        if not key or key in seen_source_keys:
-                            continue
-                        seen_source_keys.add(key)
-                        all_sources.append(
-                            {
-                                "title": title,
-                                "url": url,
-                                "link": url,
-                                "pub_date": str(item.get("pub_date", "") or "").strip(),
-                                "source": source,
-                                "source_url": source_url,
-                                "summary": str(item.get("summary", "") or "").strip(),
-                            }
-                        )
-                        added_now += 1
-                    tool_notebook_add_note(name=safe_name, note=f"'{q}': {added_now} benzersiz kaynak")
+                    added_now = _add_sources_from_items(items, "Google News")
+                    tool_notebook_add_note(name=safe_name, note=f"[HABER] '{q}': {added_now} kaynak eklendi")
                     if res.get("error"):
-                        tool_notebook_add_note(name=safe_name, note=f"'{q}' search hatasi: {res['error']}")
+                        tool_notebook_add_note(name=safe_name, note=f"'{q}' arama hatası: {res['error']}")
                 except Exception as exc2:
                     logging.getLogger(__name__).error("[research_async] search hatasi: %s\n%s", exc2, traceback.format_exc())
-                    tool_notebook_add_note(name=safe_name, note=f"'{q}' hatasi: {_error_brief(exc2)}")
+                    tool_notebook_add_note(name=safe_name, note=f"'{q}' hatası: {_error_brief(exc2)}")
+
+            # 3b. Wikipedia — konuya ait genel bilgi çek (kelime siniri kontrolu ile)
+            _lower_topic = _normalize_ascii(topic).lower()
+            wiki_subjects: list[str] = []
+            if _topic_has_keyword(_lower_topic, ["iran", "israil", "israel"]):
+                wiki_subjects += ["Iran–Israel conflict", "Israel–Hamas war", "Iran nuclear program"]
+            if _topic_has_keyword(_lower_topic, ["finans", "piyasa", "petrol", "enerji", "ekonomi"]):
+                wiki_subjects += ["Oil price", "Geopolitical risk premium", "Commodity market"]
+            if _topic_has_keyword(_lower_topic, ["abd", "nato", "america"]):
+                wiki_subjects += ["United States foreign policy in the Middle East"]
+            if _topic_has_keyword(_lower_topic, ["kanser", "cancer", "tedavi", "treatment"]):
+                wiki_subjects += ["Cancer research", "Immunotherapy", "Cancer treatment"]
+            if _topic_has_keyword(_lower_topic, ["yapay", "zeka", "llm", "agents", "ajanlar"]):
+                wiki_subjects += ["Artificial intelligence", "Large language model", "AI agent"]
+            for subj in wiki_subjects:
+                try:
+                    wiki_url = f"https://en.wikipedia.org/wiki/{subj.replace(' ', '_')}"
+                    page = execute_tool("fetch_web_page", {"url": wiki_url, "max_chars": 18000})
+                    raw = str(page.get("content", "") or "").strip()
+                    cleaned = _clean_web_content(raw)
+                    if cleaned and len(cleaned) > 300:
+                        all_sources.append({
+                            "title": f"Wikipedia: {subj}",
+                            "url": wiki_url,
+                            "link": wiki_url,
+                            "pub_date": "",
+                            "source": "Wikipedia",
+                            "source_url": wiki_url,
+                            "summary": cleaned[:600],
+                        })
+                        tool_notebook_add_note(name=safe_name, note=f"[WİKİ] '{subj}': {len(cleaned)} karakter çekildi")
+                except Exception as wiki_exc:
+                    tool_notebook_add_note(name=safe_name, note=f"[WİKİ HATA] {subj}: {_error_brief(wiki_exc)[:100]}")
+
+            # 3c. Finansal konular için özel kaynaklar doğrudan çek
+            if _topic_has_keyword(_lower_topic, ["finans", "piyasa", "petrol", "altin", "doviz", "emtia", "borsa"]):
+                financial_urls = [
+                    ("Reuters Markets", "https://www.reuters.com/markets/"),
+                    ("Bloomberg Middle East", "https://www.bloomberg.com/middle-east"),
+                ]
+                for label, furl in financial_urls:
+                    try:
+                        page = execute_tool("fetch_web_page", {"url": furl, "max_chars": 15000})
+                        raw = str(page.get("content", "") or "").strip()
+                        cleaned = _clean_web_content(raw)
+                        if cleaned and not _is_low_signal_content(cleaned):
+                            key = furl.lower()
+                            if key not in seen_source_keys:
+                                seen_source_keys.add(key)
+                                all_sources.append({
+                                    "title": f"{label} (güncel)",
+                                    "url": furl,
+                                    "link": furl,
+                                    "pub_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                                    "source": label,
+                                    "source_url": furl,
+                                    "summary": cleaned[:800],
+                                })
+                                tool_notebook_add_note(name=safe_name, note=f"[FİNANS] {label}: {len(cleaned)} karakter çekildi")
+                    except Exception as fin_exc:
+                        tool_notebook_add_note(name=safe_name, note=f"[FİNANS HATA] {label}: {_error_brief(fin_exc)[:100]}")
 
             tool_notebook_complete_step(
                 name=safe_name, step_keyword="tara",
-                finding=f"{len(all_sources)} toplam kaynak"
+                finding=f"{len(all_sources)} toplam kaynak (haber + wiki + finansal)"
             )
             notify(
                 f"\U0001f50d <b>{topic[:60]}</b>\n"
-                f"{len(all_sources)} kaynak bulundu, içerikler okunuyor..."
+                f"{len(all_sources)} kaynak bulundu (haber, Wikipedia, finansal). İçerikler okunuyor..."
             )
 
             # 4. Kaynak iceriklerini oku
             read_contents: list = []
             fetch_failures = 0
             high_signal_count = 0
-            source_cap = max(12, min(int(max_sources or 24), 35))
+            # 80 kaynak: kapsamlı ama makul (100 kaynak × ~10s fetch = saatler sürer)
+            # Zaman limiti zaten 30 dk'da keser; bu ek bir güvence
+            source_cap = min(len(all_sources), 80)
 
             for idx, item in enumerate(all_sources[:source_cap], start=1):
                 url = str(item.get("url", "") or item.get("link", "")).strip()
@@ -469,10 +720,11 @@ def tool_research_async(
 
                 if url:
                     try:
-                        page = execute_tool("fetch_web_page", {"url": url, "max_chars": 22000})
-                        fetched = str(page.get("content", "") or page.get("text", "") or "").strip()
+                        page = execute_tool("fetch_web_page", {"url": url, "max_chars": 28000})
+                        raw = str(page.get("content", "") or page.get("text", "") or "").strip()
+                        fetched = _clean_web_content(raw)
                         if fetched and not _is_low_signal_content(fetched):
-                            content_parts.append(fetched[:3600])
+                            content_parts.append(fetched[:6000])
                             fetched_ok = True
                         else:
                             fetch_failures += 1
@@ -485,30 +737,31 @@ def tool_research_async(
 
                 if not fetched_ok and source_url and source_url != url:
                     try:
-                        page2 = execute_tool("fetch_web_page", {"url": source_url, "max_chars": 18000})
-                        fetched2 = str(page2.get("content", "") or page2.get("text", "") or "").strip()
+                        page2 = execute_tool("fetch_web_page", {"url": source_url, "max_chars": 20000})
+                        raw2 = str(page2.get("content", "") or page2.get("text", "") or "").strip()
+                        fetched2 = _clean_web_content(raw2)
                         if fetched2 and not _is_low_signal_content(fetched2):
-                            content_parts.append(fetched2[:2400])
+                            content_parts.append(fetched2[:4000])
                             fetched_ok = True
                     except Exception:
                         pass
 
                 if summary and len(summary) >= 45:
-                    content_parts.append(f"RSS Ozeti: {summary[:900]}")
+                    content_parts.append(f"RSS Özeti: {_clean_web_content(summary)[:1200]}")
 
                 if not content_parts:
                     content_parts.append(
                         (
-                            f"Baslik: {title or 'Bilinmiyor'}\n"
-                            f"Yayin tarihi: {pub_date or 'Bilinmiyor'}\n"
+                            f"Başlık: {title or 'Bilinmiyor'}\n"
+                            f"Yayın tarihi: {pub_date or 'Bilinmiyor'}\n"
                             f"Kaynak: {source or 'Bilinmiyor'}\n"
-                            f"Ozet: {summary[:700] if summary else 'Bilinmiyor'}"
+                            f"Özet: {summary[:700] if summary else 'Bilgi yok'}"
                         )
                     )
                 else:
                     high_signal_count += 1 if fetched_ok else 0
 
-                content = "\n\n".join(content_parts).strip()[:5200]
+                content = "\n\n".join(content_parts).strip()[:7000]
                 if title or url:
                     read_contents.append(
                         {
@@ -522,13 +775,13 @@ def tool_research_async(
                     tool_notebook_add_note(
                         name=safe_name,
                         note=(
-                            f"[KAYNAK {idx}/{source_cap}] { (title or url)[:60] } | "
-                            f"icerik={len(content)} karakter | kaynak={source[:40] or 'Bilinmiyor'}"
+                            f"[KAYNAK {idx}/{source_cap}] {(title or url)[:60]} | "
+                            f"içerik={len(content)} karakter | kaynak={source[:40] or 'Bilinmiyor'}"
                         ),
                     )
 
-                if time.time() - start_ts > 480:
-                    tool_notebook_add_note(name=safe_name, note="[UYARI] 8dk siniri: icerik okuma durduruldu")
+                if time.time() - start_ts > 1800:
+                    tool_notebook_add_note(name=safe_name, note="[UYARI] 30 dk sınırı: içerik okuma durduruldu, senteze geçiliyor")
                     break
 
             tool_notebook_complete_step(
@@ -545,110 +798,163 @@ def tool_research_async(
                 try:
                     import asyncio
                     from ..llm import LLMClient
-                    
-                    llm_client = LLMClient()
-                    context_blocks = []
-                    synthesis_source_cap = max(10, min(len(read_contents), 24))
-                    for i, rc in enumerate(read_contents[:synthesis_source_cap], 1):
-                        context_blocks.append(
-                            "\n".join(
-                                [
-                                    f"[S{i}] Baslik: {rc.get('title')}",
-                                    f"Kaynak: {rc.get('source', 'Bilinmiyor')}",
-                                    f"Tarih: {rc.get('pub_date', 'Bilinmiyor')}",
-                                    f"URL: {rc.get('url', '')}",
-                                    "Icerik:",
-                                    str(rc.get("content", ""))[:1600],
-                                ]
+
+                    # Thread-safe event loop olustur (asyncio.run() thread icinde sorunlu)
+                    _synth_loop = asyncio.new_event_loop()
+
+                    def _llm_call_safe(msgs: list, timeout_sec: float = 300.0) -> str:
+                        """Thread-safe LLM cagrisi, timeout koruması ile."""
+                        async def _do():
+                            client = LLMClient()
+                            return await asyncio.wait_for(
+                                client.chat(messages=msgs, tools=[]),
+                                timeout=timeout_sec,
                             )
-                        )
-                    
-                    full_context = "\n\n".join(context_blocks)
-                    
-                    system_prompt = (
-                        "Sen deneyimli bir jeopolitik ve finans arastirma analistisin. "
-                        "Verilen kaynaklardan kapsamli bir rapor yaz. Cikti dili yalnizca Turkce olsun. "
-                        "Kaynak yetersizse raporu reddetme; belirsizlikleri acikca not ederek yine sentez yap. "
-                        "Kullanici tarih verdiyse (or. 5 Mart 2026), bu tarihi referans tarih kabul et; "
-                        "salt tarih nedeniyle 'gelecek tarih' reddi uretme. "
-                        "Sadece verilen kaynaklara dayan, spekulasyonu sinirla ve her ana bulguda [S1], [S2] gibi kaynak etiketi kullan. "
-                        "Ingilizce yanit verme."
+                        for attempt in range(1, 3):  # max 2 deneme (eskiden 3'tu)
+                            try:
+                                resp = _synth_loop.run_until_complete(_do())
+                                return _extract_llm_text(resp)
+                            except asyncio.TimeoutError:
+                                tool_notebook_add_note(
+                                    name=safe_name,
+                                    note=f"[UYARI] LLM {timeout_sec}sn timeout (deneme {attempt})",
+                                )
+                                time.sleep(2.0)
+                            except Exception as _exc:
+                                tool_notebook_add_note(
+                                    name=safe_name,
+                                    note=f"[UYARI] LLM hata (deneme {attempt}): {_error_brief(_exc)[:100]}",
+                                )
+                                time.sleep(2.0 * attempt)
+                        return ""
+
+                    # ── Batch sentez ────────────────────────────────────────────────────────
+                    BATCH_SIZE = 10  # Kucuk batch = LLM daha hizli ve basarili cevap verir
+
+                    _synthesis_system = (
+                        "Sen Türkçe yazan üst düzey bir araştırma analistisin. "
+                        "Görevin: sana verilen ham kaynak metinlerini okuyarak bütünleşik, analitik bir metin üretmek.\n\n"
+                        "KESİN KURALLAR:\n"
+                        "1. Yanıt dili TAMAMEN TÜRKÇE. İngilizce cümle veya paragraf YASAK.\n"
+                        "2. Türkçe karakterleri (ğ, ş, ı, ö, ü, ç, İ, Ğ, Ş, Ö, Ü, Ç) doğru kullan.\n"
+                        "3. Her kaynağı AYRI AYRI özetleme — sentez yap.\n"
+                        "4. Bulguları [K1], [K2] gibi kaynak etiketiyle destekle.\n"
+                        "5. HTML artığı, JS kodu, navigasyon metni gibi anlamsız içerikleri YOK SAY.\n"
+                        "6. Verilen tarihi referans al; 'gelecek tarih' diye reddetme.\n"
+                        "7. Spekülasyonu 'öngörü' veya 'olası' şeklinde işaretle."
                     )
-                    
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Arastirma Konusu: {topic}\n\n"
-                                "Asagidaki formati uygula:\n"
-                                "1) Yonetici Ozeti\n"
-                                "2) Mevcut Durum (zaman cizelgesi)\n"
-                                "3) Kuresel Finans Etkisi (enerji, altin, hisse, doviz, tahvil)\n"
-                                "4) Senaryolar (kisa/orta vade)\n"
-                                "5) Riskler ve Belirsizlikler\n"
-                                "6) Sonuc\n\n"
-                                f"Toplanan Kaynaklar:\n{full_context}"
-                            ),
-                        },
+
+                    def _build_source_block(rc: dict, idx: int) -> str:
+                        content = str(rc.get("content", ""))[:1800]  # 2200 -> 1800 (LLM context icin)
+                        return "\n".join([
+                            f"[K{idx}] Başlık: {rc.get('title', '')}",
+                            f"Kaynak: {rc.get('source', 'Bilinmiyor')} | Tarih: {rc.get('pub_date', 'Bilinmiyor')}",
+                            "--- İçerik ---",
+                            content,
+                        ])
+
+                    # Tüm kaynaklar için blok oluştur
+                    all_blocks = [_build_source_block(rc, i) for i, rc in enumerate(read_contents, 1)]
+                    total_sources = len(all_blocks)
+
+                    if total_sources <= BATCH_SIZE:
+                        full_context = "\n\n".join(all_blocks)
+                        batch_summaries = [full_context]
+                        tool_notebook_add_note(name=safe_name, note=f"[SENTEZ] {total_sources} kaynak — tek geçiş")
+                    else:
+                        batch_summaries = []
+                        batches = [all_blocks[i:i+BATCH_SIZE] for i in range(0, total_sources, BATCH_SIZE)]
+                        tool_notebook_add_note(name=safe_name, note=f"[SENTEZ] {total_sources} kaynak → {len(batches)} batch")
+                        for b_idx, batch in enumerate(batches, 1):
+                            batch_ctx = "\n\n".join(batch)
+                            b_msgs = [
+                                {"role": "system", "content": _synthesis_system},
+                                {"role": "user", "content": (
+                                    f"ARAŞTIRMA KONUSU: {topic}\n\n"
+                                    f"Aşağıdaki {len(batch)} kaynaktan en önemli bulguları çıkar. "
+                                    "Konuyla ilgisiz içerikleri atla. "
+                                    "Bulgular arası bağlantı kur, sentez yap. Türkçe yaz.\n\n"
+                                    f"KAYNAKLAR (Batch {b_idx}/{len(batches)}):\n{batch_ctx}"
+                                )},
+                            ]
+                            b_summary = _llm_call_safe(b_msgs, timeout_sec=300.0)
+                            if b_summary:
+                                batch_summaries.append(f"[Batch {b_idx} özeti]\n{b_summary}")
+                                tool_notebook_add_note(name=safe_name, note=f"[SENTEZ] Batch {b_idx}/{len(batches)} tamamlandı ({len(b_summary)} karakter)")
+                            else:
+                                tool_notebook_add_note(name=safe_name, note=f"[UYARI] Batch {b_idx}/{len(batches)} boş döndü")
+
+                    # Final rapor
+                    final_context = "\n\n".join(batch_summaries)
+                    # Context cok buyukse kirp (yerel LLM icin)
+                    if len(final_context) > 12000:
+                        final_context = final_context[:12000] + "\n\n[... bazi icerikler uzunluk nedeniyle kirpildi ...]"
+
+                    final_msgs = [
+                        {"role": "system", "content": _synthesis_system},
+                        {"role": "user", "content": (
+                            f"ARAŞTIRMA KONUSU: {topic}\n\n"
+                            "Aşağıdaki araştırma bulgularından kapsamlı bir rapor yaz. "
+                            "Her bölüm en az 2-3 paragraf içermeli. Yüzeysel değil, derin analiz yap.\n\n"
+                            "RAPOR YAPISI:\n"
+                            "## 1. Yönetici Özeti\n"
+                            "## 2. Mevcut Durum ve Arka Plan\n"
+                            "## 3. Detaylı Analiz\n"
+                            "## 4. Senaryolar ve Öngörüler\n"
+                            "## 5. Riskler ve Belirsizlikler\n"
+                            "## 6. Sonuç ve Değerlendirme\n\n"
+                            f"BULGULAR:\n{final_context}"
+                        )},
                     ]
 
-                    llm_last_exc: Exception | None = None
-                    for attempt in range(1, 4):
-                        try:
-                            llm_resp = asyncio.run(llm_client.chat(messages=messages, tools=[]))
-                            candidate = _extract_llm_text(llm_resp)
-                            if candidate:
-                                synthesis_text = candidate
-                            if len(candidate) >= 420:
-                                break
-                        except Exception as synth_exc:
-                            llm_last_exc = synth_exc
-                            time.sleep(1.2 * attempt)
+                    synthesis_text = _llm_call_safe(final_msgs, timeout_sec=420.0)
+
+                    # Event loop kapat
+                    try:
+                        _synth_loop.close()
+                    except Exception:
+                        pass
 
                     if not synthesis_text.strip():
-                        if llm_last_exc:
-                            tool_notebook_add_note(
-                                name=safe_name,
-                                note=f"[UYARI] LLM sentez hatasi: {_error_brief(llm_last_exc)}",
-                            )
                         synthesis_text = _build_fallback_synthesis(topic, read_contents)
                         tool_notebook_add_note(
                             name=safe_name,
-                            note="[UYARI] LLM sentezi alinamadi; kaynaklardan fallback sentez uretildi.",
+                            note="[UYARI] LLM sentezi alınamadı; kaynaklardan fallback sentez üretildi.",
                         )
                     elif not _looks_like_turkish_text(synthesis_text):
-                        translated_ok = False
+                        # Turkceye cevir denemesi
+                        tr_messages = [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Aşağıdaki metni anlam ve yapı bozulmadan yalnızca Türkçeye çevir. "
+                                    "Başlıkları ve madde listelerini koru."
+                                ),
+                            },
+                            {"role": "user", "content": synthesis_text[:10000]},
+                        ]
+                        _tr_loop = asyncio.new_event_loop()
                         try:
-                            tr_messages = [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "Asagidaki metni anlami koruyarak yalnizca Turkceye cevir. "
-                                        "Yapisal basliklari ve maddelemeyi koru."
-                                    ),
-                                },
-                                {"role": "user", "content": synthesis_text[:12000]},
-                            ]
-                            translated = _extract_llm_text(asyncio.run(llm_client.chat(messages=tr_messages, tools=[])))
-                            if translated and len(translated) >= 240 and _looks_like_turkish_text(translated):
-                                synthesis_text = translated
-                                translated_ok = True
-                                tool_notebook_add_note(
-                                    name=safe_name,
-                                    note="[BILGI] Sentez cikti dili Turkceye normalize edildi.",
+                            async def _tr_call():
+                                client = LLMClient()
+                                return await asyncio.wait_for(
+                                    client.chat(messages=tr_messages, tools=[]),
+                                    timeout=300.0,
                                 )
+                            translated = _extract_llm_text(_tr_loop.run_until_complete(_tr_call()))
+                            if translated and len(translated) >= 400 and _looks_like_turkish_text(translated):
+                                synthesis_text = translated
+                                tool_notebook_add_note(name=safe_name, note="[BİLGİ] Sentez Türkçeye normalize edildi.")
+                            else:
+                                synthesis_text = _build_fallback_synthesis(topic, read_contents)
+                                tool_notebook_add_note(name=safe_name, note="[UYARI] Türkçe normalize başarısız; fallback uygulandı.")
                         except Exception as tr_exc:
-                            tool_notebook_add_note(
-                                name=safe_name,
-                                note=f"[UYARI] Turkce normalize adimi atlandi: {_error_brief(tr_exc)}",
-                            )
-                        if not translated_ok:
-                            synthesis_text = _build_fallback_synthesis(topic, read_contents)
-                            tool_notebook_add_note(
-                                name=safe_name,
-                                note="[UYARI] Turkceye normalize basarisiz; Turkce fallback sentez uygulandi.",
-                            )
+                            tool_notebook_add_note(name=safe_name, note=f"[UYARI] Türkçe normalize atlandı: {_error_brief(tr_exc)[:80]}")
+                        finally:
+                            try:
+                                _tr_loop.close()
+                            except Exception:
+                                pass
 
                     tool_notebook_complete_step(
                         name=safe_name,
@@ -672,7 +978,7 @@ def tool_research_async(
                     synthesis_text = _build_fallback_synthesis(topic, read_contents)
                     tool_notebook_add_note(
                         name=safe_name,
-                        note=f"[UYARI] Sentez asamasinda hata: {_error_brief(synth_exc)}. Fallback sentez uygulandi.",
+                        note=f"[UYARI] Sentez hatası: {_error_brief(synth_exc)[:100]}. Fallback uygulandı.",
                     )
                     try:
                         tool_notebook_complete_step(
@@ -686,7 +992,7 @@ def tool_research_async(
                 synthesis_text = _build_fallback_synthesis(topic, read_contents)
                 tool_notebook_add_note(
                     name=safe_name,
-                    note="[UYARI] Sentez adimi: kaynak icerigi bulunamadigi icin fallback rapor olusturuldu.",
+                    note="[UYARI] Kaynak icerigi bulunamadi; fallback rapor olusturuldu.",
                 )
                 try:
                     tool_notebook_complete_step(

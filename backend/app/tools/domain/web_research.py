@@ -44,10 +44,10 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
     if not settings.web_allow_internet:
         return {"error": "Agent offline modda calisiyor. Internet istekleri engellendi."}
     safe_query = _normalize_news_query(query)
-    lim = max(1, min(limit, 20))
+    lim = max(1, min(limit, 50))
 
-    # Google News'e "when:2d" ekleyerek son 2 günün haberlerini iste
-    timed_query = f"{safe_query} when:2d"
+    # Google News — araştırma için son 1 ay kapsam (when:1m)
+    timed_query = f"{safe_query} when:1m"
     feed_urls = [
         f"https://news.google.com/rss/search?q={quote_plus(timed_query)}&hl=tr&gl=TR&ceid=TR:tr",
     ]
@@ -90,9 +90,16 @@ def tool_search_news(query: str = "turkiye gundem", limit: int = 8) -> Dict[str,
         result["error"] = "Tum haber kaynaklari basarisiz oldu: " + "; ".join(feed_errors)
     return result
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+
 def tool_fetch_web_page(url: str, max_chars: int = 12000) -> Dict[str, Any]:
     _validate_web_url(url)
-    with httpx.Client(timeout=25, follow_redirects=True, headers={"User-Agent": "OpenWorldBot/0.1"}) as client:
+    with httpx.Client(timeout=25, follow_redirects=True, headers={"User-Agent": _BROWSER_UA}) as client:
         resp = client.get(url)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "").lower()

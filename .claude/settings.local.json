@@ -3,7 +3,10 @@
     "allow": [
       "Bash(cd:*)",
       "Bash(grep:*)",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/app/tools/async_research.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/app/tools/async_research.py'', encoding=''utf-8-sig''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''backend/app/tools/domain/web_research.py'', encoding=''utf-8-sig''\\).read\\(\\)\\); print\\(''OK''\\)\")"
     ]
   }
 }

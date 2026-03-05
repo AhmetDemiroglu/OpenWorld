@@ -172,10 +172,20 @@ def _normalize_tr(text: str) -> str:
 def _get_timeout_for_request(text: str) -> httpx.Timeout:
     """İstek turune gore timeout belirle."""
     text_lower = _normalize_tr(text)
+    def _mk_timeout(read_sec: float, connect_sec: float = 10.0) -> httpx.Timeout:
+        read_sec = max(20.0, float(read_sec))
+        connect_sec = max(3.0, min(float(connect_sec), read_sec / 2))
+        write_sec = max(5.0, min(connect_sec, 15.0))
+        pool_sec = max(5.0, min(connect_sec, 15.0))
+        return httpx.Timeout(connect=connect_sec, read=read_sec, write=write_sec, pool=pool_sec)
+
+    # Durdurma/iptal komutlari kilitli durumda bile hizli donmeli.
+    if any(k in text_lower for k in ("islemi durdur", "gorevi durdur", "iptal et", "hepsini durdur", "stop")):
+        return _mk_timeout(35.0, 5.0)
     
     # GORSEL ISLEME: OCR + analiz uzun surebilir (3 dakika)
     if "gorsel" in text_lower or "[kullanici bir gorsel" in text_lower:
-        return httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+        return _mk_timeout(180.0, 10.0)
     
     # HIZLI ISLEMLER: Direkt calisir, kisa timeout yeterli
     fast_patterns = [
@@ -186,13 +196,11 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         "video kaydet", "video cek", "webcam video"
     ]
     if any(p in text_lower for p in fast_patterns):
-        # Hizli islemler (screenshot, webcam, ses) 35sn icinde biter
-        # Agent 25sn bekliyor, +10sn guvenlik payi
-        return httpx.Timeout(connect=5.0, read=35.0, write=5.0, pool=5.0)
+        return _mk_timeout(float(max(35, int(getattr(settings, "telegram_timeout_fast_sec", 45)))), 5.0)
     
     # NOTEBOOK DEVAM ETME: Cok uzun surebilir (5 dakika)
     if any(p in text_lower for p in ["devam et", "not defter", "rapora devam", "raporuna devam"]):
-        return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+        return _mk_timeout(float(max(240, int(getattr(settings, "telegram_timeout_resume_sec", 420)))), 10.0)
     
     # MASAUSTU OTOMASYON: VS Code, Codex (30 saniye yeterli)
     automation_patterns = [
@@ -205,18 +213,16 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
     if any(p in text_lower for p in automation_patterns) and any(
         p in text_lower for p in ["ac", "bul", "yaz", "tikla", "gir", "git", "onay", "kabul", "izin"]
     ):
-        # VS Code + extension + approval islemleri 30sn'yi asabildigi icin guvenli pay.
-        return httpx.Timeout(connect=8.0, read=90.0, write=8.0, pool=8.0)
+        return _mk_timeout(float(max(120, int(getattr(settings, "telegram_timeout_automation_sec", 240)))), 8.0)
     
     # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
     research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
                         "analiz", "research", "report", "pdf olustur", "word olustur", "haberleri tara"]
     if any(p in text_lower for p in research_patterns):
-        # Arastirma icin 5 dakika
-        return httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
+        return _mk_timeout(float(max(300, int(getattr(settings, "telegram_timeout_research_sec", 420)))), 10.0)
     
-    # STANDART: 2 dakika (LLM multi-step cevaplari icin 60sn yetersiz)
-    return httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+    # STANDART: qwen dusunme sureci icin daha genis pencere
+    return _mk_timeout(float(max(180, int(getattr(settings, "telegram_timeout_default_sec", 300)))), 10.0)
 
 
 async def call_agent(session_id: str, text: str) -> dict:
@@ -242,17 +248,18 @@ async def call_agent(session_id: str, text: str) -> dict:
                 raise RuntimeError(detail)
             return resp.json()
     except httpx.TimeoutException as exc:
-        # Genel timeout mesaji
+        read_sec = getattr(timeout, "read", None)
+        read_hint = f" (~{int(read_sec)} sn)" if isinstance(read_sec, (int, float)) else ""
         raise RuntimeError(
-            "Islem zaman asimina ugradi (3 dakika).\n\n"
+            f"Islem zaman asimina ugradi{read_hint}.\n\n"
             "Olası nedenler:\n"
             "- Cok karmasik bir islem istediniz\n"
             "- Sistem yogun\n"
-            "- LLM yavas yanit veriyor\n\n"
+            "- LLM uzun sure dusunuyor olabilir\n\n"
             "Oneriler:\n"
-            "1. Daha kisa ve net komutlar kullanin\n"
-            "2. Islemi parcalara bolun\n"
-            "3. Biraz bekleyip tekrar deneyin"
+            "1. Ayni istegi tekrar gonderin\n"
+            "2. \"devam et\" yazarak kaldigi yerden surdurmeyi deneyin\n"
+            "3. Gerekirse istegi parcalara bolun"
         ) from exc
     except httpx.HTTPError as exc:
         raise RuntimeError(str(exc).strip() or exc.__class__.__name__) from exc
@@ -803,6 +810,36 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
 
     # Agent'i cagir
+    thinking_msg = None
+    thinking_task = None
+    if update.message.text and not update.message.photo and not update.message.document:
+        try:
+            thinking_msg = await update.message.reply_text(
+                "⏳ Düşünüyorum... İsteğin işleniyor. Uzun isteklerde birkaç dakika sürebilir."
+            )
+
+            async def _thinking_heartbeat() -> None:
+                pulses = [
+                    "⏳ Düşünüyorum... İsteğin işleniyor.",
+                    "⏳ Hâlâ çalışıyorum... model yanıtını hazırlıyor.",
+                    "⏳ İşlem sürüyor... tamamlanınca sonucu göndereceğim.",
+                ]
+                idx = 0
+                while True:
+                    await asyncio.sleep(35)
+                    if thinking_msg is None:
+                        return
+                    try:
+                        await thinking_msg.edit_text(pulses[idx % len(pulses)])
+                    except Exception:
+                        return
+                    idx += 1
+
+            thinking_task = asyncio.create_task(_thinking_heartbeat())
+        except Exception:
+            thinking_msg = None
+            thinking_task = None
+
     try:
         data = await call_agent(session_id, user_message)
         reply = data.get("reply", "")
@@ -842,6 +879,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             reply = f"❌ Hata: {err_text[:500]}"
         media_list = []
         used_tools = []
+    finally:
+        if thinking_task is not None:
+            thinking_task.cancel()
+            try:
+                await thinking_task
+            except BaseException:
+                pass
+        if thinking_msg is not None:
+            try:
+                await thinking_msg.delete()
+            except Exception:
+                pass
 
     try:
         if (
@@ -1103,7 +1152,12 @@ async def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN missing in backend/.env")
 
     try:
-        app = Application.builder().token(token).build()
+        builder = Application.builder().token(token)
+        try:
+            builder = builder.concurrent_updates(8)
+        except Exception:
+            pass
+        app = builder.build()
         app.add_handler(CommandHandler("start", start_cmd))
         # BLOK 2: Ekran görüntüsü
         app.add_handler(CommandHandler("ekran", ekran_cmd))
