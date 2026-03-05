@@ -642,10 +642,12 @@ def tool_vscode_command(
             ext = (extension or "copilot").lower().strip()
 
             # Extension shortcut mapping
+            # NOT: Kisayollar VS Code varsayilanlariyla cakisabilir!
+            # Command Palette (Ctrl+Shift+P) en guvenilir yontemdir.
             ext_shortcuts = {
-                "kimicode":   {"keys": ["ctrl", "shift", "k"], "name": "KimiCode"},
+                "kimicode":   {"keys": ["ctrl", "shift", "p"], "name": "KimiCode", "palette_cmd": "Kimi Code: Open Chat"},
                 "copilot":    {"keys": ["ctrl", "shift", "i"], "name": "GitHub Copilot"},
-                "claudecode": {"keys": ["ctrl", "shift", "p"], "name": "Claude Code", "palette_cmd": "Claude: New Session"},
+                "claudecode": {"keys": ["ctrl", "shift", "p"], "name": "Claude Code", "palette_cmd": "Claude: Open"},
                 "codex":      {"keys": ["ctrl", "shift", "p"], "name": "Codex", "palette_cmd": "Codex: Start Session"},
             }
 
@@ -654,9 +656,9 @@ def tool_vscode_command(
 
             info = ext_shortcuts[ext]
 
-            # 1) VS Code'u ac
+            # 1) VS Code'u ac ve extension'larin yuklenmesini bekle
             subprocess.Popen([code_exe, cwd], shell=False)
-            time.sleep(3)
+            time.sleep(5)  # VS Code acilmasi
 
             # 2) VS Code'u on plana getir
             try:
@@ -683,27 +685,31 @@ def tool_vscode_command(
                     user32.SetForegroundWindow(hwnd)
                     time.sleep(0.5)
             except Exception:
-                pass  # Linux/Mac veya ctypes hatasi - devam et
+                pass
 
-            # 3) Extension panelini ac
+            # 3) Extension'larin tam yuklenmesini bekle (ilk acilista 30-40sn surebilir)
+            time.sleep(30)
+
+            # 4) Extension panelini ac
             if "palette_cmd" in info:
-                # Command palette ile ac
-                pyautogui.hotkey(*info["keys"])
+                # Command palette ile ac (en guvenilir yontem)
+                pyautogui.hotkey("ctrl", "shift", "p")
                 time.sleep(1)
                 _type_unicode(info["palette_cmd"])
-                time.sleep(0.5)
+                time.sleep(1)
                 pyautogui.press("enter")
-                time.sleep(10)  # Extension ilk yuklenmesi uzun surebilir
+                time.sleep(5)  # Panel acilmasi
             else:
-                # Direkt shortcut ile ac
+                # Direkt shortcut (sadece Copilot icin)
                 pyautogui.hotkey(*info["keys"])
-                time.sleep(8)  # Extension paneli acilana kadar bekle
+                time.sleep(5)
 
-            # 4) Mesaj yaz - input alanina tikla ve yaz
+            # 5) Mesaj yaz
             if command.strip():
-                # Input alanina odaklanmak icin kisa bir tab/click denemesi
-                pyautogui.press("tab")
-                time.sleep(0.3)
+                # Once Escape ile olasi overlay'leri kapat
+                pyautogui.press("escape")
+                time.sleep(0.5)
+                # Input alanina tikla (KimiCode input genelde panel altinda)
                 _type_unicode(command.strip())
                 time.sleep(0.5)
                 pyautogui.press("enter")
