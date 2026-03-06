@@ -39,6 +39,7 @@ from PIL import Image, ImageGrab
 
 from ..config import settings
 from ..secrets import decrypt_text
+from .vscode_automation import run_vscode_agent_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -1682,12 +1683,13 @@ def _click_text_on_active_window(
     }
 
 
-def _capture_completion_screenshot() -> str:
+def capture_notification_screenshot(prefix: str = "approval_completion") -> str:
     try:
         workspace = Path(getattr(settings, "workspace_path", Path.cwd()))
         media_dir = workspace / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
-        target = media_dir / f"approval_completion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", prefix).strip("_") or "notification"
+        target = media_dir / f"{safe_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         result = tool_screenshot_desktop(output_path=str(target))
         if isinstance(result, dict) and not result.get("error") and result.get("path"):
             path = Path(str(result["path"]))
@@ -1696,6 +1698,10 @@ def _capture_completion_screenshot() -> str:
     except Exception:
         pass
     return ""
+
+
+def _capture_completion_screenshot() -> str:
+    return capture_notification_screenshot("approval_completion")
 
 
 def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
@@ -3018,50 +3024,35 @@ def tool_type_in_agent_input(
     text: str = "",
     press_enter: bool = True,
 ) -> Dict[str, Any]:
-    """VS Code'da calisan bir AI ajan paneline odaklan ve mesaj yaz.
-
-    Args:
-        agent: Hedef ajan: codex, claudecode, kimicode, copilot, gemini
-        text: Yazilacak mesaj
-        press_enter: Yazdiktan sonra Enter'a bas (gonder)
-    """
+    """VS Code'da çalışan bir AI ajan paneline odaklan ve mesaj yaz."""
     if not text.strip():
-        return {"error": "text (yazilacak mesaj) gerekli."}
-
-    agent_key = _normalize_for_ocr_match(agent or "codex").strip() or "codex"
-
-    agent_shortcuts = {
-        "codex": ["ctrl", "n"],
-        "claudecode": ["ctrl", "escape"],
-        "kimicode": ["ctrl", "shift", "k"],
-        "copilot": ["ctrl", "shift", "i"],
-        "gemini": ["ctrl", "shift", "g"],
-    }
-
-    if agent_key not in agent_shortcuts:
-        return {
-            "error": f"Bilinmeyen ajan: {agent_key}. Desteklenen: {', '.join(agent_shortcuts.keys())}",
-        }
-
-    shortcut = agent_shortcuts[agent_key]
+        return {"error": "text (yazılacak mesaj) gerekli."}
 
     try:
-        tool_activate_window("Visual Studio Code|Code - Insiders")
-        time.sleep(0.3)
-        pyautogui.hotkey(*shortcut)
-        time.sleep(1.0)
-        _type_unicode_text(text.strip())
-        time.sleep(0.2)
-        if press_enter:
-            pyautogui.press("enter")
+        result = run_vscode_agent_prompt(
+            path=str(settings.workspace_path),
+            agent=agent,
+            prompt=text.strip(),
+            press_enter=press_enter,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    if not result.get("success"):
         return {
-            "success": True,
-            "agent": agent_key,
-            "text": text.strip()[:100],
-            "enter_pressed": press_enter,
+            "error": str(result.get("error", "Ajan girdisi yazılamadı.")),
+            "detail": str(result.get("detail", "")),
+            "agent": result.get("agent", agent),
+            "ocr_text": result.get("ocr_text", ""),
         }
-    except Exception as exc:
-        return {"error": f"Yazma hatasi: {str(exc)[:200]}"}
+
+    return {
+        "success": True,
+        "agent": result.get("agent", agent),
+        "text": text.strip()[:100],
+        "enter_pressed": press_enter,
+        "injection_method": result.get("injection_method", ""),
+    }
 
 
 def _type_unicode_text(text: str) -> None:

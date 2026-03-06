@@ -2803,7 +2803,7 @@ class AgentService:
                 prompt_text = m.group(1).strip()
                 break
 
-        quoted = re.findall(r'"([^"]{4,4000})"', user_message, flags=re.DOTALL)
+        quoted = re.findall(r"""["'“”‘’]([^"'“”‘’]{4,4000})["'“”‘’]""", user_message, flags=re.DOTALL)
         if quoted:
             candidate = max(quoted, key=len).strip()
             if len(candidate) >= len(prompt_text):
@@ -3131,17 +3131,15 @@ class AgentService:
                 [],
             )
 
-        required_tools = {"open_in_vscode", "activate_window", "hotkey", "type_text", "press_key"}
+        required_tools = {"vscode_command"}
         if not required_tools.issubset(self._known_tool_names):
             return (
-                "Bu islem icin gereken otomasyon araclari eksik: "
-                "open_in_vscode, activate_window, hotkey, type_text, press_key."
+                "Bu işlem için gereken otomasyon aracı eksik: vscode_command."
             ), []
 
         target = str(request["target"])
         path = str(request["path"])
         prompt = str(request["prompt"])
-        tools_used: List[str] = []
 
         target_extensions = {
             "kimicode": ["moonshot-ai.kimi-code-"],
@@ -3154,74 +3152,39 @@ class AgentService:
         )
         if not extension_ok:
             return (
-                f"Hata: `{target}` icin VS Code eklentisi bulunamadi. "
-                "Yanlis komut acilip web/Copilot'a kaymamak icin otomasyon durduruldu."
+                f"Hata: `{target}` için VS Code eklentisi bulunamadı. "
+                "Yanlış komut açılıp başka bir panele kaymamak için otomasyon durduruldu."
             ), []
 
-        target_command_sequences = {
-            "kimicode": [
-                "Kimi Code: Open in Side Panel",
-                "Kimi Code: New Conversation",
-                "Kimi Code: Focus Input",
-            ],
-            "codex": [
-                "New Codex Agent",
-            ],
-            "claudecode": [
-                "Claude Code: Open in Side Bar",
-                "Claude Code: New Conversation",
-                "Claude Code: Focus input",
-            ],
-        }
-        command_sequence = target_command_sequences.get(target, [])
-        if not command_sequence:
-            return f"Hata: `{target}` icin komut akisi tanimli degil.", []
-
-        def _run_gui_tool(name: str, args: Dict[str, Any], *, require_success: bool = True) -> Dict[str, Any]:
-            result = execute_tool(name, args)
-            if name not in tools_used:
-                tools_used.append(name)
-            if isinstance(result, dict):
-                if result.get("error"):
-                    raise RuntimeError(str(result.get("error")))
-                if require_success and "success" in result and result.get("success") is False:
-                    raise RuntimeError(f"{name} basarisiz")
-            return result if isinstance(result, dict) else {}
-
         try:
-            _run_gui_tool("open_in_vscode", {"path": path})
-            time.sleep(0.9)
-
-            _run_gui_tool(
-                "activate_window",
-                {"title_pattern": "Visual Studio Code|Code - Insiders"},
-                require_success=True,
+            result = execute_tool(
+                "vscode_command",
+                {
+                    "path": path,
+                    "action": "chat",
+                    "extension": target,
+                    "message": prompt[:3500],
+                },
             )
-            time.sleep(0.2)
-
-            _run_gui_tool("press_key", {"key": "esc"}, require_success=False)
-            time.sleep(0.08)
-
-            for command_text in command_sequence:
-                _run_gui_tool("hotkey", {"keys_list": ["ctrl", "shift", "p"]})
-                time.sleep(0.22)
-                _run_gui_tool("type_text", {"text": command_text, "interval": 0.004})
-                _run_gui_tool("press_key", {"key": "enter"})
-                time.sleep(0.45)
-
-            safe_prompt = prompt[:3500]
-            _run_gui_tool("type_text", {"text": safe_prompt, "interval": 0.0035})
-            _run_gui_tool("press_key", {"key": "enter"})
-        except RuntimeError as exc:
+        except Exception as exc:
             self._pending_watcher_confirmation.pop(session_id, None)
-            return f"Hata: {exc}", list(dict.fromkeys(tools_used))
+            return f"Hata: {exc}", ["vscode_command"]
 
-        tools_used = list(dict.fromkeys(tools_used))
+        if isinstance(result, dict) and result.get("error"):
+            self._pending_watcher_confirmation.pop(session_id, None)
+            detail = str(result.get("detail", "")).strip()
+            msg = f"Hata: {result.get('error')}"
+            if detail:
+                msg += f" | Detay: {detail}"
+            return msg, ["vscode_command"]
+
         watcher_profile = self._watcher_profile_for_target(target)
         self._set_pending_watcher_confirmation(session_id, profile=watcher_profile)
-        reply = f"Islem tamamlandi: VS Code acildi, {target} icin yeni session komutu gonderildi ve mesaj yazildi."
-        reply += "\nBu gorevde IDE onaylarini otomatik izleyip onaylamami ister misiniz (evet/hayir)"
-        return (reply, tools_used)
+        reply = (
+            f"İşlem tamamlandı: VS Code açıldı, {target} için güvenli yazma akışıyla mesaj gönderildi."
+            "\nBu görevde IDE onaylarını otomatik izleyip onaylamamı ister misiniz (evet/hayır)"
+        )
+        return reply, ["vscode_command"]
 
     async def _handle_audio_recording_fast(self, session_id: str, messages: List[ChatMessage], user_message: str) -> Tuple[str, int, List[str], List[str]]:
         """Ses kaydi icin fast mode handler - start, bekle, stop yapar."""

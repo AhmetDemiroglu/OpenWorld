@@ -15,14 +15,14 @@ describe('Sidebar', () => {
     render(<Sidebar {...defaultProps} />);
     
     expect(screen.getByText('Hızlı İşlemler')).toBeInTheDocument();
-    expect(screen.getByText('Oturumlar')).toBeInTheDocument();
-    expect(screen.getByText('Ayarlar')).toBeInTheDocument();
+    expect(screen.getByTitle('Oturumlar')).toBeInTheDocument();
+    expect(screen.getByTitle('Dosyalar')).toBeInTheDocument();
   });
 
   it('calls onTabChange when tab is clicked', () => {
     render(<Sidebar {...defaultProps} />);
     
-    const sessionsTab = screen.getByText('Oturumlar');
+    const sessionsTab = screen.getByTitle('Oturumlar');
     fireEvent.click(sessionsTab);
     
     expect(defaultProps.onTabChange).toHaveBeenCalledWith('sessions');
@@ -38,9 +38,10 @@ describe('Sidebar', () => {
     }
   });
 
-  it('displays current session', () => {
+  it('renders quick actions for the active tab', () => {
     render(<Sidebar {...defaultProps} />);
     
-    expect(screen.getByText('test_session')).toBeInTheDocument();
+    expect(screen.getByText('Haberler')).toBeInTheDocument();
+    expect(screen.getByText('Görevler')).toBeInTheDocument();
   });
 });

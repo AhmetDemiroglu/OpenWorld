@@ -36,13 +36,13 @@ _LOCAL_TZ = ZoneInfo("Europe/Istanbul")
 # ---------------------------------------------------------------------------
 
 CRITICAL = "CRITICAL"   # Aksiyon gerektiriyor, hemen bil
-IMPORTANT = "IMPORTANT" # Oku, deÄŸerlendir
-NOTICE = "NOTICE"       # Bilgi amaÃ§lÄ±, gÃ¶zden kaÃ§Ä±rma (deprecation, repo silme, model kaldÄ±rma vs)
+IMPORTANT = "IMPORTANT" # Oku, değerlendir
+NOTICE = "NOTICE"       # Bilgi amaçlı, gözden kaçırma (deprecation, repo silme, model kaldırma vs)
 NORMAL = "NORMAL"       # Atla
 SPAM = "SPAM"           # Atla
 
 _NOTIFY_LEVELS = {CRITICAL, IMPORTANT, NOTICE}
-_DRAFT_LEVELS = {CRITICAL}  # Sadece bu seviyeler iÃ§in taslak Ã¼ret
+_DRAFT_LEVELS = {CRITICAL}  # Sadece bu seviyeler için taslak üret
 
 _CHAR_FOLD_MAP = str.maketrans({
     "ı": "i",
@@ -160,13 +160,13 @@ def set_preferred_mail_provider(provider: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Gmail fetch â€“ only UNREAD
+# Gmail fetch - only UNREAD
 # ---------------------------------------------------------------------------
 
 def _fetch_unread_emails(token: str, max_results: int = 30) -> List[Dict[str, Any]]:
     """Fetch unread emails from all tabs (inbox + promotions + updates + social)."""
     headers = {"Authorization": f"Bearer {token}"}
-    # Include all tabs â€” critical mails often land in Promotions or Updates
+    # Include all tabs - critical mails often land in Promotions or Updates
     query = "is:unread (in:inbox OR in:promotions OR category:updates OR category:social) -in:spam -in:trash"
 
     with httpx.Client(timeout=30) as client:
@@ -187,7 +187,7 @@ def _fetch_unread_emails(token: str, max_results: int = 30) -> List[Dict[str, An
                     headers=headers,
                 )
         if list_resp.status_code == 401:
-            logger.error("Gmail 401 â€“ token expired, skipping this cycle")
+            logger.error("Gmail 401 - token expired, skipping this cycle")
             return []
         list_resp.raise_for_status()
 
@@ -298,61 +298,61 @@ class DuplicateFilter:
 
 
 # ---------------------------------------------------------------------------
-# LLM Triage â€“ calls Ollama directly (no tools needed, just text)
+# LLM Triage - calls Ollama directly (no tools needed, just text)
 # ---------------------------------------------------------------------------
 
-_TRIAGE_PROMPT = """Sen bir e-posta Ã¶ncelik sÄ±nÄ±flandÄ±rÄ±cÄ±sÄ±sÄ±n.
-KullanÄ±cÄ± profili: Ahmet, Full-Stack Developer, Ä°zmir. Teknolojiler: Vue.js, React, React Native, JS/TS, CSS, C# .NET Core, SQL Server. AI/ML, yapay zeka modelleri ve yazÄ±lÄ±m iÅŸ ilanlarÄ±yla ilgileniyor.
+_TRIAGE_PROMPT = """Sen bir e-posta öncelik sınıflandırıcısısın.
+Kullanıcı profili: Ahmet, Full-Stack Developer, İzmir. Teknolojiler: Vue.js, React, React Native, JS/TS, CSS, C# .NET Core, SQL Server. AI/ML, yapay zeka modelleri ve yazılım iş ilanlarıyla ilgileniyor.
 
-SINIFLANDIRMA KURALLARI (sÄ±rayla deÄŸerlendir):
+SINIFLANDIRMA KURALLARI (sırayla değerlendir):
 
-CRITICAL â€“ Hemen bilmesi gerekiyor, aksiyon gerektirebilir:
-- Hesap/gÃ¼venlik uyarÄ±larÄ± (ÅŸifre sÄ±fÄ±rlama, ÅŸÃ¼pheli giriÅŸ, 2FA)
-- Fatura, Ã¶deme, abonelik bildirimleri
-- GitHub: repo silinecek, fork kaldÄ±rÄ±lacak, depo arÅŸivlenecek
-- Google/AWS/Azure/Vercel: servis kapatÄ±lÄ±yor, hesap askÄ±ya alÄ±ndÄ±
-- npm/PyPI/NuGet: paket deprecated veya kaldÄ±rÄ±lÄ±yor (kullandÄ±ÄŸÄ±n teknolojiler iÃ§in)
-- API deÄŸiÅŸikliÄŸi / breaking change bildirimleri (OpenAI, Anthropic, Google AI, Azure AI vb.)
-- KiÅŸisel/acil yazÄ±ÅŸmalar (gerÃ§ek insanlardan, iÅŸ/proje baÄŸlamÄ±nda)
-- YazÄ±lÄ±m iÅŸ ilanlarÄ± (Frontend, React, Vue.js, Ä°zmir veya remote pozisyonlar)
+CRITICAL - Hemen bilmesi gerekiyor, aksiyon gerektirebilir:
+- Hesap/güvenlik uyarıları (şifre sıfırlama, şüpheli giriş, 2FA)
+- Fatura, ödeme, abonelik bildirimleri
+- GitHub: repo silinecek, fork kaldırılacak, depo arşivlenecek
+- Google/AWS/Azure/Vercel: servis kapatılıyor, hesap askıya alındı
+- npm/PyPI/NuGet: paket deprecated veya kaldırılıyor (kullandığın teknolojiler için)
+- API değişikliği / breaking change bildirimleri (OpenAI, Anthropic, Google AI, Azure AI vb.)
+- Kişisel/acil yazışmalar (gerçek insanlardan, iş/proje bağlamında)
+- Yazılım iş ilanları (Frontend, React, Vue.js, İzmir veya remote pozisyonlar)
 
-IMPORTANT â€“ OkumasÄ± gerekiyor ama hemen deÄŸil:
-- Ä°lginÃ§ iÅŸ ilanlarÄ± (yukarÄ±dakiyle Ã¶rtÃ¼ÅŸmeyen ama deÄŸerlendirilmesi gereken pozisyonlar)
-- GerÃ§ekten deÄŸerli teknik iÃ§erik veya bÃ¼lten (sadece konuya Ã¶zel, genel reklam deÄŸil)
-- PR bildirimleri, proje gÃ¼ncellemeleri (kendi projeleri veya katkÄ±da bulunduÄŸu projeler)
-- Konferans/etkinlik bildirimleri (teknik, Ã¼cretsiz veya deÄŸerli)
+IMPORTANT - Okuması gerekiyor ama hemen değil:
+- İlginç iş ilanları (yukarıdakiyle örtüşmeyen ama değerlendirilmesi gereken pozisyonlar)
+- Gerçekten değerli teknik içerik veya bülten (sadece konuya özel, genel reklam değil)
+- PR bildirimleri, proje güncellemeleri (kendi projeleri veya katkıda bulunduğu projeler)
+- Konferans/etkinlik bildirimleri (teknik, ücretsiz veya değerli)
 
-NOTICE â€“ Bilmesi gerekiyor ama aksiyon ÅŸart deÄŸil:
-- AI model gÃ¼ncellemeleri, yeni model duyurularÄ± (GPT, Claude, Gemini, Mistral, Llama vb.)
-- Framework/kÃ¼tÃ¼phane yeni sÃ¼rÃ¼m duyurularÄ± (React 19, Vue 4, Next.js vb.)
-- Deprecation bildirimleri (kÄ±sa/orta vadeli, hemen aksiyon gerektirmeyen)
-- Ã–nemli teknoloji haberleri (acquisition, kapatma, bÃ¼yÃ¼k deÄŸiÅŸim)
-- GitHub Sponsors, aÃ§Ä±k kaynak duyurularÄ±, topluluk haberleri
-- Servis fiyat deÄŸiÅŸiklikleri (kullandÄ±ÄŸÄ± araÃ§lar iÃ§in)
+NOTICE - Bilmesi gerekiyor ama aksiyon şart değil:
+- AI model güncellemeleri, yeni model duyuruları (GPT, Claude, Gemini, Mistral, Llama vb.)
+- Framework/kütüphane yeni sürüm duyuruları (React 19, Vue 4, Next.js vb.)
+- Deprecation bildirimleri (kısa/orta vadeli, hemen aksiyon gerektirmeyen)
+- Önemli teknoloji haberleri (acquisition, kapatma, büyük değişim)
+- GitHub Sponsors, açık kaynak duyuruları, topluluk haberleri
+- Servis fiyat değişiklikleri (kullandığı araçlar için)
 
-NORMAL â€“ AtlansÄ±n:
-- Rutin bÃ¼ltenler, haftalÄ±k Ã¶zetler, digest mailler
+NORMAL - Atlansın:
+- Rutin bültenler, haftalık özetler, digest mailler
 - Sosyal medya bildirimleri (LinkedIn, Twitter vb.)
-- Rutin PR bildirimleri (Ã¶nemsiz repolardan)
-- Otomatik sistem raporlarÄ± (baÅŸarÄ±lÄ± build, deploy vs.)
+- Rutin PR bildirimleri (önemsiz repolardan)
+- Otomatik sistem raporları (başarılı build, deploy vs.)
 
-SPAM â€“ Kesinlikle atlansÄ±n:
+SPAM - Kesinlikle atlansın:
 - Reklam, promosyon, indirim
-- TanÄ±madÄ±ÄŸÄ± kiÅŸilerden satÄ±ÅŸ mailleri
-- AlakasÄ±z listeler
+- Tanımadığı kişilerden satış mailleri
+- Alakasız listeler
 
-Ä°Å Ä°LANI TEKRAR KONTROLÃœ:
-EÄŸer bu email bir iÅŸ ilanÄ±ysa, job_key alanÄ±nÄ± doldur: "ÅŸirket_adÄ±|pozisyon_baÅŸlÄ±ÄŸÄ±" formatÄ±nda (kÃ¼Ã§Ã¼k harf, TÃ¼rkÃ§e karakter yok, boÅŸluk yerine - kullan).
-Ã–rnek: "xyztech|senior-frontend-developer"
+İŞ İLANI TEKRAR KONTROLÜ:
+Eğer bu email bir iş ilanıysa, job_key alanını doldur: "şirket_adı|pozisyon_başlığı" formatında (küçük harf, Türkçe karakter yok, boşluk yerine - kullan).
+Örnek: "xyztech|senior-frontend-developer"
 
-CEVAP FORMATI (SADECE JSON, baÅŸka hiÃ§bir ÅŸey):
-{{"level": "CRITICAL|IMPORTANT|NOTICE|NORMAL|SPAM", "reason": "kÄ±sa TÃ¼rkÃ§e aÃ§Ä±klama (max 15 kelime)", "summary": "1-2 cÃ¼mlelik TÃ¼rkÃ§e Ã¶zet", "job_key": null}}
+CEVAP FORMATI (SADECE JSON, başka hiçbir şey):
+{{"level": "CRITICAL|IMPORTANT|NOTICE|NORMAL|SPAM", "reason": "kısa Türkçe açıklama (max 15 kelime)", "summary": "1-2 cümlelik Türkçe özet", "job_key": null}}
 
 E-POSTA:
 Kimden: {sender}
 Konu: {subject}
 Tarih: {date}
-Ã–nizleme: {snippet}
+Önizleme: {snippet}
 """
 
 
@@ -685,7 +685,7 @@ async def _send_telegram(text: str) -> bool:
         token = decrypt_text(settings.telegram_bot_token_enc)
     user_id = settings.telegram_allowed_user_id.strip()
     if not token or not user_id:
-        logger.warning("Telegram not configured â€“ skipping notification")
+        logger.warning("Telegram not configured - skipping notification")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
@@ -881,19 +881,19 @@ def send_email_via_outlook(
 # LLM draft reply generation
 # ---------------------------------------------------------------------------
 
-_DRAFT_PROMPT = """Sen Ahmet'in e-posta asistanÄ±sÄ±n. AÅŸaÄŸÄ±daki e-postaya kÄ±sa, profesyonel ve TÃ¼rkÃ§e bir yanÄ±t taslaÄŸÄ± yaz.
-YanÄ±t 3-5 cÃ¼mle olsun. Gereksiz uzatma. Sadece e-posta metnini yaz, baÅŸka hiÃ§bir ÅŸey ekleme.
+_DRAFT_PROMPT = """Sen Ahmet'in e-posta asistanısın. Aşağıdaki e-postaya kısa, profesyonel ve Türkçe bir yanıt taslağı yaz.
+Yanıt 3-5 cümle olsun. Gereksiz uzatma. Sadece e-posta metnini yaz, başka hiçbir şey ekleme.
 
 E-POSTA:
 Kimden: {sender}
 Konu: {subject}
-Ã–nizleme: {snippet}
-Ã–nem: {level} â€“ {reason}
+Önizleme: {snippet}
+Önem: {level} - {reason}
 """
 
 
 async def _generate_draft_reply(email: Dict[str, Any], triage: Dict[str, str]) -> str:
-    """LLM ile taslak e-posta yanÄ±tÄ± Ã¼ret."""
+    """LLM ile taslak e-posta yanıtı üret."""
     prompt = _DRAFT_PROMPT.format(
         sender=email.get("from", ""),
         subject=email.get("subject", ""),

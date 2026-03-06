@@ -79,14 +79,14 @@ export function App() {
   }
 
   return (
-    <div className={`app ${sidebarOpen  "with-sidebar" : ""}`}>
+    <div className={`app ${sidebarOpen ? "with-sidebar" : ""}`}>
       <Header sessionId={sessionId} onSessionChange={setSessionId}>
         <button
           className="sidebar-toggle"
           onClick={() => setSidebarOpen((v) => !v)}
-          title={sidebarOpen  "Paneli Kapat" : "Paneli Aç"}
+          title={sidebarOpen ? "Paneli Kapat" : "Paneli Aç"}
         >
-          {sidebarOpen  "◀" : "▶"}
+          {sidebarOpen ? "◀" : "▶"}
         </button>
       </Header>
 

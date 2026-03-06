@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import settings
+from .vscode_automation import (
+    find_code_executable,
+    resolve_workspace_path,
+    run_vscode_agent_prompt,
+)
 
 
 def _run_git(args: List[str], cwd: str) -> Dict[str, Any]:
@@ -42,12 +47,7 @@ def _run_git(args: List[str], cwd: str) -> Dict[str, Any]:
 
 def _resolve_project_path(path: str) -> str:
     """Proje yolunu çözümle."""
-    if not path or path == ".":
-        return str(settings.workspace_path)
-    p = Path(path).expanduser()
-    if p.is_absolute():
-        return str(p)
-    return str((settings.workspace_path / p).resolve())
+    return resolve_workspace_path(path)
 
 
 # =============================================================================
@@ -539,23 +539,6 @@ def tool_run_tests(path: str = ".", command: str = "", timeout: int = 120) -> Di
 # =============================================================================
 
 
-def _find_code_executable() -> str:
-    """VS Code executable'ini bul (PATH veya standart kurulum yolları)."""
-    code_cmd = shutil.which("code") or shutil.which("code-insiders")
-    if code_cmd:
-        return code_cmd
-    candidates = [
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code", "Code.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"),
-        os.path.join(os.environ.get("ProgramFiles", ""), "Microsoft VS Code", "Code.exe"),
-        os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Microsoft VS Code", "Code.exe"),
-    ]
-    for c in candidates:
-        if c and Path(c).exists():
-            return c
-    return ""
-
-
 def tool_vscode_command(
     path: str,
     command: str = "",
@@ -576,7 +559,7 @@ def tool_vscode_command(
     """
     cwd = _resolve_project_path(path)
     p = Path(cwd)
-    code_exe = _find_code_executable()
+    code_exe = find_code_executable()
     if not code_exe:
         return {"error": "VS Code bulunamadi. Kurulumu veya PATH ayarini kontrol edin."}
 
@@ -635,93 +618,31 @@ def tool_vscode_command(
             }
 
         elif action == "chat":
-            import time
-            import threading
-            try:
-                import pyautogui
-            except ImportError:
-                return {"error": "pyautogui kurulu degil. 'pip install pyautogui' ile kur."}
-
             ext = (extension or "copilot").lower().strip()
-
-            # Extension shortcut mapping (Direct shortcuts are faster than Command Palette)
-            ext_shortcuts = {
-                "kimicode":   {"name": "KimiCode", "shortcut": ["ctrl", "shift", "k"]},
-                "copilot":    {"name": "GitHub Copilot", "shortcut": ["ctrl", "shift", "i"]},
-                "claudecode": {"name": "Claude Code", "shortcut": ["ctrl", "escape"]},
-                "codex":      {"name": "Codex", "shortcut": ["ctrl", "n"]},
-            }
-
-            if ext not in ext_shortcuts:
-                return {"error": f"Bilinmeyen extension: {ext}. Desteklenen: {', '.join(ext_shortcuts.keys())}"}
-
-            info = ext_shortcuts[ext]
-            # LLM genellikle yeni mesaji "message" parametresinde gonderir, eskiye dukkan diye command'a fallback yapiyoruz.
             msg = message.strip() if message else (command.strip() if command else "")
-
-            def _run_chat_in_background():
-                """Arka planda VS Code ac, extension baslat, mesaj yaz."""
-                try:
-                    # 1) VS Code'u ac
-                    subprocess.Popen([code_exe, cwd], shell=False)
-                    time.sleep(5)
-
-                    # 2) VS Code'u on plana getir (Windows)
-                    try:
-                        import ctypes
-                        user32 = ctypes.windll.user32
-                        result = []
-                        def callback(hwnd, _):
-                            if user32.IsWindowVisible(hwnd):
-                                length = user32.GetWindowTextLengthW(hwnd)
-                                if length > 0:
-                                    title = ctypes.create_unicode_buffer(length + 1)
-                                    user32.GetWindowTextW(hwnd, title, length + 1)
-                                    if "Visual Studio Code" in title.value:
-                                        result.append(hwnd)
-                            return True
-                        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-                        user32.EnumWindows(WNDENUMPROC(callback), 0)
-                        if result:
-                            user32.SetForegroundWindow(result[0])
-                            time.sleep(0.5)
-                    except Exception:
-                        pass
-
-                    # 3) Kisayol ile Extension panelini ac (Bu, eklentinin Webview'ini arka planda yuklemeye baslatir)
-                    pyautogui.hotkey(*info["shortcut"])
-                    
-                    # 4) Eklentinin kendine gelmesi (Webview'in yuklenmesi) icin beklenmesi gereken sure (40 saniye)
-                    time.sleep(40)
-
-                    # 5) Focus'u garantiye alma islemi: 
-                    # 40 saniye icinde odak kaybolmus olabilir. Once text editor'e (Ctrl+1) odaklan, 
-                    # ardindan tekrar eklenti kisayoluna basarak odagi kesin olarak input'a al.
-                    pyautogui.hotkey("ctrl", "1")
-                    time.sleep(0.5)
-                    pyautogui.hotkey(*info["shortcut"])
-                    time.sleep(1)
-
-                    # 6) Mesaj yaz
-                    if msg:
-                        _type_unicode(msg)
-                        time.sleep(0.5)
-                        pyautogui.press("enter")
-                except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).error(f"vscode_command chat error: {e}")
-
-            # Arka plan thread'i baslat ve aninda don
-            thread = threading.Thread(target=_run_chat_in_background, daemon=True)
-            thread.start()
-
+            if ext == "copilot":
+                return {"error": "Copilot için ortaklaştırılmış otomasyon henüz bu dalgada desteklenmiyor."}
+            result = run_vscode_agent_prompt(
+                path=cwd,
+                agent=ext,
+                prompt=msg,
+                press_enter=True,
+            )
+            if not result.get("success"):
+                return {
+                    "error": str(result.get("error", "VS Code ajan otomasyonu başarısız.")),
+                    "detail": str(result.get("detail", "")),
+                    "agent": result.get("agent", ext),
+                    "ocr_text": result.get("ocr_text", ""),
+                }
             return {
                 "success": True,
                 "action": "chat",
-                "extension": info["name"],
-                "message": msg if msg else "(panel acildi, mesaj yok)",
+                "extension": result.get("display_name", ext),
+                "message": msg if msg else "(panel açıldı, mesaj yok)",
                 "path": cwd,
-                "note": f"Arka planda calisiyor (~45sn). VS Code aciliyor, {info['name']} baslatiliyor, mesaj yazilacak.",
+                "note": f"{result.get('display_name', ext)} için mesaj güvenli akışla gönderildi.",
+                "injection_method": result.get("injection_method", ""),
             }
 
         else:

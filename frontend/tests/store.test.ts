@@ -3,10 +3,11 @@ import { useStore } from '../src/store';
 
 // Reset store before each test
 beforeEach(() => {
-  const store = useStore.getState();
-  store.setCurrentSession('web_main');
-  store.messages = {};
-  store.notifications = [];
+  useStore.setState({
+    currentSessionId: 'web_main',
+    messages: {},
+    notifications: [],
+  });
 });
 
 describe('Store', () => {

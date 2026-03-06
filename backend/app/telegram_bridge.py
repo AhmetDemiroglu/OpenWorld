@@ -542,14 +542,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if data == "watcher_screenshot":
         try:
-            import pyautogui
-            shot = pyautogui.screenshot()
-            buf = io.BytesIO()
-            shot.save(buf, format="PNG")
-            buf.seek(0)
-            await query.message.reply_photo(photo=buf, caption="Guncel ekran goruntusu")
+            from .tools.super_agent import capture_notification_screenshot
+
+            screenshot_path = capture_notification_screenshot("watcher_manual")
+            if screenshot_path and Path(screenshot_path).exists():
+                with open(screenshot_path, "rb") as fh:
+                    await query.message.reply_photo(photo=fh, caption="Güncel ekran görüntüsü")
+            else:
+                await query.message.reply_text("Ekran görüntüsü alınamadı.")
         except Exception as exc:
-            await query.message.reply_text(f"Ekran alinamadi: {exc}")
+            await query.message.reply_text(f"Ekran alınamadı: {exc}")
         return
 
     if data.startswith("watcher_choice:"):
@@ -730,7 +732,7 @@ async def izleme_durum_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     _audit(str(update.effective_user.id), "/izleme_durum")
     try:
-        from .tools.super_agent import tool_approval_watcher_status
+        from .tools.super_agent import capture_notification_screenshot, tool_approval_watcher_status
         status = tool_approval_watcher_status()
         running = status.get("running", False)
         lines = []
@@ -752,12 +754,10 @@ async def izleme_durum_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Ek olarak ekran goruntusu gonder
         if running:
             try:
-                import pyautogui
-                shot = pyautogui.screenshot()
-                buf = io.BytesIO()
-                shot.save(buf, format="PNG")
-                buf.seek(0)
-                await update.message.reply_photo(photo=buf, caption="Guncel ekran")
+                screenshot_path = capture_notification_screenshot("watcher_status")
+                if screenshot_path and Path(screenshot_path).exists():
+                    with open(screenshot_path, "rb") as fh:
+                        await update.message.reply_photo(photo=fh, caption="Güncel ekran")
             except Exception:
                 pass
     except Exception as exc:

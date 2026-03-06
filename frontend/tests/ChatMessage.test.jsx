@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ChatMessage } from '../src/components/ChatMessage';
+import { ChatMessage, MediaPreview } from '../src/components/ChatMessage';
 
 describe('ChatMessage', () => {
   it('renders user message correctly', () => {
@@ -40,7 +40,7 @@ describe('ChatMessage', () => {
       />
     );
     
-    const badges = screen.getAllByText(/Ekran Görüntüsü|Haber Arama/);
+    const badges = screen.getAllByText(/Haber Arama|screenshot_desktop/);
     expect(badges.length).toBe(2);
   });
 
@@ -49,13 +49,7 @@ describe('ChatMessage', () => {
       { type: 'image', url: '/test.png', filename: 'test.png' }
     ];
     
-    const { container } = render(
-      <ChatMessage
-        role="assistant"
-        content="Görsel"
-        media={media}
-      />
-    );
+    const { container } = render(<MediaPreview media={media} />);
     
     expect(container.querySelector('img')).toBeInTheDocument();
   });

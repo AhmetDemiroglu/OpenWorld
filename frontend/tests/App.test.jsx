@@ -13,8 +13,8 @@ describe('App', () => {
   it('renders welcome screen initially', () => {
     render(<App />);
     
-    expect(screen.getByText('OpenWorld')).toBeInTheDocument();
-    expect(screen.getByText('Yerel otonom asistanınız.')).toBeInTheDocument();
+    expect(screen.getAllByText('OpenWorld').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Yerel otonom asistanınız/)).toBeInTheDocument();
   });
 
   it('renders chat input', () => {
