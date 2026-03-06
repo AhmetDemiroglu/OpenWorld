@@ -471,19 +471,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if data.startswith("draft_send:") or data.startswith("draft_skip:"):
         draft_id = data.split(":", 1)[1]
         try:
-            from .services.email_monitor import get_pending_draft, pop_pending_draft, send_email_via_gmail, _get_gmail_token
+            from .services.email_monitor import (
+                get_pending_draft,
+                pop_pending_draft,
+                send_email_via_gmail,
+                send_email_via_outlook,
+                _get_gmail_token,
+                _get_outlook_token,
+            )
             draft = get_pending_draft(draft_id)
             if not draft:
                 await query.edit_message_text("❌ Taslak bulunamadı (zaten gönderilmiş veya süresi dolmuş).")
                 return
             if data.startswith("draft_send:"):
-                token = _get_gmail_token()
-                sent, detail = send_email_via_gmail(
-                    token,
-                    draft["to"],
-                    draft["subject"],
-                    draft["body"],
-                ) if token else (False, "Gmail erişim belirteci bulunamadı.")
+                provider = str(draft.get("provider", "gmail") or "gmail").strip().lower()
+                if provider == "outlook":
+                    token = _get_outlook_token()
+                    sent, detail = send_email_via_outlook(
+                        token,
+                        draft["to"],
+                        draft["subject"],
+                        draft["body"],
+                    ) if token else (False, "Outlook erişim belirteci bulunamadı.")
+                else:
+                    token = _get_gmail_token()
+                    sent, detail = send_email_via_gmail(
+                        token,
+                        draft["to"],
+                        draft["subject"],
+                        draft["body"],
+                    ) if token else (False, "Gmail erişim belirteci bulunamadı.")
                 if sent:
                     pop_pending_draft(draft_id)
                     await query.edit_message_text(
@@ -502,11 +519,57 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text(f"❌ Hata: {exc}")
         return
 
-    # BLOK 7: "Başka bir şey..." yanıtı
+    # Watcher callback'leri
+    if data == "watcher_stop":
+        try:
+            from .tools.super_agent import tool_stop_approval_watcher
+            result = tool_stop_approval_watcher()
+            await query.edit_message_text(
+                "Onay izleyici durduruldu." if result.get("success") else "Izleyici zaten kapali.",
+            )
+        except Exception as exc:
+            await query.edit_message_text(f"Hata: {exc}")
+        return
+
+    if data == "watcher_continue":
+        try:
+            from .tools.super_agent import tool_ack_approval_completion_prompt
+            tool_ack_approval_completion_prompt(keep_running=True)
+            await query.edit_message_text("Onay izleyici devam ediyor.")
+        except Exception as exc:
+            await query.edit_message_text(f"Hata: {exc}")
+        return
+
+    if data == "watcher_screenshot":
+        try:
+            import pyautogui
+            shot = pyautogui.screenshot()
+            buf = io.BytesIO()
+            shot.save(buf, format="PNG")
+            buf.seek(0)
+            await query.message.reply_photo(photo=buf, caption="Guncel ekran goruntusu")
+        except Exception as exc:
+            await query.message.reply_text(f"Ekran alinamadi: {exc}")
+        return
+
+    if data.startswith("watcher_choice:"):
+        choice_text = data.split(":", 1)[1]
+        try:
+            from .tools.super_agent import tool_click_text_on_screen
+            result = tool_click_text_on_screen(target_text=choice_text)
+            if result.get("success"):
+                await query.edit_message_text(f"Secim tiklandi: {result.get('matched_text', choice_text)[:60]}")
+            else:
+                await query.edit_message_text(f"Secim bulunamadi: {choice_text[:40]}")
+        except Exception as exc:
+            await query.edit_message_text(f"Hata: {exc}")
+        return
+
+    # BLOK 7: "Basqa bir sey..." yaniti
     if data == "more_yes":
-        await query.edit_message_text("Tabii! Ne yapmamı istersin...")
+        await query.edit_message_text("Tabii! Ne yapmami istersin...")
     elif data == "more_no":
-        await query.edit_message_text("Anlaşıldı, beklemedeyim. İhtiyaç olursa yaz.")
+        await query.edit_message_text("Anlasildi, beklemedeyim. Ihtiyac olursa yaz.")
 
 
 # ─── BLOK 6: /araştır ────────────────────────────────────────────────────────
@@ -553,6 +616,201 @@ async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
     except Exception as exc:
         await update.message.reply_text(f"❌ Hata: {exc}")
+
+
+# ─── BLOK 10: /izle, /izleme_durdur, /izleme_durum ──────────────────────────
+
+async def izle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/izle [profil] — Onay izleyiciyi baslat. Profiller: gemini, codex, claudecode, kimicode, copilot, generic"""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("Cok fazla komut.")
+        return
+    args = context.args or []
+    profile = args[0].lower().strip() if args else "generic"
+    _audit(user_id, f"/izle {profile}")
+
+    try:
+        from .tools.super_agent import tool_start_approval_watcher
+        result = tool_start_approval_watcher(
+            profile=profile,
+            notify_on_completion=True,
+            auto_stop_on_completion=False,
+        )
+        if result.get("running"):
+            msg = result.get("message", "Onay izleyici aktif.")
+            status = result.get("status", {})
+            if status:
+                msg += f"\nProfil: {status.get('profile', profile)}"
+                msg += f"\nKontrol: {status.get('checks', 0)} | Onay: {status.get('accepted', 0)}"
+            await update.message.reply_text(msg)
+        else:
+            await update.message.reply_text(f"Izleyici baslatildi.\nProfil: {profile}")
+    except Exception as exc:
+        await update.message.reply_text(f"Hata: {exc}")
+
+
+async def izleme_durdur_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/izleme_durdur — Onay izleyiciyi durdur."""
+    if not _is_allowed(update):
+        return
+    _audit(str(update.effective_user.id), "/izleme_durdur")
+    try:
+        from .tools.super_agent import tool_stop_approval_watcher
+        result = tool_stop_approval_watcher()
+        await update.message.reply_text(result.get("message", "Durduruldu."))
+    except Exception as exc:
+        await update.message.reply_text(f"Hata: {exc}")
+
+
+async def izleme_durum_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/izleme_durum — Onay izleyici durumu + ekran goruntusu."""
+    if not _is_allowed(update):
+        return
+    _audit(str(update.effective_user.id), "/izleme_durum")
+    try:
+        from .tools.super_agent import tool_approval_watcher_status
+        status = tool_approval_watcher_status()
+        running = status.get("running", False)
+        lines = []
+        lines.append(f"<b>Onay Izleyici:</b> {'Aktif' if running else 'Kapali'}")
+        if running:
+            lines.append(f"Profil: {status.get('profile', '?')}")
+            lines.append(f"Durum: {status.get('watcher_state', '?')}")
+            lines.append(f"Kontrol: {status.get('checks', 0)} | Onay: {status.get('accepted', 0)}")
+            lines.append(f"Son olay: {status.get('last_event', '-')}")
+            if status.get("llm_state"):
+                lines.append(f"LLM: {status.get('llm_state', '')} (guven: {status.get('llm_confidence', 0):.0%})")
+                if status.get("llm_reasoning"):
+                    lines.append(f"LLM neden: {status.get('llm_reasoning', '')[:100]}")
+            if status.get("last_error"):
+                lines.append(f"Hata: {status.get('last_error', '')}")
+        text = "\n".join(lines)
+        await update.message.reply_text(text, parse_mode="HTML")
+
+        # Ek olarak ekran goruntusu gonder
+        if running:
+            try:
+                import pyautogui
+                shot = pyautogui.screenshot()
+                buf = io.BytesIO()
+                shot.save(buf, format="PNG")
+                buf.seek(0)
+                await update.message.reply_photo(photo=buf, caption="Guncel ekran")
+            except Exception:
+                pass
+    except Exception as exc:
+        await update.message.reply_text(f"Hata: {exc}")
+
+
+# ─── BLOK 11: /tikla_metin, /ajanyaz ────────────────────────────────────────
+
+async def tikla_metin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tikla_metin [metin] — Ekranda belirtilen metne OCR ile tikla."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("Cok fazla komut.")
+        return
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("Kullanim: /tikla_metin [metin]\nOrnek: /tikla_metin Allow once")
+        return
+    _audit(user_id, f"/tikla_metin {text[:50]}")
+    status_msg = await update.message.reply_text(f"Araniyor: {text[:40]}...")
+    try:
+        from .tools.super_agent import tool_click_text_on_screen
+        result = tool_click_text_on_screen(target_text=text)
+        if result.get("success"):
+            await status_msg.edit_text(
+                f"Tiklandi: {result.get('matched_text', text)[:60]}\n"
+                f"Eslesme: {result.get('match_ratio', 0):.0%} | Konum: ({result.get('x', 0)}, {result.get('y', 0)})"
+            )
+        else:
+            await status_msg.edit_text(f"Metin bulunamadi: {text[:60]}")
+    except Exception as exc:
+        await status_msg.edit_text(f"Hata: {exc}")
+
+
+async def ajanyaz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ajanyaz [ajan] [mesaj] — VS Code'daki ajana mesaj yaz.
+    Ornek: /ajanyaz codex bu hatayi duzelt
+    Ornek: /ajanyaz gemini projede sorun var"""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("Cok fazla komut.")
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Kullanim: /ajanyaz [ajan] [mesaj]\n"
+            "Ajanlar: codex, claudecode, kimicode, copilot, gemini\n"
+            "Ornek: /ajanyaz codex bu hatayi duzelt"
+        )
+        return
+    agent = args[0].lower().strip()
+    message = " ".join(args[1:]).strip()
+    _audit(user_id, f"/ajanyaz {agent} {message[:50]}")
+    status_msg = await update.message.reply_text(f"Yaziliyor: {agent} -> {message[:40]}...")
+    try:
+        from .tools.super_agent import tool_type_in_agent_input
+        result = tool_type_in_agent_input(agent=agent, text=message)
+        if result.get("success"):
+            await status_msg.edit_text(f"Yazildi: {agent} <- {message[:60]}")
+        else:
+            await status_msg.edit_text(f"Hata: {result.get('error', 'Bilinmeyen hata')}")
+    except Exception as exc:
+        await status_msg.edit_text(f"Hata: {exc}")
+
+
+async def ekran_analiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/analiz [profil] — Ekrani LLM ile analiz et. Durum, aksiyon, butonlari tanimla."""
+    if not _is_allowed(update):
+        return
+    user_id = str(update.effective_user.id)
+    if not _check_rate_limit(user_id):
+        await update.message.reply_text("Cok fazla komut.")
+        return
+    args = context.args or []
+    profile = args[0].lower().strip() if args else "generic"
+    _audit(user_id, f"/analiz {profile}")
+    status_msg = await update.message.reply_text("Ekran analiz ediliyor...")
+    try:
+        from .tools.super_agent import tool_analyze_screen
+        result = tool_analyze_screen(profile=profile)
+        lines = []
+        lines.append(f"<b>Durum:</b> {result.get('state', '?')}")
+        lines.append(f"<b>Aksiyon:</b> {result.get('action', '?')}")
+        if result.get("target_text"):
+            lines.append(f"<b>Hedef:</b> {result.get('target_text', '')}")
+        lines.append(f"<b>Guven:</b> {result.get('confidence', 0):.0%}")
+        if result.get("reasoning"):
+            lines.append(f"<b>Neden:</b> {result.get('reasoning', '')[:200]}")
+        if result.get("options"):
+            lines.append("<b>Secenekler:</b>")
+            for i, opt in enumerate(result["options"][:6], 1):
+                lines.append(f"  {i}. {opt}")
+        if result.get("completion_summary"):
+            lines.append(f"<b>Ozet:</b> {result.get('completion_summary', '')}")
+        await status_msg.edit_text("\n".join(lines), parse_mode="HTML")
+
+        # Ek olarak ekran goruntusu
+        try:
+            import pyautogui
+            shot = pyautogui.screenshot()
+            buf = io.BytesIO()
+            shot.save(buf, format="PNG")
+            buf.seek(0)
+            await update.message.reply_photo(photo=buf)
+        except Exception:
+            pass
+    except Exception as exc:
+        await status_msg.edit_text(f"Hata: {exc}")
 
 
 # ─── BLOK 1: /durum ──────────────────────────────────────────────────────────
@@ -1190,7 +1448,15 @@ async def main() -> None:
         app.add_handler(CommandHandler("todos", todos_cmd))
         app.add_handler(CommandHandler("done", done_cmd))
         app.add_handler(CommandHandler("export", export_cmd))
-        # BLOK 4 + 7 + draft onay: Inline buton callback'leri
+        # BLOK 10: Onay izleyici
+        app.add_handler(CommandHandler("izle", izle_cmd))
+        app.add_handler(CommandHandler("izleme_durdur", izleme_durdur_cmd))
+        app.add_handler(CommandHandler("izleme_durum", izleme_durum_cmd))
+        # BLOK 11: Ekran etkilesim
+        app.add_handler(CommandHandler("tikla_metin", tikla_metin_cmd))
+        app.add_handler(CommandHandler("ajanyaz", ajanyaz_cmd))
+        app.add_handler(CommandHandler("analiz", ekran_analiz_cmd))
+        # BLOK 4 + 7 + draft onay + watcher: Inline buton callback'leri
         app.add_handler(CallbackQueryHandler(callback_handler))
         # Hem metin hem fotoğraf mesajlarını dinle
         app.add_handler(MessageHandler(

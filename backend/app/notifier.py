@@ -10,14 +10,25 @@ Kullanim:
     # Background thread'den:
     from .notifier import notify
     notify("Arastirma tamamlandi!", file_path="/path/to/report.pdf")
+
+    # Inline butonlu bildirim:
+    from .notifier import notify_with_buttons
+    future = notify_with_buttons("Gorev bitti. Durdurayim mi?", buttons=[
+        [("Durdur", "watcher_stop"), ("Devam", "watcher_continue")],
+    ], photo_path="/path/to/screenshot.png")
+
+    # Screenshot foto olarak gonder:
+    from .notifier import notify_photo
+    notify_photo("/path/to/screenshot.png", caption="Ekran goruntusu")
 """
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +129,116 @@ def notify(text: str, file_path: Optional[str] = None) -> None:
         return
 
     _dispatch(text, file_path)
+
+
+# ---------------------------------------------------------------------------
+# Foto gonderme (screenshot icin)
+# ---------------------------------------------------------------------------
+async def _send_photo(photo_path: Path, caption: str = "") -> None:
+    """Async: foto olarak gonder (screenshot icin ideal)."""
+    try:
+        with open(photo_path, "rb") as fh:
+            await _bot.send_photo(
+                chat_id=_chat_id,
+                photo=fh,
+                caption=caption[:1024] if caption else "",
+            )
+    except Exception as exc:
+        logger.error("[Notifier] Foto gonderme hatasi (%s): %s", photo_path, exc)
+
+
+def notify_photo(photo_path: str, caption: str = "") -> None:
+    """Background thread'den screenshot/foto gonder (fire-and-forget)."""
+    if not _is_ready():
+        logger.warning("[Notifier] Henuz hazir degil. Foto gonderilemedi: %s", photo_path)
+        return
+
+    p = Path(photo_path)
+    if not p.exists() or not p.is_file():
+        logger.warning("[Notifier] Foto bulunamadi: %s", photo_path)
+        return
+
+    with _lock:
+        loop = _loop
+
+    try:
+        if loop is None:
+            raise RuntimeError("Notifier loop hazir degil")
+        asyncio.run_coroutine_threadsafe(_send_photo(p, caption), loop)
+    except Exception as exc:
+        logger.error("[Notifier] Foto coroutine iletilemedi: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Inline butonlu bildirim (watcher completion, soru/secenek icin)
+# ---------------------------------------------------------------------------
+async def _send_with_buttons(
+    text: str,
+    buttons: List[List[Tuple[str, str]]],
+    photo_path: Optional[Path] = None,
+) -> None:
+    """Async: inline keyboard butonlu mesaj gonder, opsiyonel olarak once foto gonder."""
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError:
+        logger.error("[Notifier] python-telegram-bot kurulu degil, butonlu mesaj gonderilemedi.")
+        await _send_text(text)
+        return
+
+    # Once foto gonder
+    if photo_path and photo_path.exists() and photo_path.is_file():
+        await _send_photo(photo_path, caption="")
+
+    # Inline keyboard olustur
+    keyboard_rows = []
+    for row in buttons:
+        keyboard_rows.append([
+            InlineKeyboardButton(label, callback_data=cb_data)
+            for label, cb_data in row
+        ])
+    markup = InlineKeyboardMarkup(keyboard_rows)
+
+    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)]
+    for i, chunk in enumerate(chunks):
+        # Sadece son chunk'a buton ekle
+        rm = markup if i == len(chunks) - 1 else None
+        await _bot.send_message(
+            chat_id=_chat_id,
+            text=chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=rm,
+        )
+
+
+def notify_with_buttons(
+    text: str,
+    buttons: List[List[Tuple[str, str]]],
+    photo_path: Optional[str] = None,
+) -> None:
+    """
+    Background thread'den inline butonlu mesaj gonder.
+
+    Args:
+        text: Mesaj metni (HTML)
+        buttons: [[("Buton Metni", "callback_data"), ...], ...]  (satir satir)
+        photo_path: Opsiyonel screenshot/foto yolu (once foto, sonra butonlu mesaj)
+    """
+    if not _is_ready():
+        logger.warning("[Notifier] Henuz hazir degil. Butonlu mesaj gonderilemedi.")
+        return
+
+    pp = Path(photo_path) if photo_path else None
+
+    with _lock:
+        loop = _loop
+
+    try:
+        if loop is None:
+            raise RuntimeError("Notifier loop hazir degil")
+        asyncio.run_coroutine_threadsafe(
+            _send_with_buttons(text, buttons, photo_path=pp),
+            loop,
+        )
+    except Exception as exc:
+        logger.error("[Notifier] Butonlu mesaj coroutine iletilemedi: %s", exc)

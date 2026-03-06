@@ -104,7 +104,6 @@ _BASE_CONTEXT_FREE_ACTION_TERMS = {
 _BASE_CONTEXT_FREE_HINT_TERMS = {
     "permission",
     "approve",
-    "allow",
     "agent",
     "extension",
     "codex",
@@ -141,17 +140,27 @@ _APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
     "codex": {
         "context": {"codex", "requires input", "run command"},
         "button_single": {"run"},
-        "button_multi": {"run alt j", "run anyway"},
-        "context_hints": {"codex", "run", "accept"},
+        "button_multi": {"run alt j", "run anyway", "run command"},
+        "context_hints": {"codex", "run", "accept", "expand"},
     },
     "kimicode": {
         "context": {"kimi", "requires input", "run command"},
-        "context_hints": {"kimi", "run", "continue"},
+        "button_single": {"run", "continue"},
+        "context_hints": {"kimi", "run", "continue", "accept"},
     },
     "gemini": {
-        "context": {"gemini", "requires input", "1 step requires input", "allow directory access"},
-        "button_multi": {"allow once", "allow this conversation", "allow access"},
-        "context_hints": {"gemini", "allow", "conversation"},
+        "context": {"gemini", "requires input", "1 step requires input", "allow directory access",
+                     "steps require approval", "step requires approval"},
+        "button_single": {"run", "expand"},
+        "button_multi": {"allow once", "allow this conversation", "allow access",
+                         "allow for this conversation", "expand all", "run command"},
+        "context_hints": {"gemini", "allow", "conversation", "expand", "approval"},
+    },
+    "copilot": {
+        "context": {"copilot", "requires input"},
+        "button_single": {"accept"},
+        "button_multi": {"accept all", "accept changes"},
+        "context_hints": {"copilot", "accept", "suggestion"},
     },
 }
 
@@ -172,9 +181,9 @@ _RUN_PROMPT_CONTEXT_TERMS = {
 }
 
 _STRICT_APPROVAL_CONTEXT_TERMS = {
-    "permission", "permissions", "approve", "allow", "authorize", "access",
+    "permission", "permissions", "approve", "authorize",
     "requires input", "step requires input", "allow this bash command", "run command",
-    "onay", "izin", "yetki", "erisim",
+    "onay", "izin", "yetki",
 }
 
 _MENU_BAR_TERMS_COMPACT = {
@@ -201,6 +210,16 @@ _IDE_COMPLETION_TERMS = (
     "next steps test", "bugs fixed", "syntax ok", "all imports ok",
     "fully complete", "everything is wired up correctly",
     "rapor tamamlandi", "islem basariyla tamamlandi", "tamamlandi ve kaydedildi",
+    # Gemini patterns
+    "i can help with", "is there anything else", "let me know if",
+    "feel free to ask", "hope this helps", "anything else i can help",
+    # Codex patterns
+    "changes applied", "all changes have been applied", "applied successfully",
+    # Claude Code patterns
+    "ive completed", "all changes have been made", "changes are complete",
+    "implementation is complete", "task is done",
+    # KimiCode patterns
+    "code has been updated", "modifications complete",
 )
 _IDE_COMPLETION_STRONG_TERMS = (
     "execution summary",
@@ -212,6 +231,11 @@ _IDE_COMPLETION_STRONG_TERMS = (
     "summary of what was done",
     "everything is wired up correctly",
     "fully complete",
+    "changes applied",
+    "all changes have been applied",
+    "all changes have been made",
+    "implementation is complete",
+    "i can help with",
 )
 _IDE_COMPLETION_DIRECT_TERMS = (
     "done",
@@ -227,11 +251,16 @@ _IDE_COMPLETION_DIRECT_TERMS = (
     "rapor tamamlandi",
     "islem basariyla tamamlandi",
     "tamamlandi ve kaydedildi",
+    "changes applied",
+    "task is done",
+    "ive completed",
 )
 _IDE_BUSY_TERMS = (
     "thinking", "generating", "processing", "in progress", "loading", "analyzing",
-    "synthesizing", "working", "executing", "researching",
+    "synthesizing", "working", "executing", "researching", "writing", "reading",
+    "searching", "indexing", "compiling", "building", "running",
     "yaziyor", "dusunuyor", "calisiyor", "hazirlaniyor", "devam ediyor", "bekleniyor",
+    "okunuyor", "araniyor", "derleniyor",
 )
 
 _IDE_INPUT_REQUIRED_TERMS = (
@@ -248,6 +277,10 @@ _IDE_INPUT_REQUIRED_TERMS = (
     "onay",
     "izin",
     "yetki",
+    "steps require approval",
+    "step requires approval",
+    "expand all",
+    "allow for this conversation",
 )
 
 _APPROVAL_WATCHER_LOCK = threading.Lock()
@@ -309,6 +342,10 @@ def _approval_watcher_status_snapshot_unlocked() -> Dict[str, Any]:
         "last_activity_at": _APPROVAL_WATCHER_STATE.get("last_activity_at", ""),
         "idle_clear_hits": int(_APPROVAL_WATCHER_STATE.get("idle_clear_hits", 0)),
         "idle_stable_hits": int(_APPROVAL_WATCHER_STATE.get("idle_stable_hits", 0)),
+        "watcher_state": _APPROVAL_WATCHER_STATE.get("watcher_state", "watching"),
+        "llm_state": _APPROVAL_WATCHER_STATE.get("llm_state", ""),
+        "llm_confidence": float(_APPROVAL_WATCHER_STATE.get("llm_confidence", 0.0)),
+        "llm_reasoning": _APPROVAL_WATCHER_STATE.get("llm_reasoning", ""),
     }
 
 
@@ -1232,13 +1269,13 @@ def _score_approval_candidate(
         score += 14.0
     if hint_hit:
         score += 8.0
-    run_friendly_profiles = {"codex", "claudecode"}
+    run_friendly_profiles = {"codex", "claudecode", "gemini"}
     run_friendly = active_profile in run_friendly_profiles
     if run_prompt_context_hit and run_friendly and ("run" in token or compact.startswith("run")):
         score += 28.0
     if token in button_terms_multi or compact in button_terms_multi_compact:
         score += 22.0
-    if "yes" in token or token.startswith("allow") or token.startswith("accept"):
+    if token in {"yes", "evet"} or token == "allow" or token == "accept" or token.startswith("yes ") or token.startswith("allow ") or token.startswith("accept "):
         score += 16.0
     if run_prompt_context_hit and run_friendly and (token.startswith("run") or "continue" in token):
         score += 12.0
@@ -1268,7 +1305,7 @@ def _is_button_like_token(
     # Shortcut etiketleri: RunAltJ / AcceptAll / ContinueWithoutDebugging gibi birlesik OCR ciktisi.
     if compact.startswith("run") and (compact == "run" or "alt" in compact or "without" in compact):
         return True
-    if compact.startswith("accept") or compact.startswith("approve") or compact.startswith("allow"):
+    if compact in {"accept", "approve", "allow"}:
         return True
     if compact.startswith("continuewithout"):
         return True
@@ -1461,6 +1498,112 @@ def _send_telegram_notification(text: str) -> Tuple[bool, str]:
         return True, body[:240]
     except Exception as exc:
         return False, str(exc)
+
+
+def _click_text_on_active_window(
+    target_text: str,
+    window_pattern: str = "",
+    lang: str = "tur+eng",
+    min_confidence: float = 25.0,
+) -> Dict[str, Any]:
+    """
+    Ekranda belirtilen metni OCR ile bul ve tikla.
+    Fuzzy matching destekler (SequenceMatcher >= 0.75).
+    """
+    import pytesseract
+    from pytesseract import Output
+
+    if window_pattern:
+        tool_activate_window(window_pattern)
+    region = _get_window_region(window_pattern) if window_pattern else None
+    screenshot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+
+    data = pytesseract.image_to_data(
+        screenshot, lang=lang, output_type=Output.DICT, config="--oem 3 --psm 6",
+    )
+
+    target_norm = _normalize_for_ocr_match(target_text)
+    target_compact = _compact_normalized(target_norm)
+    best_match = None
+    best_ratio = 0.0
+
+    count = len(data.get("text", []))
+    words_info = []
+    for i in range(count):
+        raw = str(data["text"][i] or "").strip()
+        if not raw:
+            continue
+        try:
+            conf = float(data["conf"][i])
+        except Exception:
+            conf = -1.0
+        if conf < min_confidence:
+            continue
+        words_info.append({
+            "raw": raw,
+            "norm": _normalize_for_ocr_match(raw),
+            "left": int(data["left"][i]),
+            "top": int(data["top"][i]),
+            "width": int(data["width"][i]),
+            "height": int(data["height"][i]),
+            "conf": conf,
+        })
+
+    # Exact match (tek kelime veya compact)
+    for w in words_info:
+        if _compact_normalized(w["norm"]) == target_compact:
+            best_match = w
+            best_ratio = 1.0
+            break
+
+    # Multi-word sliding window
+    if not best_match and len(target_norm.split()) > 1:
+        target_words = target_norm.split()
+        n = len(target_words)
+        for start in range(len(words_info) - n + 1):
+            group = words_info[start:start + n]
+            joined = " ".join(g["norm"] for g in group)
+            ratio = SequenceMatcher(None, joined, target_norm).ratio()
+            if ratio > best_ratio and ratio >= 0.75:
+                best_ratio = ratio
+                left = min(g["left"] for g in group)
+                top = min(g["top"] for g in group)
+                right = max(g["left"] + g["width"] for g in group)
+                bottom = max(g["top"] + g["height"] for g in group)
+                best_match = {
+                    "raw": " ".join(g["raw"] for g in group),
+                    "norm": joined,
+                    "left": left, "top": top,
+                    "width": max(1, right - left),
+                    "height": max(1, bottom - top),
+                    "conf": min(g["conf"] for g in group),
+                }
+
+    # Fuzzy single word
+    if not best_match:
+        for w in words_info:
+            ratio = SequenceMatcher(None, w["norm"], target_norm).ratio()
+            if ratio > best_ratio and ratio >= 0.75:
+                best_ratio = ratio
+                best_match = w
+
+    if not best_match:
+        return {"success": False, "target_text": target_text, "message": "Metin ekranda bulunamadi."}
+
+    click_x = int(best_match["left"] + best_match["width"] / 2)
+    click_y = int(best_match["top"] + best_match["height"] / 2)
+    if region:
+        click_x += int(region[0])
+        click_y += int(region[1])
+
+    pyautogui.click(click_x, click_y)
+    return {
+        "success": True,
+        "target_text": target_text,
+        "matched_text": best_match["raw"],
+        "match_ratio": round(best_ratio, 3),
+        "x": click_x, "y": click_y,
+    }
 
 
 def _capture_completion_screenshot() -> str:
@@ -1946,9 +2089,10 @@ def tool_wait_and_accept_approval(
                     positives = {
                         "yes", "allow", "accept", "proceed", "ok",
                         "evet", "onay", "onayla", "kabul", "devam",
+                        "run",
                     }
-                    if run_prompt_context_hit and run_friendly:
-                        positives.add("run")
+                    if not run_friendly:
+                        positives.discard("run")
                     second_candidates: List[Dict[str, Any]] = []
                     count2 = len(data2.get("text", []))
                     for j in range(count2):
@@ -2103,6 +2247,15 @@ def _approval_watcher_worker(
     profile: str,
     stop_event: threading.Event,
 ) -> None:
+    # --- State Machine ---
+    # States: WATCHING -> APPROVAL_CLICKED -> BUSY -> COMPLETED -> QUESTION_DETECTED
+    WATCHING = "watching"
+    APPROVAL_CLICKED = "approval_clicked"
+    BUSY = "busy"
+    COMPLETED = "completed"
+    QUESTION_DETECTED = "question_detected"
+
+    watcher_state = WATCHING
     last_notify_try_ts = 0.0
     saw_input_required = False
     saw_busy = False
@@ -2113,6 +2266,51 @@ def _approval_watcher_worker(
     last_activity_ts = 0.0
     no_input_required_since = 0.0
     last_idle_blob = ""
+    llm_check_counter = 0
+    last_llm_state = ""
+    question_notified = False
+    last_question_text = ""
+
+    # LLM screen analyzer import
+    try:
+        from .screen_analyzer import analyze_screen, ScreenState, ActionNeeded, reset_cache
+        reset_cache()
+        llm_available = True
+    except Exception as exc:
+        logger.warning("Approval watcher: screen_analyzer import hatasi: %s", exc)
+        llm_available = False
+
+    def _update_state(new_state: str, event_text: str = "") -> None:
+        nonlocal watcher_state
+        if watcher_state != new_state:
+            old = watcher_state
+            watcher_state = new_state
+            logger.info(
+                "Approval watcher state: %s -> %s | profile=%s",
+                old, new_state, profile,
+            )
+        if event_text:
+            _APPROVAL_WATCHER_STATE["last_event"] = event_text
+        _APPROVAL_WATCHER_STATE["watcher_state"] = watcher_state
+
+    def _send_notification_with_buttons(text: str, screenshot_path: str, buttons: list) -> bool:
+        """Inline butonlu bildirim gonder. Basarisizsa fallback dene."""
+        try:
+            from ..notifier import notify_with_buttons
+            notify_with_buttons(text, buttons=buttons, photo_path=screenshot_path or None)
+            return True
+        except Exception:
+            pass
+        # Fallback: butonlar olmadan duz mesaj
+        try:
+            from ..notifier import notify
+            notify(text, file_path=screenshot_path or None)
+            return True
+        except Exception:
+            pass
+        sent, _ = _send_telegram_notification(text)
+        return sent
+
     while not stop_event.is_set():
         result = tool_wait_and_accept_approval(
             window_pattern=window_pattern,
@@ -2125,6 +2323,7 @@ def _approval_watcher_worker(
         )
 
         send_completion_prompt = False
+        send_question_prompt = False
         auto_stop_now = False
         notification_text = ""
         with _APPROVAL_WATCHER_LOCK:
@@ -2139,26 +2338,28 @@ def _approval_watcher_worker(
                 idle_clear_hits = 0
                 idle_stable_hits = 0
                 last_idle_blob = ""
+                question_notified = False
+                last_question_text = ""
                 clicked_text = str(result.get("clicked_text", "")).strip()
                 followup_text = str(result.get("followup_text", "")).strip()
                 followup_clicked = bool(result.get("followup_clicked"))
                 if clicked_text and followup_clicked and followup_text:
-                    _APPROVAL_WATCHER_STATE["last_event"] = f"Kabul edildi: {clicked_text} -> {followup_text}"
+                    _update_state(APPROVAL_CLICKED, f"Kabul edildi: {clicked_text} -> {followup_text}")
                 elif clicked_text:
-                    _APPROVAL_WATCHER_STATE["last_event"] = f"Kabul edildi: {clicked_text}"
+                    _update_state(APPROVAL_CLICKED, f"Kabul edildi: {clicked_text}")
                 else:
-                    _APPROVAL_WATCHER_STATE["last_event"] = "Kabul edildi"
+                    _update_state(APPROVAL_CLICKED, "Kabul edildi")
                 _APPROVAL_WATCHER_STATE["last_error"] = ""
                 _reset_completion_signal_unlocked()
                 _APPROVAL_WATCHER_STATE["last_activity_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elif result.get("error"):
                 _APPROVAL_WATCHER_STATE["last_error"] = str(result.get("error", ""))[:240]
-                _APPROVAL_WATCHER_STATE["last_event"] = "Hata olustu"
-                # Tesseract yoksa izleyiciyi devam ettirmeyelim.
+                _update_state(WATCHING, "Hata olustu")
                 if "tesseract" in str(result.get("error", "")).lower():
                     stop_event.set()
             else:
-                _APPROVAL_WATCHER_STATE["last_event"] = "Onay bekleniyor"
+                if watcher_state == APPROVAL_CLICKED:
+                    _update_state(WATCHING, "Onay bekleniyor")
 
             ocr_blob = str(result.get("last_seen_text", "") or "").strip()
             input_required_hit = bool(result.get("input_required_detected")) or _looks_like_input_required_text(ocr_blob)
@@ -2174,7 +2375,71 @@ def _approval_watcher_worker(
                 saw_busy = True
                 last_busy_ts = now_ts
                 _APPROVAL_WATCHER_STATE["last_busy_at"] = now_label
+                if watcher_state != BUSY:
+                    _update_state(BUSY, "Ajan calisiyor...")
 
+            # --- LLM Analizi (throttled) ---
+            llm_analysis = None
+            llm_check_counter += 1
+            use_llm_now = (
+                llm_available
+                and ocr_blob
+                and not result.get("success")
+                and not busy_hit
+                and (
+                    llm_check_counter % 5 == 0  # her 5 dongude bir
+                    or (not input_required_hit and idle_clear_hits >= 2)  # idle durumda daha sik
+                    or (watcher_state == COMPLETED and not completion_prompt_sent_before)  # completion dogrulama
+                )
+            )
+            if use_llm_now:
+                try:
+                    llm_analysis = analyze_screen(ocr_blob, profile=profile, timeout=25.0)
+                except Exception as exc:
+                    logger.debug("Approval watcher LLM analiz hatasi: %s", exc)
+
+            # --- LLM sonucunu isle ---
+            llm_says_completed = False
+            llm_says_question = False
+            llm_says_expand = False
+            llm_says_busy = False
+
+            if llm_analysis and llm_analysis.state != ScreenState.UNKNOWN and llm_analysis.confidence >= 0.6:
+                last_llm_state = llm_analysis.state.value
+
+                if llm_analysis.state == ScreenState.COMPLETED:
+                    llm_says_completed = True
+                elif llm_analysis.state == ScreenState.QUESTION:
+                    llm_says_question = True
+                elif llm_analysis.state == ScreenState.EXPAND:
+                    llm_says_expand = True
+                elif llm_analysis.state == ScreenState.BUSY:
+                    llm_says_busy = True
+                    busy_hit = True
+                    last_busy_ts = now_ts
+
+                _APPROVAL_WATCHER_STATE["llm_state"] = llm_analysis.state.value
+                _APPROVAL_WATCHER_STATE["llm_confidence"] = round(llm_analysis.confidence, 2)
+                _APPROVAL_WATCHER_STATE["llm_reasoning"] = llm_analysis.reasoning[:200]
+
+            # --- Expand algilama: LLM veya keyword ---
+            if llm_says_expand and llm_analysis and llm_analysis.target_text:
+                # LLM expand butonu tespit etti — tikla
+                try:
+                    _click_text_on_active_window(
+                        llm_analysis.target_text, window_pattern, lang, min_confidence
+                    )
+                    _update_state(APPROVAL_CLICKED, f"Expand tiklandi (LLM): {llm_analysis.target_text}")
+                    _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
+                    last_accept_ts = time.time()
+                    last_activity_ts = last_accept_ts
+                    idle_clear_hits = 0
+                    idle_stable_hits = 0
+                    _reset_completion_signal_unlocked()
+                except Exception as exc:
+                    logger.debug("Expand tiklanamadi: %s", exc)
+
+            # Completion reset: yeni aktivite gorulduyse
             if completion_prompt_sent_before and (result.get("success") or input_required_hit or busy_hit):
                 reason = "Yeni aktivite goruldu, onceki tamamlanma sinyali iptal edildi."
                 if busy_hit and not result.get("success"):
@@ -2186,6 +2451,7 @@ def _approval_watcher_worker(
                     profile,
                 )
                 completion_prompt_sent_before = False
+                question_notified = False
             elif completion_prompt_sent_before:
                 last_completion_text = str(_APPROVAL_WATCHER_STATE.get("last_completion_text", "") or "")
                 if (
@@ -2193,6 +2459,7 @@ def _approval_watcher_worker(
                     and ocr_blob
                     and _ocr_state_similarity(last_completion_text, ocr_blob) < 0.72
                     and not _looks_like_ide_completion_text(ocr_blob)
+                    and not llm_says_completed
                 ):
                     _reset_completion_signal_unlocked(
                         "Ekran akisi degisti, onceki tamamlanma sinyali iptal edildi."
@@ -2210,6 +2477,8 @@ def _approval_watcher_worker(
                 idle_stable_hits = 0
                 last_idle_blob = ""
                 no_input_required_since = 0.0
+                if watcher_state not in (APPROVAL_CLICKED, BUSY):
+                    _update_state(WATCHING, "Onay bekleniyor")
             elif busy_hit:
                 idle_clear_hits = 0
                 idle_stable_hits = 0
@@ -2253,7 +2522,16 @@ def _approval_watcher_worker(
             activity_seen = bool(saw_input_required or saw_busy or last_accept_ts > 0.0 or last_busy_ts > 0.0)
             activity_anchor_ts = max(last_accept_ts, last_busy_ts, last_activity_ts)
             quiet_seconds = (now_ts - activity_anchor_ts) if activity_anchor_ts > 0.0 else 0.0
+
+            # --- Completion Detection (keyword + LLM hybrid) ---
             direct_completion = bool(completion_hits >= 2 and not input_required_hit and not busy_hit)
+            llm_completion = bool(
+                llm_says_completed
+                and not input_required_hit
+                and not busy_hit
+                and llm_analysis
+                and llm_analysis.confidence >= 0.7
+            )
             heuristic_completion = bool(
                 activity_seen
                 and not input_required_hit
@@ -2278,7 +2556,19 @@ def _approval_watcher_worker(
                 and idle_stable_hits >= 3
                 and quiet_seconds >= max(180.0, interval * 90.0)
             )
-            completion_detected_now = direct_completion or heuristic_completion or silent_completion or stale_completion
+            completion_detected_now = (
+                direct_completion or llm_completion or heuristic_completion
+                or silent_completion or stale_completion
+            )
+
+            # --- Question Detection (LLM only) ---
+            if llm_says_question and not question_notified and not completion_prompt_sent:
+                question_text = llm_analysis.reasoning[:200] if llm_analysis else ""
+                if question_text != last_question_text:
+                    send_question_prompt = True
+                    question_notified = True
+                    last_question_text = question_text
+                    _update_state(QUESTION_DETECTED, f"Ajan soru soruyor: {question_text[:60]}")
 
             if completion_detected_now and not completion_prompt_sent:
                 saw_input_required = False
@@ -2290,41 +2580,54 @@ def _approval_watcher_worker(
                 _APPROVAL_WATCHER_STATE["completion_detected"] = True
                 _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
                 _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
-                if direct_completion:
-                    _APPROVAL_WATCHER_STATE["completion_reason"] = "ocr_completion"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE görevi tamamlanmış görünüyor."
+
+                if llm_completion:
+                    reason_key = "llm_completion"
+                    reason_text = "IDE gorevi tamamlanmis (LLM analizi)."
+                    if llm_analysis and llm_analysis.completion_summary:
+                        reason_text += f" {llm_analysis.completion_summary[:100]}"
+                elif direct_completion:
+                    reason_key = "ocr_completion"
+                    reason_text = "IDE gorevi tamamlanmis gorunuyor."
                 elif heuristic_completion:
-                    _APPROVAL_WATCHER_STATE["completion_reason"] = "stable_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE görevi tamamlanmış görünüyor (kararlı durum)."
+                    reason_key = "stable_idle"
+                    reason_text = "IDE gorevi tamamlanmis gorunuyor (kararli durum)."
                 elif silent_completion:
-                    _APPROVAL_WATCHER_STATE["completion_reason"] = "silent_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adımları tamamlanmış görünüyor (sessiz durum)."
+                    reason_key = "silent_idle"
+                    reason_text = "IDE onay adimlari tamamlanmis gorunuyor (sessiz durum)."
                 else:
-                    _APPROVAL_WATCHER_STATE["completion_reason"] = "stale_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adımları uzun süredir görünmüyor; görev tamamlanmış olabilir."
+                    reason_key = "stale_idle"
+                    reason_text = "IDE onay adimlari uzun suredir gorunmuyor; gorev tamamlanmis olabilir."
+
+                _APPROVAL_WATCHER_STATE["completion_reason"] = reason_key
+                _update_state(COMPLETED, reason_text)
                 logger.info(
-                    "Approval watcher completion detected | profile=%s reason=%s quiet=%.1fs idle_hits=%s stable_hits=%s completion_hits=%s",
+                    "Approval watcher completion detected | profile=%s reason=%s quiet=%.1fs idle_hits=%s stable_hits=%s completion_hits=%s llm=%s",
                     profile,
-                    _APPROVAL_WATCHER_STATE.get("completion_reason", ""),
+                    reason_key,
                     quiet_seconds,
                     idle_clear_hits,
                     idle_stable_hits,
                     completion_hits,
+                    llm_says_completed,
                 )
                 if notify_on_completion:
                     send_completion_prompt = True
+                    accepted_count = int(_APPROVAL_WATCHER_STATE.get("accepted", 0))
+                    checks_count = int(_APPROVAL_WATCHER_STATE.get("checks", 0))
+                    summary = ""
+                    if llm_analysis and llm_analysis.completion_summary:
+                        summary = f"\n<b>Ozet:</b> {llm_analysis.completion_summary[:200]}"
                     notification_text = (
-                        "IDE görevi tamamlanmış görünüyor.\n"
-                        f"Durum: {int(_APPROVAL_WATCHER_STATE.get('accepted', 0))} onay işlendi, "
-                        f"{int(_APPROVAL_WATCHER_STATE.get('checks', 0))} kontrol yapıldı.\n"
-                        "Ekran görüntüsü ektedir.\n"
-                        "Onay izleyiciyi kapatayım mı?\n"
-                        "Kapatmak için: izlemeyi kapat\n"
-                        "Açık bırakmak için: izlemeye devam et"
+                        f"<b>IDE gorevi tamamlandi</b>\n"
+                        f"Profil: {profile} | {accepted_count} onay islendi, {checks_count} kontrol\n"
+                        f"Neden: {reason_text}{summary}\n\n"
+                        "Onay izleyiciyi kapatayim mi?"
                     )
                 if auto_stop_on_completion:
                     auto_stop_now = True
 
+        # --- Bildirimler (lock disinda) ---
         if send_completion_prompt and notification_text:
             now_ts = time.time()
             if now_ts - last_notify_try_ts < 12.0:
@@ -2332,36 +2635,52 @@ def _approval_watcher_worker(
                 continue
             last_notify_try_ts = now_ts
             screenshot_path = _capture_completion_screenshot()
-            sent = False
-            info = ""
-            try:
-                from ..notifier import notify
-                notify(notification_text, file_path=screenshot_path or None)
-                sent = True
-                info = "queued"
-            except Exception:
-                sent, info = _send_telegram_notification(notification_text)
+            buttons = [
+                [("Durdur", "watcher_stop"), ("Devam etsin", "watcher_continue")],
+            ]
+            sent = _send_notification_with_buttons(notification_text, screenshot_path, buttons)
             with _APPROVAL_WATCHER_LOCK:
                 if sent:
                     _APPROVAL_WATCHER_STATE["last_notification_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _APPROVAL_WATCHER_STATE["notification_error"] = ""
-                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi ve ekran görüntüsü gönderildi."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi ve ekran goruntusu gonderildi."
                     logger.info("Approval watcher completion notification sent | profile=%s", profile)
                 else:
-                    _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]
+                    _APPROVAL_WATCHER_STATE["notification_error"] = "Bildirim gonderilemedi"
                     _APPROVAL_WATCHER_STATE["completion_detected"] = True
-                    # Bildirim gecici hata ile gidemeyebilir; sonraki dongude tekrar dene.
                     _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi (tekrar denenecek)."
-                    logger.warning(
-                        "Approval watcher completion notification failed | profile=%s error=%s",
-                        profile,
-                        info[:240],
-                    )
+                    logger.warning("Approval watcher completion notification failed | profile=%s", profile)
+
+        if send_question_prompt and llm_analysis:
+            now_ts = time.time()
+            if now_ts - last_notify_try_ts >= 8.0:
+                last_notify_try_ts = now_ts
+                screenshot_path = _capture_completion_screenshot()
+                q_text = (
+                    f"<b>Ajan soru soruyor / secenek sunuyor</b>\n"
+                    f"Profil: {profile}\n"
+                    f"<b>Durum:</b> {llm_analysis.reasoning[:300]}\n"
+                )
+                if llm_analysis.options:
+                    q_text += "\n<b>Secenekler:</b>\n"
+                    for i, opt in enumerate(llm_analysis.options[:6], 1):
+                        q_text += f"  {i}. {opt}\n"
+                q_text += "\nEkran goruntusunu inceleyip yanit verebilirsin."
+                # Secenek butonlari
+                q_buttons = []
+                if llm_analysis.options:
+                    row = []
+                    for i, opt in enumerate(llm_analysis.options[:4], 1):
+                        label = opt[:20] if len(opt) <= 20 else opt[:18] + ".."
+                        row.append((label, f"watcher_choice:{opt[:60]}"))
+                    q_buttons.append(row)
+                q_buttons.append([("Ekran Gor.", "watcher_screenshot")])
+                _send_notification_with_buttons(q_text, screenshot_path, q_buttons)
 
         if auto_stop_now:
             with _APPROVAL_WATCHER_LOCK:
-                _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi, onay izleyici otomatik durduruluyor."
+                _update_state(COMPLETED, "Tamamlanma algilandi, onay izleyici otomatik durduruluyor.")
             stop_event.set()
 
     with _APPROVAL_WATCHER_LOCK:
@@ -2565,3 +2884,172 @@ def tool_ocr_image(image_path: str, lang: str = "tur") -> Dict[str, Any]:
                 configured_path=str(getattr(settings, "tesseract_cmd", "") or "").strip(),
             )
         return {"error": err_text}
+
+
+# =============================================================================
+# EKRANDA METIN ARA VE TIKLA (OCR Click-by-Text)
+# =============================================================================
+
+def tool_click_text_on_screen(
+    target_text: str,
+    window_pattern: str = "Visual Studio Code|Code - Insiders",
+    lang: str = "tur+eng",
+    min_confidence: float = 25.0,
+) -> Dict[str, Any]:
+    """Ekranda belirtilen metni OCR ile bul ve ustune tikla. Fuzzy matching destekler.
+
+    Args:
+        target_text: Tiklanmasi istenen metin (buton, link, etiket vb.)
+        window_pattern: Hedef pencere deseni (regex)
+        lang: OCR dil ayari
+        min_confidence: Minimum OCR guven esigi
+    """
+    if not target_text.strip():
+        return {"error": "target_text (tiklanacak metin) gerekli."}
+    try:
+        return _click_text_on_active_window(
+            target_text=target_text.strip(),
+            window_pattern=window_pattern,
+            lang=lang,
+            min_confidence=min_confidence,
+        )
+    except Exception as exc:
+        return {"error": f"Tiklama hatasi: {str(exc)[:200]}"}
+
+
+# =============================================================================
+# AJANA MESAJ YAZMA (Input Injection)
+# =============================================================================
+
+def tool_type_in_agent_input(
+    agent: str = "codex",
+    text: str = "",
+    press_enter: bool = True,
+) -> Dict[str, Any]:
+    """VS Code'da calisan bir AI ajan paneline odaklan ve mesaj yaz.
+
+    Args:
+        agent: Hedef ajan: codex, claudecode, kimicode, copilot, gemini
+        text: Yazilacak mesaj
+        press_enter: Yazdiktan sonra Enter'a bas (gonder)
+    """
+    if not text.strip():
+        return {"error": "text (yazilacak mesaj) gerekli."}
+
+    agent_key = _normalize_for_ocr_match(agent or "codex").strip() or "codex"
+
+    agent_shortcuts = {
+        "codex": ["ctrl", "n"],
+        "claudecode": ["ctrl", "escape"],
+        "kimicode": ["ctrl", "shift", "k"],
+        "copilot": ["ctrl", "shift", "i"],
+        "gemini": ["ctrl", "shift", "g"],
+    }
+
+    if agent_key not in agent_shortcuts:
+        return {
+            "error": f"Bilinmeyen ajan: {agent_key}. Desteklenen: {', '.join(agent_shortcuts.keys())}",
+        }
+
+    shortcut = agent_shortcuts[agent_key]
+
+    try:
+        tool_activate_window("Visual Studio Code|Code - Insiders")
+        time.sleep(0.3)
+        pyautogui.hotkey(*shortcut)
+        time.sleep(1.0)
+        _type_unicode_text(text.strip())
+        time.sleep(0.2)
+        if press_enter:
+            pyautogui.press("enter")
+        return {
+            "success": True,
+            "agent": agent_key,
+            "text": text.strip()[:100],
+            "enter_pressed": press_enter,
+        }
+    except Exception as exc:
+        return {"error": f"Yazma hatasi: {str(exc)[:200]}"}
+
+
+def _type_unicode_text(text: str) -> None:
+    """Clipboard uzerinden Unicode metin yaz."""
+    if not text:
+        return
+    if text.isascii() and len(text) < 50:
+        pyautogui.typewrite(text, interval=0.02)
+        return
+    if platform.system() == "Windows":
+        p = subprocess.Popen(["clip.exe"], stdin=subprocess.PIPE)
+        p.communicate(text.encode("utf-16-le"))
+    elif platform.system() == "Darwin":
+        p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+        p.communicate(text.encode("utf-8"))
+    else:
+        p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+        p.communicate(text.encode("utf-8"))
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.05)
+
+
+# =============================================================================
+# EKRAN ANALIZI (LLM-powered)
+# =============================================================================
+
+def tool_analyze_screen(
+    window_pattern: str = "Visual Studio Code|Code - Insiders",
+    lang: str = "tur+eng",
+    profile: str = "generic",
+) -> Dict[str, Any]:
+    """Ekrani OCR + LLM ile analiz et. Durumu, aksiyonu, butonu tanimla.
+
+    Args:
+        window_pattern: Hedef pencere deseni
+        lang: OCR dil ayari
+        profile: Ajan profili (gemini, codex, claudecode, kimicode, copilot, generic)
+    """
+    try:
+        import pytesseract
+        runtime = _configure_tesseract_runtime(pytesseract)
+        if not runtime.get("ok"):
+            return {k: v for k, v in runtime.items() if k != "ok"}
+    except Exception as exc:
+        return {"error": f"Tesseract bulunamadi: {exc}"}
+
+    if window_pattern:
+        tool_activate_window(window_pattern)
+    region = _get_window_region(window_pattern) if window_pattern else None
+    screenshot = pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+
+    try:
+        ocr_text = pytesseract.image_to_string(screenshot, lang=lang)
+    except Exception as exc:
+        return {"error": f"OCR hatasi: {exc}"}
+
+    if not ocr_text.strip():
+        return {"state": "idle", "action": "none", "ocr_text": "", "message": "Ekranda metin bulunamadi."}
+
+    try:
+        from .screen_analyzer import analyze_screen
+        analysis = analyze_screen(ocr_text, profile=profile, force=True, timeout=30.0)
+        if analysis:
+            return {
+                "state": analysis.state.value,
+                "action": analysis.action.value,
+                "target_text": analysis.target_text,
+                "confidence": analysis.confidence,
+                "reasoning": analysis.reasoning,
+                "options": analysis.options,
+                "completion_summary": analysis.completion_summary,
+                "ocr_text": ocr_text[:1500],
+            }
+    except Exception as exc:
+        logger.warning("tool_analyze_screen LLM analiz hatasi: %s", exc)
+
+    return {
+        "state": "unknown",
+        "action": "none",
+        "ocr_text": ocr_text[:1500],
+        "message": "LLM analizi yapilamadi, OCR metni donduruldu.",
+    }

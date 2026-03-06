@@ -68,6 +68,10 @@ from .super_agent import (
     tool_stop_approval_watcher,
     tool_approval_watcher_status,
     tool_ack_approval_completion_prompt,
+    # Ekran etkilesim (yeni)
+    tool_click_text_on_screen,
+    tool_type_in_agent_input,
+    tool_analyze_screen,
 )
 
 # VERITABANI VE HAFIZA
@@ -3119,6 +3123,63 @@ TOOLS: Dict[str, Tuple[ToolFn, Dict[str, Any]]] = {
                         "lang": {"type": "string", "description": "Dil (tur, eng)"}
                     },
                     "required": ["image_path"]
+                }
+            }
+        }
+    ),
+    "click_text_on_screen": (
+        tool_click_text_on_screen,
+        {
+            "type": "function",
+            "function": {
+                "name": "click_text_on_screen",
+                "description": "Ekranda belirtilen metni OCR ile bul ve ustune tikla. Fuzzy matching destekler.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target_text": {"type": "string", "description": "Tiklanmasi istenen metin (buton, link vb.)"},
+                        "window_pattern": {"type": "string", "description": "Hedef pencere deseni (regex)"},
+                        "lang": {"type": "string", "description": "OCR dil ayari"},
+                        "min_confidence": {"type": "number", "description": "Minimum OCR guven esigi"}
+                    },
+                    "required": ["target_text"]
+                }
+            }
+        }
+    ),
+    "type_in_agent_input": (
+        tool_type_in_agent_input,
+        {
+            "type": "function",
+            "function": {
+                "name": "type_in_agent_input",
+                "description": "VS Code'da calisan AI ajan paneline (codex, claudecode, kimicode, copilot, gemini) odaklan ve mesaj yaz.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent": {"type": "string", "description": "Hedef ajan: codex, claudecode, kimicode, copilot, gemini"},
+                        "text": {"type": "string", "description": "Yazilacak mesaj"},
+                        "press_enter": {"type": "boolean", "description": "Yazdiktan sonra Enter'a bas"}
+                    },
+                    "required": ["text"]
+                }
+            }
+        }
+    ),
+    "analyze_screen": (
+        tool_analyze_screen,
+        {
+            "type": "function",
+            "function": {
+                "name": "analyze_screen",
+                "description": "Ekrani OCR + LLM ile analiz et. IDE durumunu, aksiyonu, butonu tanimla. Onay bekleniyor mu, gorev bitti mi, soru mu soruluyor anla.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "window_pattern": {"type": "string", "description": "Hedef pencere deseni"},
+                        "lang": {"type": "string", "description": "OCR dil ayari"},
+                        "profile": {"type": "string", "description": "Ajan profili: gemini, codex, claudecode, kimicode, copilot, generic"}
+                    }
                 }
             }
         }

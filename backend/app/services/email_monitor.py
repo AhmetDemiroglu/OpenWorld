@@ -96,6 +96,69 @@ def _get_gmail_token() -> str:
     return token
 
 
+def _refresh_outlook_token() -> str:
+    refresh = _get_secret(settings.outlook_refresh_token, settings.outlook_refresh_token_enc)
+    client_id = (settings.outlook_client_id or "").strip()
+    tenant = (settings.outlook_tenant_id or "common").strip() or "common"
+    if not refresh or not client_id:
+        return ""
+    form: Dict[str, str] = {
+        "client_id": client_id,
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "scope": (
+            "offline_access "
+            "https://graph.microsoft.com/Mail.Read "
+            "https://graph.microsoft.com/Mail.Send"
+        ),
+    }
+    with httpx.Client(timeout=20) as c:
+        resp = c.post(f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", data=form)
+        resp.raise_for_status()
+    return resp.json().get("access_token", "")
+
+
+def _get_outlook_token() -> str:
+    token = _get_secret(settings.outlook_access_token, settings.outlook_access_token_enc)
+    if not token:
+        token = _refresh_outlook_token()
+    return token
+
+
+def _mail_pref_file() -> Path:
+    p = settings.data_path / "mail_monitor_settings.json"
+    if not p.exists():
+        p.write_text(json.dumps({"preferred_provider": "gmail"}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return p
+
+
+def get_preferred_mail_provider() -> str:
+    try:
+        data = json.loads(_mail_pref_file().read_text(encoding="utf-8"))
+        provider = str(data.get("preferred_provider", "gmail") or "gmail").strip().lower()
+        if provider in {"gmail", "outlook"}:
+            return provider
+    except Exception:
+        pass
+    return "gmail"
+
+
+def set_preferred_mail_provider(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized not in {"gmail", "outlook"}:
+        normalized = "gmail"
+    current: Dict[str, Any] = {}
+    try:
+        current = json.loads(_mail_pref_file().read_text(encoding="utf-8"))
+        if not isinstance(current, dict):
+            current = {}
+    except Exception:
+        current = {}
+    current["preferred_provider"] = normalized
+    _mail_pref_file().write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Gmail fetch â€“ only UNREAD
 # ---------------------------------------------------------------------------
@@ -147,6 +210,43 @@ def _fetch_unread_emails(token: str, max_results: int = 30) -> List[Dict[str, An
                 "date": hmap.get("date", ""),
                 "snippet": payload.get("snippet", ""),
                 "labels": payload.get("labelIds", []),
+            })
+    return results
+
+
+def _fetch_unread_outlook_emails(token: str, max_results: int = 30) -> List[Dict[str, Any]]:
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {
+        "$top": str(max(1, min(max_results, 30))),
+        "$select": "id,subject,from,receivedDateTime,importance,isRead,bodyPreview",
+        "$orderby": "receivedDateTime DESC",
+        "$filter": "isRead eq false",
+    }
+    with httpx.Client(timeout=30) as client:
+        resp = client.get("https://graph.microsoft.com/v1.0/me/messages", params=params, headers=headers)
+        if resp.status_code == 401:
+            refreshed = _refresh_outlook_token()
+            if refreshed:
+                token = refreshed
+                headers = {"Authorization": f"Bearer {token}"}
+                resp = client.get("https://graph.microsoft.com/v1.0/me/messages", params=params, headers=headers)
+        if resp.status_code == 401:
+            logger.error("Outlook 401 - token expired, skipping this cycle")
+            return []
+        resp.raise_for_status()
+        results: List[Dict[str, Any]] = []
+        for item in resp.json().get("value", []):
+            sender = ((item.get("from") or {}).get("emailAddress") or {})
+            sender_name = str(sender.get("name", "") or "").strip()
+            sender_addr = str(sender.get("address", "") or "").strip()
+            sender_text = f'"{sender_name}" <{sender_addr}>' if sender_name and sender_addr else (sender_addr or sender_name)
+            results.append({
+                "id": str(item.get("id", "") or ""),
+                "from": sender_text,
+                "subject": str(item.get("subject", "") or ""),
+                "date": str(item.get("receivedDateTime", "") or ""),
+                "snippet": str(item.get("bodyPreview", "") or ""),
+                "labels": [str(item.get("importance", "") or "").upper()],
             })
     return results
 
@@ -725,6 +825,58 @@ def send_email_via_gmail(
         return False, str(exc)
 
 
+def send_email_via_outlook(
+    token: str,
+    to: str,
+    subject: str,
+    body: str,
+) -> Tuple[bool, str]:
+    recipient = _extract_email_address(to)
+    if not recipient or "@" not in recipient:
+        return False, f"Geçerli bir alıcı adresi çözümlenemedi: {to}"
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body},
+            "toRecipients": [{"emailAddress": {"address": recipient}}],
+        },
+        "saveToSentItems": True,
+    }
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.post(
+                "https://graph.microsoft.com/v1.0/me/sendMail",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+            )
+            if resp.status_code == 401:
+                new_token = _refresh_outlook_token()
+                if not new_token:
+                    return False, "Outlook erişim belirteci yenilenemedi."
+                resp = client.post(
+                    "https://graph.microsoft.com/v1.0/me/sendMail",
+                    headers={"Authorization": f"Bearer {new_token}"},
+                    json=payload,
+                )
+            resp.raise_for_status()
+            logger.info(f"Outlook email sent to {recipient}: {subject}")
+            return True, "ok"
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:400] if exc.response is not None else str(exc)
+        body_lower = body.lower()
+        if "mail.send" in body_lower and ("insufficient" in body_lower or "permission" in body_lower):
+            detail = "Outlook hesabı gönderme yetkisi olmadan bağlı. Mail göndermek için Outlook bağlantısı `Mail.Send` izniyle yeniden kurulmalı."
+        elif "invalid_grant" in body_lower or "unauthorized" in body_lower:
+            detail = "Outlook erişim belirteci geçersiz veya süresi dolmuş."
+        else:
+            detail = f"Outlook API hatası: {body}"
+        logger.error(f"Outlook send failed: {detail}")
+        return False, detail
+    except Exception as exc:
+        logger.error(f"Outlook send failed: {exc}")
+        return False, str(exc)
+
+
 # ---------------------------------------------------------------------------
 # LLM draft reply generation
 # ---------------------------------------------------------------------------
@@ -935,16 +1087,21 @@ class EmailMonitor:
             await asyncio.sleep(self._interval)
 
     async def _scan(self) -> None:
-        logger.info("EmailMonitor: scanning unread mails...")
+        provider = get_preferred_mail_provider()
+        logger.info("EmailMonitor: scanning unread mails (provider=%s)...", provider)
         self._last_scan = time.time()
         self._scan_count += 1
 
-        token = _get_gmail_token()
+        token = _get_gmail_token() if provider == "gmail" else _get_outlook_token()
         if not token:
-            logger.warning("EmailMonitor: no Gmail token available, skipping")
+            logger.warning("EmailMonitor: no %s token available, skipping", provider)
             return
 
-        emails = _fetch_unread_emails(token, max_results=20)
+        emails = (
+            _fetch_unread_emails(token, max_results=20)
+            if provider == "gmail"
+            else _fetch_unread_outlook_emails(token, max_results=20)
+        )
         if not emails:
             logger.info("EmailMonitor: no unread emails")
             return
@@ -992,6 +1149,7 @@ class EmailMonitor:
                 draft_id = str(uuid.uuid4())[:8]
                 sender_addr = _extract_email_address(str(mail.get("from", "") or ""))
                 save_pending_draft(draft_id, {
+                    "provider": provider,
                     "to": sender_addr,
                     "subject": f"Re: {subject}",
                     "body": draft_body,

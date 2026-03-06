@@ -398,8 +398,15 @@ class AgentService:
             self.store.save(session_id, messages)
             return list_reply, 1, list_tools, []
 
+        if self._is_mail_provider_preference_query(user_message):
+            pref_reply, pref_tools = self._build_mail_provider_preference_reply(user_message)
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=pref_reply))
+            self.store.save(session_id, messages)
+            return pref_reply, 1, pref_tools, []
+
         if self._is_email_overview_query(user_message):
-            mail_reply, mail_tools = self._build_email_overview_reply()
+            mail_reply, mail_tools = self._build_email_overview_reply(user_message)
             messages.append(ChatMessage(role="user", content=user_message))
             messages.append(ChatMessage(role="assistant", content=mail_reply))
             self.store.save(session_id, messages)
@@ -1221,8 +1228,9 @@ class AgentService:
                 arguments={},
             )
 
+        preferred_mail_provider = self._resolve_mail_provider(text)
         if "check_gmail_messages" in self._known_tool_names and (
-            "gmail" in normalized or ("mail" in normalized and "outlook" not in normalized)
+            "gmail" in normalized or ("mail" in normalized and "outlook" not in normalized and preferred_mail_provider == "gmail")
         ):
             return ParsedTextToolCall(
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
@@ -1230,7 +1238,9 @@ class AgentService:
                 arguments={"max_results": 10},
             )
 
-        if "check_outlook_messages" in self._known_tool_names and "outlook" in normalized:
+        if "check_outlook_messages" in self._known_tool_names and (
+            "outlook" in normalized or ("mail" in normalized and "outlook" not in normalized and preferred_mail_provider == "outlook")
+        ):
             return ParsedTextToolCall(
                 id=f"text_tc_{uuid.uuid4().hex[:10]}",
                 name="check_outlook_messages",
@@ -1567,9 +1577,31 @@ class AgentService:
         return ("okunmayan" in normalized or "unread" in normalized) and ("mail" in normalized or "eposta" in normalized)
 
     @staticmethod
+    def _extract_mail_provider_preference(user_message: str) -> str:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if "outlook" in normalized:
+            return "outlook"
+        if "gmail" in normalized:
+            return "gmail"
+        return ""
+
+    @staticmethod
+    def _is_mail_provider_preference_query(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if not any(k in normalized for k in ("gmail", "outlook")):
+            return False
+        preference_markers = (
+            "birincil", "primary", "varsayilan", "varsayılan", "oncelikli", "öncelikli",
+            "mailim", "epostam", "e-postam", "monitor", "izle", "izlesin", "kontrol etsin",
+            "tercih", "kullan",
+        )
+        switch_markers = ("gmail degil", "gmail değil", "outlook olsun", "gmail olsun")
+        return any(k in normalized for k in preference_markers) or any(k in normalized for k in switch_markers)
+
+    @staticmethod
     def _is_email_specific_query(user_message: str) -> bool:
         normalized = AgentService._normalize_text_for_match(user_message)
-        mail_markers = ("mail", "mailler", "eposta", "e-posta", "gmail")
+        mail_markers = ("mail", "mailler", "eposta", "e-posta", "gmail", "outlook")
         filter_markers = (
             "kimden", "gelen", "gonderen", "from", "son 1 gun", "son bir gun",
             "son 24 saat", "bugun", "dun", "var mi", "geldi mi",
@@ -1634,15 +1666,46 @@ class AgentService:
         except Exception:
             return "Not defteri listesi okunurken hata oluştu.", ["notebook_list"]
 
-    def _build_email_overview_reply(self) -> Tuple[str, List[str]]:
+    def _resolve_mail_provider(self, user_message: str = "") -> str:
+        explicit = self._extract_mail_provider_preference(user_message or "")
+        if explicit in {"gmail", "outlook"}:
+            return explicit
+        try:
+            from .services.email_monitor import get_preferred_mail_provider
+            return get_preferred_mail_provider()
+        except Exception:
+            return "gmail"
+
+    def _build_mail_provider_preference_reply(self, user_message: str) -> Tuple[str, List[str]]:
+        provider = self._extract_mail_provider_preference(user_message)
+        if provider not in {"gmail", "outlook"}:
+            return "Birincil e-posta sağlayıcısı için Gmail veya Outlook belirtmelisiniz.", []
+        try:
+            from .services.email_monitor import set_preferred_mail_provider
+            saved = set_preferred_mail_provider(provider)
+        except Exception as exc:
+            return f"E-posta sağlayıcısı tercihi kaydedilemedi: {exc}", []
+        label = "Outlook" if saved == "outlook" else "Gmail"
+        return f"Birincil e-posta sağlayıcısı `{label}` olarak ayarlandı. Monitor artık bunu izleyecek.", []
+
+    def _build_email_overview_reply(self, user_message: str = "") -> Tuple[str, List[str]]:
         try:
             from .tools.registry import execute_tool
             from .services.email_monitor import _heuristic_triage
 
-            result = execute_tool("check_gmail_messages", {"max_results": 12, "query": "is:unread"})
+            provider = self._resolve_mail_provider(user_message)
+            tool_name = "check_outlook_messages" if provider == "outlook" else "check_gmail_messages"
+            params: Dict[str, Any] = {"max_results": 12}
+            if provider == "outlook":
+                params["unread_only"] = True
+                params["today_only"] = False
+            else:
+                params["query"] = "is:unread"
+            result = execute_tool(tool_name, params)
             messages = result.get("messages", []) if isinstance(result, dict) else []
             if not messages:
-                return "Okunmamış e-posta görünmüyor.", ["check_gmail_messages"]
+                label = "Outlook" if provider == "outlook" else "Gmail"
+                return f"{label} tarafında okunmamış e-posta görünmüyor.", [tool_name]
 
             highlights: List[str] = []
             interesting_count = 0
@@ -1669,7 +1732,7 @@ class AgentService:
                 return (
                     f"{len(messages)} okunmamış e-posta var ama öne çıkan kritik bir madde görünmüyor. "
                     "İstersen tek tek de özetleyebilirim."
-                ), ["check_gmail_messages"]
+                ), [tool_name]
 
             lines = [
                 f"Okunmamış e-postalarda {interesting_count} dikkat çekici kayıt buldum:",
@@ -1677,7 +1740,7 @@ class AgentService:
                 "",
                 "İstersen bunlardan birini açıp detaylandırayım ya da taslak hazırlayayım.",
             ]
-            return "\n".join(lines), ["check_gmail_messages"]
+            return "\n".join(lines), [tool_name]
         except Exception as exc:
             return f"E-posta özeti alınırken hata oluştu: {exc}", ["check_gmail_messages"]
 
@@ -1688,6 +1751,7 @@ class AgentService:
             raw = user_message.strip()
             normalized = self._normalize_text_for_match(raw)
             sender_hint = ""
+            provider = self._resolve_mail_provider(user_message)
 
             quoted = re.findall(r'"([^"]{2,120})"', raw)
             if quoted:
@@ -1709,32 +1773,41 @@ class AgentService:
                 query_parts.append("newer_than:1d")
 
             effective_query = " ".join(query_parts).strip() or "newer_than:1d"
-            result = execute_tool("check_gmail_messages", {"max_results": 12, "query": effective_query})
+            tool_name = "check_outlook_messages" if provider == "outlook" else "check_gmail_messages"
+            params: Dict[str, Any] = {"max_results": 12}
+            if provider == "outlook":
+                params["unread_only"] = False
+                params["today_only"] = False
+            else:
+                params["query"] = effective_query
+            result = execute_tool(tool_name, params)
             messages = result.get("messages", []) if isinstance(result, dict) else []
 
             if sender_hint:
                 sender_norm = self._normalize_text_for_match(sender_hint)
                 filtered_messages: List[Dict[str, Any]] = []
                 for mail in messages:
-                    sender_text = self._normalize_text_for_match(str(mail.get("from", "") or ""))
+                    sender_text = self._normalize_text_for_match(
+                        str(mail.get("from", "") or mail.get("from_name", "") or "")
+                    )
                     if sender_norm and sender_norm in sender_text:
                         filtered_messages.append(mail)
                 messages = filtered_messages
 
             if not messages:
                 if sender_hint:
-                    return f"Son 1 gün içinde {sender_hint} için eşleşen bir mail görünmüyor.", ["check_gmail_messages"]
-                return "Bu filtreye uyan bir mail görünmüyor.", ["check_gmail_messages"]
+                    return f"Son 1 gün içinde {sender_hint} için eşleşen bir mail görünmüyor.", [tool_name]
+                return "Bu filtreye uyan bir mail görünmüyor.", [tool_name]
 
             lines = [f"{len(messages)} eşleşen mail buldum:"]
             for mail in messages[:6]:
                 subject = str(mail.get("subject", "(Konu yok)") or "(Konu yok)").strip()
-                sender = str(mail.get("from", "") or "").strip()
-                date = str(mail.get("date", "") or "").strip()
+                sender = str(mail.get("from", "") or mail.get("from_name", "") or "").strip()
+                date = str(mail.get("date", "") or mail.get("received", "") or "").strip()
                 lines.append(f"- {subject} | {sender}")
                 if date:
                     lines.append(f"  Tarih: {date}")
-            return "\n".join(lines), ["check_gmail_messages"]
+            return "\n".join(lines), [tool_name]
         except Exception as exc:
             return f"Mail filtresi çalıştırılırken hata oluştu: {exc}", ["check_gmail_messages"]
 
