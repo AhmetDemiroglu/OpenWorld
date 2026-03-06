@@ -1,4 +1,4 @@
-"""
+﻿"""
 Smart Assistant Background Service
 Additional life-quality monitors that run periodically.
 """
@@ -86,19 +86,19 @@ async def _check_weather(state: Dict[str, Any]) -> None:
         # Clothing advice
         temp_int = int(temp) if temp != "?" else 20
         if temp_int < 5:
-            advice = "Kalin mont, atki ve eldiven sart."
+            advice = "Kalın mont, atkı ve eldiven şart."
         elif temp_int < 12:
-            advice = "Mont veya kalin ceket onerilir."
+            advice = "Mont veya kalın ceket önerilir."
         elif temp_int < 18:
-            advice = "Hafif bir ceket/hirka yeterli."
+            advice = "Hafif bir ceket/hırka yeterli."
         elif temp_int < 25:
             advice = "T-shirt ve hafif giyim yeterli."
         else:
-            advice = "Cok sicak - hafif giyinin, su icin."
+            advice = "Çok sıcak; hafif giyinin, su için."
 
         text = (
-            f"<b>Gunluk Hava Durumu - {city}</b>\n\n"
-            f"<b>Sicaklik:</b> {temp} C (hissedilen: {feels} C)\n"
+            f"<b>Günlük Hava Durumu - {city}</b>\n\n"
+            f"<b>Sıcaklık:</b> {temp} C (hissedilen: {feels} C)\n"
             f"<b>Min/Max:</b> {min_t} C / {max_t} C\n"
             f"<b>Nem:</b> %{humidity}\n"
             f"<b>Durum:</b> {desc}\n\n"
@@ -200,7 +200,7 @@ async def _check_tech_news(state: Dict[str, Any]) -> None:
 
     for qp in query_plan:
         query = qp.get("q", "")
-        tag = qp.get("tag", "Gundem")
+        tag = qp.get("tag", "Gündem")
         try:
             feed_url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en&gl=US&ceid=US:en"
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -224,9 +224,9 @@ async def _check_tech_news(state: Dict[str, Any]) -> None:
             logger.debug(f"SmartAssistant: tech news query failed: {exc}")
 
     if new_items:
-        lines = ["📰 <b>Kisisel Gundem Ozeti</b>\n"]
+        lines = ["📰 <b>Kişisel Gündem Özeti</b>\n"]
         for item in new_items[:8]:
-            tag = item.get("tag", "Gundem")
+            tag = item.get("tag", "Gündem")
             lines.append(f"• <b>[{tag}]</b> <a href=\"{item['link']}\">{item['title']}</a>")
         await _send_telegram("\n".join(lines))
 
@@ -280,7 +280,7 @@ async def _check_custom_alerts(state: Dict[str, Any]) -> None:
             pass
 
     if new_items:
-        lines = ["<b>Ozel Uyarilar</b>\n"]
+        lines = ["<b>Özel Uyarılar</b>\n"]
         for item in new_items[:5]:
             lines.append(f"* <b>{item['term']}</b>\n- <a href=\"{item['link']}\">{item['title']}</a>")
         await _send_telegram("\n".join(lines))
@@ -343,4 +343,5 @@ class SmartAssistant:
                 logger.exception(f"SmartAssistant error: {exc}")
             # Check every 10 minutes, individual features have their own intervals
             await asyncio.sleep(600)
+
 

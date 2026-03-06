@@ -1463,6 +1463,22 @@ def _send_telegram_notification(text: str) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def _capture_completion_screenshot() -> str:
+    try:
+        workspace = Path(getattr(settings, "workspace_path", Path.cwd()))
+        media_dir = workspace / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        target = media_dir / f"approval_completion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        result = tool_screenshot_desktop(output_path=str(target))
+        if isinstance(result, dict) and not result.get("error") and result.get("path"):
+            path = Path(str(result["path"]))
+            if path.exists() and path.is_file():
+                return str(path)
+    except Exception:
+        pass
+    return ""
+
+
 def _looks_like_ide_completion_text(ocr_blob: str) -> bool:
     blob = _normalize_for_ocr_match(ocr_blob or "")
     if len(blob) < 4:
@@ -2276,16 +2292,16 @@ def _approval_watcher_worker(
                 _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
                 if direct_completion:
                     _APPROVAL_WATCHER_STATE["completion_reason"] = "ocr_completion"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE görevi tamamlanmış görünüyor."
                 elif heuristic_completion:
                     _APPROVAL_WATCHER_STATE["completion_reason"] = "stable_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE gorevi tamamlandi gibi gorunuyor (durum sezgisi)."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE görevi tamamlanmış görünüyor (kararlı durum)."
                 elif silent_completion:
                     _APPROVAL_WATCHER_STATE["completion_reason"] = "silent_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari tamamlandi gibi gorunuyor (sessiz durum)."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adımları tamamlanmış görünüyor (sessiz durum)."
                 else:
                     _APPROVAL_WATCHER_STATE["completion_reason"] = "stale_idle"
-                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adimlari uzun suredir gorunmuyor; tamamlandi varsayildi."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "IDE onay adımları uzun süredir görünmüyor; görev tamamlanmış olabilir."
                 logger.info(
                     "Approval watcher completion detected | profile=%s reason=%s quiet=%.1fs idle_hits=%s stable_hits=%s completion_hits=%s",
                     profile,
@@ -2298,10 +2314,13 @@ def _approval_watcher_worker(
                 if notify_on_completion:
                     send_completion_prompt = True
                     notification_text = (
-                        "IDE gorevi tamamlanmis gorunuyor.\n"
-                        "Onay izleyiciyi kapatayim mi?\n"
-                        "Kapatmak icin: izlemeyi kapat\n"
-                        "Acik birakmak icin: izlemeye devam et"
+                        "IDE görevi tamamlanmış görünüyor.\n"
+                        f"Durum: {int(_APPROVAL_WATCHER_STATE.get('accepted', 0))} onay işlendi, "
+                        f"{int(_APPROVAL_WATCHER_STATE.get('checks', 0))} kontrol yapıldı.\n"
+                        "Ekran görüntüsü ektedir.\n"
+                        "Onay izleyiciyi kapatayım mı?\n"
+                        "Kapatmak için: izlemeyi kapat\n"
+                        "Açık bırakmak için: izlemeye devam et"
                     )
                 if auto_stop_on_completion:
                     auto_stop_now = True
@@ -2312,12 +2331,21 @@ def _approval_watcher_worker(
                 time.sleep(max(0.05, min(interval, 0.5)))
                 continue
             last_notify_try_ts = now_ts
-            sent, info = _send_telegram_notification(notification_text)
+            screenshot_path = _capture_completion_screenshot()
+            sent = False
+            info = ""
+            try:
+                from ..notifier import notify
+                notify(notification_text, file_path=screenshot_path or None)
+                sent = True
+                info = "queued"
+            except Exception:
+                sent, info = _send_telegram_notification(notification_text)
             with _APPROVAL_WATCHER_LOCK:
                 if sent:
                     _APPROVAL_WATCHER_STATE["last_notification_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     _APPROVAL_WATCHER_STATE["notification_error"] = ""
-                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gonderildi."
+                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi ve ekran görüntüsü gönderildi."
                     logger.info("Approval watcher completion notification sent | profile=%s", profile)
                 else:
                     _APPROVAL_WATCHER_STATE["notification_error"] = info[:240]

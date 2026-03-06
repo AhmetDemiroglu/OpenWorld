@@ -471,21 +471,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if data.startswith("draft_send:") or data.startswith("draft_skip:"):
         draft_id = data.split(":", 1)[1]
         try:
-            from .services.email_monitor import pop_pending_draft, send_email_via_gmail, _get_gmail_token
-            draft = pop_pending_draft(draft_id)
+            from .services.email_monitor import get_pending_draft, pop_pending_draft, send_email_via_gmail, _get_gmail_token
+            draft = get_pending_draft(draft_id)
             if not draft:
                 await query.edit_message_text("❌ Taslak bulunamadı (zaten gönderilmiş veya süresi dolmuş).")
                 return
             if data.startswith("draft_send:"):
                 token = _get_gmail_token()
-                if token and send_email_via_gmail(token, draft["to"], draft["subject"], draft["body"]):
+                sent, detail = send_email_via_gmail(
+                    token,
+                    draft["to"],
+                    draft["subject"],
+                    draft["body"],
+                ) if token else (False, "Gmail erişim belirteci bulunamadı.")
+                if sent:
+                    pop_pending_draft(draft_id)
                     await query.edit_message_text(
                         f"✅ Mail gönderildi!\nAlıcı: <code>{draft['to'][:60]}</code>",
                         parse_mode="HTML",
                     )
                 else:
-                    await query.edit_message_text("❌ Mail gönderilemedi (token sorunu?).")
+                    await query.answer("Mail gönderilemedi.", show_alert=False)
+                    await query.message.reply_text(
+                        f"❌ Mail gönderilemedi.\nNeden: {detail}\nTaslak korunuyor; tekrar deneyebilirsiniz."
+                    )
             else:
+                pop_pending_draft(draft_id)
                 await query.edit_message_text("⏭ Taslak atlandı.")
         except Exception as exc:
             await query.edit_message_text(f"❌ Hata: {exc}")
@@ -532,7 +543,8 @@ async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"📚 <b>Araştırma başlatıldı!</b>\n\n"
                 f"Konu: <b>{topic[:100]}</b>\n"
                 f"Not defteri: <code>{result.get('notebook', '')}</code>\n\n"
-                f"Bitince Telegram'a özet + PDF rapor gönderilecek (~3-8 dk).",
+                "Bitince Telegram'a özet ve PDF rapor gönderilecek. "
+                "Süre, konuya ve kaynak yoğunluğuna göre değişebilir.",
                 parse_mode="HTML",
             )
         else:
@@ -800,7 +812,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await update.message.reply_text(
                         f"✅ <b>Araştırma başladı!</b>\n"
                         f"Not defteri: <code>{result.get('notebook', '')}</code>\n"
-                        f"Bitince Telegram'a özet + PDF rapor göndereceğim (~3-8 dk).",
+                        "Bitince Telegram'a özet ve PDF rapor göndereceğim. "
+                        "Süre, konuya ve kaynak yoğunluğuna göre değişebilir.",
                         parse_mode="HTML"
                     )
                 else:
@@ -822,7 +835,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 pulses = [
                     "⏳ Düşünüyorum... İsteğin işleniyor.",
                     "⏳ Hâlâ çalışıyorum... model yanıtını hazırlıyor.",
-                    "⏳ İşlem sürüyor... tamamlanınca sonucu göndereceğim.",
+                    "⏳ İşlem sürüyor. Tamamlanınca sonucu paylaşacağım.",
                 ]
                 idx = 0
                 while True:
@@ -906,7 +919,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if looks_like_tool_dump:
                 reply = (
                     "Araştırmayı başlattım. Arka planda çalışıyor.\n\n"
-                    "Bitince özeti ve PDF raporu buradan otomatik göndereceğim."
+                    "Bitince özeti ve PDF raporu buradan otomatik paylaşacağım."
                 )
     except Exception:
         pass

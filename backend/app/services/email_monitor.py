@@ -16,10 +16,11 @@ import time
 import unicodedata
 import uuid
 from datetime import datetime, timedelta
-from difflib import SequenceMatcher
+from email.utils import getaddresses, parsedate_to_datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -28,6 +29,7 @@ from ..secrets import decrypt_text
 from ..database import mark_email_seen, get_seen_emails, unmark_email_seen
 
 logger = logging.getLogger(__name__)
+_LOCAL_TZ = ZoneInfo("Europe/Istanbul")
 
 # ---------------------------------------------------------------------------
 # Importance levels
@@ -149,14 +151,6 @@ def _fetch_unread_emails(token: str, max_results: int = 30) -> List[Dict[str, An
     return results
 
 
-# ---------------------------------------------------------------------------
-# Duplicate filter
-# ---------------------------------------------------------------------------
-
-def _subject_similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
 class DuplicateFilter:
     def __init__(self) -> None:
         self._seen_job_keys: set = set()
@@ -173,14 +167,7 @@ class DuplicateFilter:
                 self._seen_job_keys.add(subj[4:])
 
     def is_duplicate(self, mail_id: str, subject: str) -> bool:
-        if mail_id in self._seen_ids:
-            return True
-        for seen_subj in self._seen_subjects:
-            if seen_subj.startswith("JOB:"):
-                continue  # job keys compared separately
-            if _subject_similarity(seen_subj, subject) > 0.85:
-                return True
-        return False
+        return mail_id in self._seen_ids
 
     def is_duplicate_job(self, job_key: str) -> bool:
         """Returns True if we've already seen this job (company+role)."""
@@ -285,6 +272,10 @@ def _looks_personal_sender(sender: str) -> bool:
     return bool(re.search(r"<[^>]+@[^>]+>", sender) or re.search(r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", sender_n))
 
 
+def _looks_automated_sender(sender: str) -> bool:
+    return not _looks_personal_sender(sender)
+
+
 def _clean_display_text(text: str, limit: int = 240) -> str:
     value = str(text or "")
     value = re.sub(r"[\u200b-\u200f\u2060\ufeff]", " ", value)
@@ -292,6 +283,55 @@ def _clean_display_text(text: str, limit: int = 240) -> str:
     if limit and len(value) > limit:
         value = value[:limit - 3].rstrip() + "..."
     return value
+
+
+def _extract_email_address(sender: str) -> str:
+    parsed = getaddresses([sender or ""])
+    for _, addr in parsed:
+        addr = (addr or "").strip()
+        if addr:
+            return addr
+    return (sender or "").strip()
+
+
+def _format_mail_date(date_value: str) -> str:
+    raw = (date_value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = parsedate_to_datetime(raw)
+        if dt is None:
+            return _clean_display_text(raw, limit=80)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_LOCAL_TZ)
+        local_dt = dt.astimezone(_LOCAL_TZ)
+        return local_dt.strftime("%d.%m.%Y %H:%M TSİ")
+    except Exception:
+        return _clean_display_text(raw, limit=80)
+
+
+def _format_triage_reason(reason: str) -> str:
+    text = _clean_display_text(reason or "", limit=120)
+    if not text:
+        return ""
+    text = re.sub(r"^(fallback(?:_exc)?|heuristic)\s*:\s*", "", text, flags=re.IGNORECASE)
+    replacements = {
+        "zaman hassas toplanti": "zaman hassas toplantı",
+        "kritik anahtar kelime": "kritik anahtar kelime",
+        "abonelik veya satin alma kaydi": "abonelik veya satın alma kaydı",
+        "odeme sorunu veya gecikme": "ödeme sorunu veya gecikme",
+        "onemli konu": "önemli konu",
+        "is firsati": "iş fırsatı",
+        "bilgilendirme": "bilgilendirme",
+        "otomatik gonderici": "otomatik gönderici",
+        "dusuk oncelik": "düşük öncelik",
+        "normal": "normal",
+    }
+    normalized = _normalize_for_match(text)
+    for src, target in replacements.items():
+        if normalized == _normalize_for_match(src):
+            return target
+    return text
 
 
 def _extract_json_dict(raw_content: str) -> Optional[Dict[str, Any]]:
@@ -350,7 +390,7 @@ def _heuristic_triage(email: Dict[str, Any], reason_prefix: str = "heuristic") -
     subject_n = _normalize_for_match(subject)
     snippet_n = _normalize_for_match(snippet)
     inbox_like = any(x in labels for x in ("INBOX", "CATEGORY_PERSONAL"))
-    automated_sender = not _looks_personal_sender(sender)
+    automated_sender = _looks_automated_sender(sender)
 
     spam_terms = (
         "discount", "indirim", "kampanya", "promo", "promosyon", "sale", "firsat",
@@ -359,10 +399,18 @@ def _heuristic_triage(email: Dict[str, Any], reason_prefix: str = "heuristic") -
     critical_terms = (
         "urgent", "acil", "action required", "hemen", "deadline", "due today",
         "security alert", "supheli giris", "sifre", "password", "2fa", "verify",
-        "odeme", "payment", "fatura", "invoice",
         "deprecated", "deprecation", "breaking change", "kaldirilacak", "askiya alindi", "suspended",
         "offer letter", "is teklifi", "teklif mektubu",
     )
+    payment_failure_terms = (
+        "payment failed", "odeme basarisiz", "odeme alinamadi", "card declined",
+        "failed payment", "past due", "overdue", "hesap askiya alindi",
+    )
+    subscription_terms = (
+        "abone oldunuz", "subscription", "receipt", "purchase", "siparis", "order",
+        "odeme alindi", "payment received", "fatura olusturuldu", "invoice available",
+    )
+    store_terms = ("google play", "googleplay", "app store", "apple", "openai", "anthropic", "chatgpt", "claude")
     meeting_terms = (
         "toplanti", "meeting", "meet", "calendar", "invite", "invitation",
         "katilim", "attendance", "schedule", "scheduled", "randevu",
@@ -395,6 +443,20 @@ def _heuristic_triage(email: Dict[str, Any], reason_prefix: str = "heuristic") -
 
     if ("CATEGORY_PROMOTIONS" in labels or "CATEGORY_SOCIAL" in labels) and any(t in blob for t in spam_terms):
         return {"level": SPAM, "reason": f"{reason_prefix}: promosyon/sosyal", "summary": subject[:180], "job_key": None}
+    if automated_sender and any(t in blob for t in subscription_terms) and any(t in blob for t in store_terms):
+        return {
+            "level": IMPORTANT,
+            "reason": f"{reason_prefix}: abonelik veya satin alma kaydi",
+            "summary": (snippet or subject)[:220],
+            "job_key": None,
+        }
+    if any(t in blob for t in payment_failure_terms):
+        return {
+            "level": CRITICAL,
+            "reason": f"{reason_prefix}: odeme sorunu veya gecikme",
+            "summary": (snippet or subject)[:220],
+            "job_key": None,
+        }
     if any(t in blob for t in critical_terms):
         return {
             "level": CRITICAL,
@@ -446,6 +508,13 @@ def _heuristic_triage(email: Dict[str, Any], reason_prefix: str = "heuristic") -
 
 async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
     """Call Ollama to classify an email."""
+    heuristic = _heuristic_triage(email)
+    heuristic_level = str(heuristic.get("level", NORMAL) or NORMAL).upper()
+    # Mail triage'ta deterministic ve hizli kararlar daha degerli.
+    # Net vakalarda LLM'e gitmeden heuristigi kullan.
+    if heuristic_level in {CRITICAL, IMPORTANT, NOTICE, SPAM}:
+        return heuristic
+
     prompt = _TRIAGE_PROMPT.format(
         sender=email.get("from", ""),
         subject=email.get("subject", ""),
@@ -469,7 +538,9 @@ async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
             result = _extract_json_dict(content)
             if not isinstance(result, dict):
                 logger.warning("LLM triage: JSON parse edilemedi, heuristic fallback. preview=%s", (content or "")[:180])
-                return _heuristic_triage(email, reason_prefix="fallback")
+                fallback = dict(heuristic)
+                fallback["reason"] = fallback.get("reason") or "fallback: heuristic"
+                return fallback
             level = result.get("level", NORMAL)
             if level not in (CRITICAL, IMPORTANT, NOTICE, NORMAL, SPAM):
                 level = NORMAL
@@ -482,7 +553,10 @@ async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
             }
     except Exception as exc:
         logger.warning(f"LLM triage failed: {exc}")
-        return _heuristic_triage(email, reason_prefix="fallback_exc")
+        fallback = dict(heuristic)
+        if not fallback.get("reason"):
+            fallback["reason"] = "fallback_exc: heuristic"
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -490,17 +564,17 @@ async def _triage_email(email: Dict[str, Any]) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 _LEVEL_EMOJI = {
-    CRITICAL: "[!]",
-    IMPORTANT: "[*]",
-    NOTICE: "[i]",
-    NORMAL: "[-]",
-    SPAM: "[x]",
+    CRITICAL: "❗",
+    IMPORTANT: "📌",
+    NOTICE: "ℹ️",
+    NORMAL: "•",
+    SPAM: "🚫",
 }
 
 _LEVEL_LABEL = {
-    CRITICAL: "KRITIK",
-    IMPORTANT: "ONEMLI",
-    NOTICE: "BILGILENDIRME",
+    CRITICAL: "KRİTİK",
+    IMPORTANT: "ÖNEMLİ",
+    NOTICE: "BİLGİLENDİRME",
 }
 
 
@@ -580,6 +654,12 @@ def save_pending_draft(draft_id: str, data: Dict[str, Any]) -> None:
     _save_drafts(drafts)
 
 
+def get_pending_draft(draft_id: str) -> Optional[Dict[str, Any]]:
+    drafts = _load_drafts()
+    data = drafts.get(draft_id)
+    return data if isinstance(data, dict) else None
+
+
 def pop_pending_draft(draft_id: str) -> Optional[Dict[str, Any]]:
     drafts = _load_drafts()
     data = drafts.pop(draft_id, None)
@@ -592,8 +672,14 @@ def pop_pending_draft(draft_id: str) -> Optional[Dict[str, Any]]:
 # Gmail Send API
 # ---------------------------------------------------------------------------
 
-def send_email_via_gmail(token: str, to: str, subject: str, body: str, thread_id: Optional[str] = None) -> bool:
-    """Send an email via Gmail API. Returns True on success."""
+def send_email_via_gmail(
+    token: str,
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send an email via Gmail API. Returns (success, detail)."""
     msg = MIMEText(body, "plain", "utf-8")
     msg["to"] = to
     msg["subject"] = subject
@@ -611,7 +697,7 @@ def send_email_via_gmail(token: str, to: str, subject: str, body: str, thread_id
             if resp.status_code == 401:
                 new_token = _refresh_token()
                 if not new_token:
-                    return False
+                    return False, "Gmail erişim belirteci yenilenemedi."
                 resp = client.post(
                     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
                     headers={"Authorization": f"Bearer {new_token}"},
@@ -619,10 +705,21 @@ def send_email_via_gmail(token: str, to: str, subject: str, body: str, thread_id
                 )
             resp.raise_for_status()
             logger.info(f"Email sent to {to}: {subject}")
-            return True
+            return True, "ok"
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:400] if exc.response is not None else str(exc)
+        body_lower = body.lower()
+        if "insufficient authentication scopes" in body_lower or "insufficientpermissions" in body_lower:
+            detail = "Gmail hesabı gönderme yetkisi olmadan bağlı. Mail göndermek için Gmail bağlantısı `gmail.send` izniyle yeniden kurulmalı."
+        elif "invalid_grant" in body_lower or "unauthorized" in body_lower:
+            detail = "Gmail erişim belirteci geçersiz veya süresi dolmuş."
+        else:
+            detail = f"Gmail API hatasi: {body}"
+        logger.error(f"Gmail send failed: {detail}")
+        return False, detail
     except Exception as exc:
         logger.error(f"Gmail send failed: {exc}")
-        return False
+        return False, str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -743,27 +840,42 @@ async def _send_telegram_with_inline(text: str, buttons: List[List[Dict]]) -> bo
 
 def _format_notification(email: Dict[str, Any], triage: Dict[str, str]) -> str:
     level = triage.get("level", NORMAL)
-    emoji = _LEVEL_EMOJI.get(level, "[mail]")
+    emoji = _LEVEL_EMOJI.get(level, "📧")
     label = _LEVEL_LABEL.get(level, level)
     sender = html.escape(_clean_display_text(str(email.get("from", "Bilinmeyen") or "Bilinmeyen"), limit=160))
     subject = html.escape(_clean_display_text(str(email.get("subject", "(Konu yok)") or "(Konu yok)"), limit=180))
     summary = html.escape(_clean_display_text(str(triage.get("summary", "") or ""), limit=260))
-    reason = html.escape(_clean_display_text(str(triage.get("reason", "") or ""), limit=120))
-    date_str = html.escape(_clean_display_text(str(email.get("date", "") or ""), limit=80))
+    reason = html.escape(_format_triage_reason(str(triage.get("reason", "") or "")))
+    date_str = html.escape(_format_mail_date(str(email.get("date", "") or "")))
 
     lines = [
-        f"{emoji} <b>{label} MAIL</b>",
+        f"{emoji} <b>{label} MAİL</b>",
         "",
         f"<b>Kimden:</b> {sender}",
         f"<b>Konu:</b> {subject}",
     ]
     if summary:
-        lines.append(f"<b>Ozet:</b> {summary}")
+        lines.append(f"<b>Özet:</b> {summary}")
     if reason:
         lines.append(f"<b>Neden:</b> {reason}")
     if date_str:
         lines.append(f"<b>Tarih:</b> {date_str}")
     return "\n".join(lines)
+
+
+def _needs_reply_draft(email: Dict[str, Any], triage: Dict[str, str]) -> bool:
+    sender = str(email.get("from", "") or "")
+    subject = _normalize_for_match(str(email.get("subject", "") or ""))
+    snippet = _normalize_for_match(str(email.get("snippet", "") or ""))
+    blob = f"{subject}\n{snippet}"
+
+    if _looks_automated_sender(sender):
+        return False
+    if any(term in blob for term in ("abone oldunuz", "subscription", "receipt", "purchase", "invoice")):
+        return False
+    if any(term in blob for term in ("reply", "yanit", "cevap", "katiliminizi bildir", "confirm", "teyit", "toplanti", "meeting")):
+        return True
+    return triage.get("level") == CRITICAL
 
 
 # ---------------------------------------------------------------------------
@@ -868,14 +980,14 @@ class EmailMonitor:
             notification = _format_notification(mail, triage)
             logger.info(f"EmailMonitor: [{level}] {subject}")
 
-            if level in _DRAFT_LEVELS:
+            if level in _DRAFT_LEVELS and _needs_reply_draft(mail, triage):
                 # Generate draft reply + send with inline buttons (one-by-one for CRITICAL)
                 draft_body = await _generate_draft_reply(mail, triage)
                 if not draft_body:
                     draft_body = _fallback_draft_reply(mail, triage)
 
                 draft_id = str(uuid.uuid4())[:8]
-                sender_addr = mail.get("from", "")
+                sender_addr = _extract_email_address(str(mail.get("from", "") or ""))
                 save_pending_draft(draft_id, {
                     "to": sender_addr,
                     "subject": f"Re: {subject}",
@@ -884,10 +996,10 @@ class EmailMonitor:
                 })
                 draft_msg = (
                     f"{notification}\n\n"
-                    f"<b>Taslak Yanit:</b>\n<i>{html.escape(draft_body[:500])}</i>"
+                    f"<b>Taslak Yanıt:</b>\n<i>{html.escape(draft_body[:500])}</i>"
                 )
                 buttons = [[
-                    {"text": "Gonder", "callback_data": f"draft_send:{draft_id}"},
+                    {"text": "Gönder", "callback_data": f"draft_send:{draft_id}"},
                     {"text": "Atla", "callback_data": f"draft_skip:{draft_id}"},
                 ]]
                 sent = await _send_telegram_with_inline(draft_msg, buttons)
@@ -898,6 +1010,14 @@ class EmailMonitor:
                 else:
                     pop_pending_draft(draft_id)
                     logger.warning("EmailMonitor: CRITICAL mail notification failed, will retry next cycle: %s", subject)
+            elif level == CRITICAL:
+                sent = await _send_telegram(notification)
+                if sent:
+                    self._dup_filter.mark_seen(mid, subject, job_key=job_key)
+                    self._notified_count += 1
+                    notified_total += 1
+                else:
+                    logger.warning("EmailMonitor: CRITICAL mail notification failed, will retry next cycle: %s", subject)
             elif level == NOTICE:
                 notice_batch.append((notification, mid, subject, job_key))
             else:  # IMPORTANT
@@ -905,7 +1025,7 @@ class EmailMonitor:
         # Send batched IMPORTANT notifications
         if important_batch:
             batch_text = "\n\n---------------\n\n".join(item[0] for item in important_batch)
-            header = f"<b>{len(important_batch)} onemli mailiniz var</b>\n\n"
+            header = f"<b>{len(important_batch)} önemli mailiniz var</b>\n\n"
             sent = await _send_telegram(header + batch_text)
             if sent:
                 for _, batch_mid, batch_subject, batch_job_key in important_batch:

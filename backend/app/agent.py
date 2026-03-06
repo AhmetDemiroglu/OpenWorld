@@ -398,6 +398,20 @@ class AgentService:
             self.store.save(session_id, messages)
             return list_reply, 1, list_tools, []
 
+        if self._is_email_overview_query(user_message):
+            mail_reply, mail_tools = self._build_email_overview_reply()
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=mail_reply))
+            self.store.save(session_id, messages)
+            return mail_reply, 1, mail_tools, []
+
+        if self._is_email_specific_query(user_message):
+            mail_reply, mail_tools = self._build_email_specific_reply(user_message)
+            messages.append(ChatMessage(role="user", content=user_message))
+            messages.append(ChatMessage(role="assistant", content=mail_reply))
+            self.store.save(session_id, messages)
+            return mail_reply, 1, mail_tools, []
+
         vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(session_id, user_message)
         if vscode_chat_reply:
             messages.append(ChatMessage(role="user", content=user_message))
@@ -1518,8 +1532,13 @@ class AgentService:
         normalized = AgentService._normalize_text_for_match(user_message)
         markers = (
             "yarim kalan gorev",
+            "yarim kalan is",
+            "yarim kalan is var mi",
             "tamamlanmamis gorev",
+            "bitmemis is",
+            "bitmemis is var mi",
             "acik gorev",
+            "acik is",
             "hangi gorevler var",
             "gorevlerim neler",
             "notebook listesi",
@@ -1527,7 +1546,35 @@ class AgentService:
             "unfinished task",
             "pending task",
         )
-        return any(marker in normalized for marker in markers)
+        if any(marker in normalized for marker in markers):
+            return True
+        if re.search(r"yar.?m kalan (?:gorev|i.?)", normalized):
+            return True
+        return "yarim kalan" in normalized and ("is" in normalized or "gorev" in normalized)
+
+    @staticmethod
+    def _is_email_overview_query(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        mail_markers = (
+            "mail", "gmail", "eposta", "e-posta", "okunmayan", "unread", "gelen kutusu", "inbox",
+        )
+        intent_markers = (
+            "bakar misin", "bakar misin?", "dikkat cekici", "one cikan", "onemli bir sey", "neler var",
+            "kontrol et", "listele", "tara", "ozetle", "incele",
+        )
+        if any(marker in normalized for marker in mail_markers) and any(marker in normalized for marker in intent_markers):
+            return True
+        return ("okunmayan" in normalized or "unread" in normalized) and ("mail" in normalized or "eposta" in normalized)
+
+    @staticmethod
+    def _is_email_specific_query(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        mail_markers = ("mail", "mailler", "eposta", "e-posta", "gmail")
+        filter_markers = (
+            "kimden", "gelen", "gonderen", "from", "son 1 gun", "son bir gun",
+            "son 24 saat", "bugun", "dun", "var mi", "geldi mi",
+        )
+        return any(marker in normalized for marker in mail_markers) and any(marker in normalized for marker in filter_markers)
 
     @staticmethod
     def _is_no_action_check_request(user_message: str) -> bool:
@@ -1555,17 +1602,17 @@ class AgentService:
             listing = tool_notebook_list()
             notebooks = listing.get("notebooks", []) if isinstance(listing, dict) else []
             if not notebooks:
-                return "Kayitli bir not defteri bulunamadi.", ["notebook_list"]
+                return "Kayıtlı bir not defteri bulunamadı.", ["notebook_list"]
 
             incomplete = [n for n in notebooks if n.get("status") == "Devam Ediyor"]
             if not incomplete:
                 latest = notebooks[:3]
-                lines = ["Su anda acik kalan gorev yok. Son not defterleri:"]
+                lines = ["Şu anda açık kalan görev yok. Son not defterleri:"]
                 for nb in latest:
                     lines.append(f"- {nb.get('name', '')} ({nb.get('status', '-')}, {nb.get('progress', '-')})")
                 return "\n".join(lines), ["notebook_list"]
 
-            lines = ["Yarim kalan gorevler:"]
+            lines = ["Yarım kalan işler:"]
             tools_used = ["notebook_list"]
             for nb in incomplete[:5]:
                 name = str(nb.get("name", "")).strip()
@@ -1577,7 +1624,7 @@ class AgentService:
                     next_step = str(status.get("next_step", "")).strip()
                 line = f"- {name} ({progress})"
                 if next_step:
-                    line += f" | Siradaki: {next_step}"
+                    line += f" | Sıradaki: {next_step}"
                 lines.append(line)
             first_name = str(incomplete[0].get("name", "")).strip()
             if first_name:
@@ -1585,7 +1632,111 @@ class AgentService:
                 lines.append(f'Devam etmek isterseniz: "{first_name} raporuna devam et" yazabilirsiniz.')
             return "\n".join(lines), tools_used
         except Exception:
-            return "Not defteri listesi okunurken hata olustu.", ["notebook_list"]
+            return "Not defteri listesi okunurken hata oluştu.", ["notebook_list"]
+
+    def _build_email_overview_reply(self) -> Tuple[str, List[str]]:
+        try:
+            from .tools.registry import execute_tool
+            from .services.email_monitor import _heuristic_triage
+
+            result = execute_tool("check_gmail_messages", {"max_results": 12, "query": "is:unread"})
+            messages = result.get("messages", []) if isinstance(result, dict) else []
+            if not messages:
+                return "Okunmamış e-posta görünmüyor.", ["check_gmail_messages"]
+
+            highlights: List[str] = []
+            interesting_count = 0
+            for mail in messages[:8]:
+                triage = _heuristic_triage(mail, reason_prefix="özet")
+                level = str(triage.get("level", "")).upper()
+                if level not in {"CRITICAL", "IMPORTANT", "NOTICE"}:
+                    continue
+                interesting_count += 1
+                label_map = {
+                    "CRITICAL": "Kritik",
+                    "IMPORTANT": "Önemli",
+                    "NOTICE": "Bilgilendirme",
+                }
+                label = label_map.get(level, level.title())
+                subject = str(mail.get("subject", "(Konu yok)") or "(Konu yok)").strip()
+                sender = str(mail.get("from", "") or "").strip()
+                reason = str(triage.get("reason", "") or "").strip()
+                highlights.append(f"- [{label}] {subject} | {sender}")
+                if reason:
+                    highlights.append(f"  Neden: {reason}")
+
+            if not highlights:
+                return (
+                    f"{len(messages)} okunmamış e-posta var ama öne çıkan kritik bir madde görünmüyor. "
+                    "İstersen tek tek de özetleyebilirim."
+                ), ["check_gmail_messages"]
+
+            lines = [
+                f"Okunmamış e-postalarda {interesting_count} dikkat çekici kayıt buldum:",
+                *highlights[:10],
+                "",
+                "İstersen bunlardan birini açıp detaylandırayım ya da taslak hazırlayayım.",
+            ]
+            return "\n".join(lines), ["check_gmail_messages"]
+        except Exception as exc:
+            return f"E-posta özeti alınırken hata oluştu: {exc}", ["check_gmail_messages"]
+
+    def _build_email_specific_reply(self, user_message: str) -> Tuple[str, List[str]]:
+        try:
+            from .tools.registry import execute_tool
+
+            raw = user_message.strip()
+            normalized = self._normalize_text_for_match(raw)
+            sender_hint = ""
+
+            quoted = re.findall(r'"([^"]{2,120})"', raw)
+            if quoted:
+                sender_hint = quoted[0].strip()
+            else:
+                raw_match = re.search(r"(.{2,120}?)(?:'ndan|'nden|dan|den)\s+gelen", raw, flags=re.IGNORECASE)
+                if raw_match:
+                    sender_hint = raw_match.group(1).strip(" :,-")
+                    sender_hint = re.sub(r"[’']?n$", "", sender_hint).strip()
+                m = re.search(r"(?:kimden|gelen|gonderen|from)\s+([^\n?]+)", normalized)
+                if not sender_hint and m:
+                    sender_hint = m.group(1).strip()
+                    sender_hint = re.split(r"\b(?:mail|mailler|eposta|e-posta|var mi|geldi mi|son|bugun|dun)\b", sender_hint)[0].strip()
+
+            query_parts: List[str] = []
+            if "son 1 gun" in normalized or "son bir gun" in normalized or "son 24 saat" in normalized:
+                query_parts.append("newer_than:1d")
+            elif "bugun" in normalized:
+                query_parts.append("newer_than:1d")
+
+            effective_query = " ".join(query_parts).strip() or "newer_than:1d"
+            result = execute_tool("check_gmail_messages", {"max_results": 12, "query": effective_query})
+            messages = result.get("messages", []) if isinstance(result, dict) else []
+
+            if sender_hint:
+                sender_norm = self._normalize_text_for_match(sender_hint)
+                filtered_messages: List[Dict[str, Any]] = []
+                for mail in messages:
+                    sender_text = self._normalize_text_for_match(str(mail.get("from", "") or ""))
+                    if sender_norm and sender_norm in sender_text:
+                        filtered_messages.append(mail)
+                messages = filtered_messages
+
+            if not messages:
+                if sender_hint:
+                    return f"Son 1 gün içinde {sender_hint} için eşleşen bir mail görünmüyor.", ["check_gmail_messages"]
+                return "Bu filtreye uyan bir mail görünmüyor.", ["check_gmail_messages"]
+
+            lines = [f"{len(messages)} eşleşen mail buldum:"]
+            for mail in messages[:6]:
+                subject = str(mail.get("subject", "(Konu yok)") or "(Konu yok)").strip()
+                sender = str(mail.get("from", "") or "").strip()
+                date = str(mail.get("date", "") or "").strip()
+                lines.append(f"- {subject} | {sender}")
+                if date:
+                    lines.append(f"  Tarih: {date}")
+            return "\n".join(lines), ["check_gmail_messages"]
+        except Exception as exc:
+            return f"Mail filtresi çalıştırılırken hata oluştu: {exc}", ["check_gmail_messages"]
 
     @staticmethod
     def _looks_like_stalled_reply(text: str) -> bool:

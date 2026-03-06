@@ -190,6 +190,14 @@ def _clean_llm_output(text: str) -> str:
     """LLM ciktisindaki JSON bloklari, code fence'ler ve halusinasyonlari temizle."""
     if not text:
         return ""
+    # <think> bloklari ve role leak'leri
+    text = re.sub(r"(?is)<think>[\s\S]*?</think>", " ", text)
+    text = re.sub(r"(?im)^\s*</?think>\s*$", "", text)
+    text = re.sub(r"(?im)^\s*(?:assistant|user|system)\s*$", "", text)
+    text = re.sub(r"(?im)^\s*\*{0,2}kaynak tablosu:?\*{0,2}\s*$", "", text)
+    # Markdown tablo bloklari
+    text = re.sub(r"(?im)^\s*\|.*\|\s*$", "", text)
+    text = re.sub(r"(?im)^\s*\|?[:\- ]+\|[:\-| ]*$", "", text)
     # Sondaki JSON array/object artiklari (LLM bazen yapisallandirilmis cikti ekler)
     # Pattern: metin bittikten sonra [ { "title": ... } ] veya benzer JSON
     text = re.sub(r'\n\s*\[?\s*\{[^{}]*"(?:title|content|url|citations)"[^}]*\}[\s\S]*$', '', text)
@@ -199,7 +207,24 @@ def _clean_llm_output(text: str) -> str:
     text = re.sub(r'<\|[^|]+\|>', '', text)
     # "user", "assistant", "system" role etiketleri (LLM prompt leak)
     text = re.sub(r'\n(?:user|assistant|system)\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _sanitize_report_line(line: str) -> str:
+    raw = (line or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if lowered in {"assistant", "user", "system", "<think>", "</think>"}:
+        return ""
+    if "kaynak tablosu" in lowered:
+        return ""
+    if raw.startswith("|") and raw.endswith("|"):
+        return ""
+    if re.fullmatch(r"\|?[:\-\s|]+\|?", raw):
+        return ""
+    return raw
 
 
 def _is_low_signal_content(text: str) -> bool:
@@ -376,6 +401,23 @@ def _looks_like_turkish_text(text: str) -> bool:
     return sum(1 for m in markers if m in sample) >= 2
 
 
+def _looks_like_useful_synthesis(text: str, topic_keywords: list[str]) -> bool:
+    sample = (text or "").strip()
+    if len(sample) < 1200:
+        return False
+    if sample.count("\n## ") < 3 and sample.count("## ") < 3:
+        return False
+    if not _looks_like_turkish_text(sample):
+        return False
+    sample_lower = sample.lower()
+    keyword_hits = 0
+    for kw in topic_keywords[:8]:
+        kw_norm = _normalize_ascii(kw).lower()
+        if kw.lower() in sample_lower or kw_norm in _normalize_ascii(sample_lower):
+            keyword_hits += 1
+    return keyword_hits >= max(2, min(len(topic_keywords[:5]), 3))
+
+
 # â”€â”€ PDF olusturucu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: list,
@@ -437,7 +479,7 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
         if synthesis_text:
             story.append(Paragraph("Sentezlenmiş Araştırma Sonucu", h2))
             for line in synthesis_text.split('\n'):
-                line = line.strip()
+                line = _sanitize_report_line(line)
                 if not line:
                     story.append(Spacer(1, 6))
                     continue
@@ -464,7 +506,7 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
         if synthesis_text:
             story.append(Paragraph("Sentezlenmiş Araştırma Sonucu", h2))
             for line in synthesis_text.split('\n'):
-                line = line.strip()
+                line = _sanitize_report_line(line)
                 if not line:
                     story.append(Spacer(1, 6))
                     continue
@@ -504,7 +546,7 @@ def _write_pdf(report_path: Path, topic: str, read_contents: list, all_sources: 
     summary_text = (
         f"📋 <b>Araştırma Özeti</b>\n\n"
         f"<b>Konu:</b> {topic[:100]}\n"
-        f"<b>Kaynak sayısı:</b> {len(read_contents)}\n"
+        f"<b>İşlenen kaynak:</b> {len(read_contents)}\n"
         f"<b>Süre:</b> {elapsed} saniye\n\n"
         f"<b>Öne çıkan kaynaklar:</b>\n{titles_text}\n\n"
         f"Detaylı rapor aşağıdaki PDF dosyasında 👇"
@@ -560,11 +602,6 @@ def tool_research_async(
                     "Bulguları sentezle\n"
                     "PDF rapor oluştur ve bildir"
                 ),
-            )
-            notify(
-                f"\U0001f4da <b>Araştırma başladı:</b> {topic[:80]}\n\n"
-                f"Not defteri: <code>{safe_name}</code>\n"
-                f"Bitince PDF raporu buraya göndereceğim. (~3-8 dk)"
             )
         except Exception as exc:
             import logging, traceback
@@ -811,7 +848,8 @@ def tool_research_async(
             )
             notify(
                 f"\U0001f50d <b>{topic[:60]}</b>\n"
-                f"{len(all_sources)} kaynak bulundu (haber, Wikipedia, finansal). İçerikler okunuyor..."
+                f"{len(all_sources)} aday kaynak bulundu. "
+                "Şimdi konu dışı olanlar eleniyor ve uygun kaynakların içeriği okunuyor..."
             )
 
             # 4. Kaynak iceriklerini oku
@@ -864,19 +902,23 @@ def tool_research_async(
                 if summary and len(summary) >= 45:
                     content_parts.append(f"RSS Özeti: {_clean_web_content(summary)[:1200]}")
 
-                if not content_parts:
-                    content_parts.append(
-                        (
-                            f"Başlık: {title or 'Bilinmiyor'}\n"
-                            f"Yayın tarihi: {pub_date or 'Bilinmiyor'}\n"
-                            f"Kaynak: {source or 'Bilinmiyor'}\n"
-                            f"Özet: {summary[:700] if summary else 'Bilgi yok'}"
-                        )
-                    )
-                else:
-                    high_signal_count += 1 if fetched_ok else 0
-
                 content = "\n\n".join(content_parts).strip()[:7000]
+                if not content:
+                    tool_notebook_add_note(
+                        name=safe_name,
+                        note=f"[ATLA] {(title or url)[:60]} | icerik yok",
+                    )
+                    continue
+
+                if not _source_is_relevant(title, content, topic_keywords):
+                    tool_notebook_add_note(
+                        name=safe_name,
+                        note=f"[ATLA] {(title or url)[:60]} | konu disi/alakasiz",
+                    )
+                    continue
+
+                high_signal_count += 1 if fetched_ok else 0
+
                 if title or url:
                     read_contents.append(
                         {
@@ -956,7 +998,9 @@ def tool_research_async(
                         "4. Bulguları [K1], [K2] gibi kaynak etiketiyle destekle.\n"
                         "5. HTML artığı, JS kodu, navigasyon metni gibi anlamsız içerikleri YOK SAY.\n"
                         "6. Verilen tarihi referans al; 'gelecek tarih' diye reddetme.\n"
-                        "7. Spekülasyonu 'öngörü' veya 'olası' şeklinde işaretle."
+                        "7. Spekülasyonu 'öngörü' veya 'olası' şeklinde işaretle.\n"
+                        "8. Markdown tablo ÜRETME. 'Kaynak tablosu' başlığı açma.\n"
+                        "9. <think>, assistant, user, system gibi iç metinleri ASLA yazma."
                     )
 
                     def _build_source_block(rc: dict, idx: int) -> str:
@@ -1073,6 +1117,13 @@ def tool_research_async(
                             except Exception:
                                 pass
 
+                    if not _looks_like_useful_synthesis(synthesis_text, topic_keywords):
+                        tool_notebook_add_note(
+                            name=safe_name,
+                            note="[UYARI] LLM sentezi kalite eşiğini geçemedi; fallback sentez uygulandı.",
+                        )
+                        synthesis_text = _build_fallback_synthesis(topic, read_contents)
+
                     tool_notebook_complete_step(
                         name=safe_name,
                         step_keyword="sentez",
@@ -1171,6 +1222,7 @@ def tool_research_async(
         "notebook": safe_name,
         "message": (
             f"Araştırma arka planda başlatıldı: {topic}\n"
-            f"Bitince Telegram'a özet mesaj ve PDF rapor gönderilecek. (~4-12 dakika)"
+            "Bitince Telegram'a özet ve PDF rapor gönderilecek. "
+            "Süre, konuya ve kaynak yoğunluğuna göre değişebilir."
         ),
     }

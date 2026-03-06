@@ -1299,7 +1299,7 @@ def tool_check_gmail_messages(max_results: int = 10, query: str = "", **kwargs: 
     custom_query = (query or "").strip()
     if not custom_query:
         effective_query = today_query
-    elif "after:" in custom_query.lower() or "before:" in custom_query.lower():
+    elif any(op in custom_query.lower() for op in ("after:", "before:", "newer_than:", "older_than:", "from:", "subject:", "in:")):
         effective_query = custom_query
     else:
         # Varsayilan olarak daima bugune kilitle.
@@ -4243,5 +4243,3 @@ def serialize_tool_result(result: Dict[str, Any]) -> str:
     if len(text) > _MAX_TOOL_RESULT_CHARS:
         text = text[:_MAX_TOOL_RESULT_CHARS] + '... [truncated]"}'
     return text
-
-

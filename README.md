@@ -336,11 +336,13 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 "Tüm diskte 'password' geçen dosyaları ara"
 ```
 
-**Dosya Okuma/Yazma:**
+**Dosya Okuma/Yazma ve Klasör İşlemleri:**
 ```
 "C:\log.txt dosyasını oku"
 "Masaüstüne notlar.txt oluştur, içine şunu yaz..."
 "Dosyanın sonuna şunu ekle..."
+"Masaüstünde 'Projeler' adında yeni bir klasör oluştur"
+"Belgeler klasörünü aç"
 ```
 
 **Araçlar:**
@@ -351,6 +353,8 @@ Dosya okuma, yazma, silme, taşıma ve arama. Silme işlemleri onay gerektirir.
 - `copy_file` - Kopyala
 - `move_file` - Taşı
 - `search_files` - Ara
+- `create_folder` - Klasör oluştur
+- `open_folder` - Klasörü aç
 
 ---
 
@@ -537,11 +541,31 @@ Telegram'dan tek bir mesajla:
 - `code_search` - Kodda ara
 - `refactor_rename` - Refactor
 - `run_tests` - Test çalıştır
+- `open_in_vscode` - VS Code'da klasör veya dosya aç
 - `vscode_command` - VS Code komutu (dosya aç, terminal, diff, **AI extension chat**)
 - `claude_code_ask` - Claude Code CLI entegrasyonu
 - `analyze_code` - Kod analizi
 - `find_code_patterns` - Pattern ara
 - `analyze_project_code` - Proje analizi
+
+#### Onay İzleyici (Approval Watcher)
+
+AI asistanlar (KimiCode, Copilot, Codex vb.) veya terminal arka planda çalıştığında çıkan **IDE Onay Pencerelerini (örn: 'Allow', 'Always Allow', 'Trust')** otomatik kabul etmek için arka plan hizmeti.
+
+**Komut Örnekleri:**
+```
+"Onay izleyiciyi aç"
+"Arka plandaki onay izleyiciyi durdur"
+"Onay izleyici çalışıyor mu durumunu kontrol et"
+"VS Code açık; onay penceresi gelirse otomatik kabul et"
+```
+
+**Araçlar:**
+- `start_approval_watcher` - İzleyiciyi başlat
+- `stop_approval_watcher` - İzleyiciyi tam durdur
+- `approval_watcher_status` - Durumu raporlar
+- `wait_and_accept_approval` - Kısa süreliğine onay penceresini bekler
+- `ack_approval_completion_prompt` - Kod işlemi bitince kalan izleme durumunu temizler veya açık tutar
 
 ---
 
@@ -660,12 +684,17 @@ Telegram'dan tek bir mesajla:
 ```
 "Gmail'deki son 5 okunmamış maili özelle"
 "Outlook gelen kutusunu kontrol et"
+"Ahmet'e toplantı notlarını içeren bir taslak mail hazırla"
 ```
+
+**Taslak Onayı ve Gönderme (Telegram Entegrasyonu):**
+Ajan e-posta göndermek için doğrudan onaysız işlem yapmaz. `create_email_draft` ile taslak oluşturduğunda, Telegram üzerinden size **"✅ Onayla"** ve **"❌ İptal"** butonları sunar. Onayladığınız takdirde mail anında gönderilir.
 
 **Araçlar:**
 - `check_gmail_messages` - Gmail oku
 - `check_outlook_messages` - Outlook oku
-- `create_email_draft` - Taslak oluştur
+- `create_email_draft` - Taslak oluştur (Telegram üzerinden onaylanarak yollanabilir)
+
 
 ---
 
@@ -738,21 +767,40 @@ Uzun süreli hafıza ve kullanıcı tercihleri:
 
 ### ✈️ 19. TELEGRAM ENTEGRASYONU
 
-Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüleri, ses, video) otomatik olarak Telegram'a gönderilir.
+Telegram bot üzerinden ajanla sohbet edin. Medya dosyaları (ekran görüntüleri, ses, video) otomatik olarak Telegram'a gönderilir. Doğrudan komutlar ile bilgisayarınızı uzaktan kontrol edebilirsiniz.
 
 **Nasıl Çalışır:**
-
 - Telegram bot'a mesaj yazarsınız, ajan cevap verir
 - Ajan bir ekran görüntüsü veya ses kaydı ürettiğinde, otomatik olarak Telegram'a iletilir
 - **Görseller OCR ile okunur** - Ekran görüntüsü gönderip "bunu analiz et" diyebilirsiniz
-- Ayrı bir tool yoktur — medya pipeline'ı otomatiktir
+- AI modeline sormadan çalışan **hızlı slash (`/`) komutları** bulunur.
+
+**Hızlı Kısayol Komutları (Slash Commands):**
+- `/ekran` - Anında masaüstü ekran görüntüsü alıp Telegram'a gönderir.
+- `/yaz [metin]` - Aktif pencereye bilgisayarınızda belirtilen metni yazar.
+- `/tikla X Y` - Ekranda belirtilen koordinata sol tıklar.
+- `/tus [tuş]` - Bilgisayarda belirtilen tuşa basar (Örn: `/tus enter`, `/tus ctrl+s`, `/tus alt+f4`).
+- `/araştır [konu]` - Arka planda otonom *deep research* başlatır, bitince PDF rapor gönderir.
+- `/durum` - CPU, RAM ve arka plan servislerinin durumunu gösterir.
+
+**Journal (Günlük) ve Todo Sistemi:**
+Doğrudan Telegram üzerinden not tutabilir veya görev listesi yapabilirsiniz.
+- `/not [metin]` - Bugünün not defterine yeni bir not ekler.
+- `/notlar [dün|hafta]` - Geçmiş notlarınızı listeler.
+- `/todo [metin]` - Yapılacaklar listesine yeni bir görev ekler.
+- `/todos` - Tamamlanmamış görevlerinizi listeler.
+- `/done [id]` - Belirtilen görevi tamamlandı olarak işaretler.
+- `/export [gün]` - Notlarınızı (isteğe bağlı son N gün) ve görevlerinizi döküm halinde yapay zekaya vermelik txt olarak aktarır.
 
 **Kullanım Örnekleri (Telegram'dan yazın):**
 ```
-"Masaüstümün ekran görüntüsünü al"
 "GitHub'ın screenshot'ını al"
-"5 saniyelik ses kaydı yap"
-"[Ekran görüntüsü gönder] Bunu incele"
+"/ekran"
+"/yaz npm run dev"
+"/tus enter"
+"/not Vue 3 migration'ı başladı"
+"/notlar hafta"
+"/todo Yeni auth hook'larını incele"
 ```
 
 **Kurulum:** `.env` dosyasında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_ALLOWED_USER_ID` ayarlanmalı
