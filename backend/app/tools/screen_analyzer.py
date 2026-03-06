@@ -142,6 +142,8 @@ Kurallar:
 - Turkce ve Ingilizce metinleri analiz edebilmelisin
 - "Run Without Debugging", "Start Debugging" gibi VS Code menu ogelerini ASLA onay butonu olarak gorme
 - Ekranin ust kismindaki menu cubugu ogelerini (File, Edit, View, Run, Terminal, Help) GORMEZDEN GEL
+- Kod blogu, terminal ciktilari, loglar, patch/diff metni veya komut satirinda gecen "allow", "run", "accept", "yes" kelimelerini BUTON sanma
+- Bir ajan kullaniciya secim soruyorsa veya alternatif sunuyorsa bunu approval degil question olarak siniflandir
 """
 
 

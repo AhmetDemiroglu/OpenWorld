@@ -582,6 +582,65 @@ def _try_fast_research(text: str) -> Optional[str]:
         return text
     return None
 
+
+def _looks_like_fast_mail_query(text: str) -> bool:
+    normalized = _normalize_tr(text)
+    if not any(token in normalized for token in ("mail", "mailler", "eposta", "e-posta", "gmail", "outlook")):
+        return False
+    if any(token in normalized for token in ("gonder", "yolla", "cevapla", "yanitla", "taslak")):
+        return False
+    check_markers = (
+        "var mi", "başka", "baska", "daha", "geldi mi", "neler var",
+        "kontrol et", "bak", "bakar misin", "ozet", "özet",
+    )
+    return any(token in normalized for token in check_markers)
+
+
+def _build_fast_mail_query_reply(text: str) -> Optional[str]:
+    if not _looks_like_fast_mail_query(text):
+        return None
+    try:
+        from .tools.registry import execute_tool
+        from .services.email_monitor import get_preferred_mail_provider, _heuristic_triage
+
+        provider = get_preferred_mail_provider()
+        tool_name = "check_outlook_messages" if provider == "outlook" else "check_gmail_messages"
+        params = {"max_results": 10}
+        if provider == "outlook":
+            params["unread_only"] = True
+            params["today_only"] = False
+        else:
+            params["query"] = "is:unread"
+
+        result = execute_tool(tool_name, params)
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        if not messages:
+            return "Şu anda okunmamış başka mail görünmüyor."
+
+        highlights = []
+        for mail in messages[:6]:
+            triage = _heuristic_triage(mail, reason_prefix="telegram_hizli")
+            level = str(triage.get("level", "")).upper()
+            if level not in {"CRITICAL", "IMPORTANT", "NOTICE"}:
+                continue
+            label = {
+                "CRITICAL": "Kritik",
+                "IMPORTANT": "Önemli",
+                "NOTICE": "Bilgi",
+            }.get(level, level.title())
+            subject = str(mail.get("subject", "(Konu yok)") or "(Konu yok)").strip()
+            sender = str(mail.get("from", "") or "").strip()
+            highlights.append(f"- [{label}] {subject} | {sender}")
+
+        if not highlights:
+            return f"{len(messages)} okunmamış mail var ama öne çıkan başka kayıt görünmüyor."
+
+        lines = ["Öne çıkan diğer mailler:"]
+        lines.extend(highlights[:5])
+        return "\n".join(lines)
+    except Exception:
+        return None
+
 async def arastir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/araştır [konu] — Arka planda araştırma başlat; bitince Telegram'a PDF rapor gelir."""
     if not _is_allowed(update):
@@ -1078,6 +1137,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await update.message.reply_text(f"❌ Araştırma başlatılamadı: {result.get('error', '...')}")
             except Exception as exc:
                 await update.message.reply_text(f"❌ Araştırma hatası: {exc}")
+            return
+
+        fast_mail_reply = _build_fast_mail_query_reply(user_message)
+        if fast_mail_reply:
+            await update.message.reply_text(fast_mail_reply[:4000])
+            _audit(user_id, user_message[:100], status="ok")
             return
 
     # Agent'i cagir

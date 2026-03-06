@@ -115,7 +115,7 @@ def _dispatch(text: str, file_path: Optional[str] = None) -> None:
         logger.error("[Notifier] Coroutine iletilemedi: %s", exc)
 
 
-def notify(text: str, file_path: Optional[str] = None) -> None:
+def notify(text: str, file_path: Optional[str] = None) -> bool:
     """
     Herhangi bir thread'den cagirilir; mesaji ve/veya dosyayi Telegram'a iletir.
     Bloklamaz - fire-and-forget olarak cagirilir.
@@ -126,9 +126,10 @@ def notify(text: str, file_path: Optional[str] = None) -> None:
                 _pending_messages.pop(0)
             _pending_messages.append((text, file_path))
         logger.warning("[Notifier] Henuz hazir degil. Mesaj kuyruga alindi: %s", text[:80])
-        return
+        return False
 
     _dispatch(text, file_path)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -147,16 +148,16 @@ async def _send_photo(photo_path: Path, caption: str = "") -> None:
         logger.error("[Notifier] Foto gonderme hatasi (%s): %s", photo_path, exc)
 
 
-def notify_photo(photo_path: str, caption: str = "") -> None:
+def notify_photo(photo_path: str, caption: str = "") -> bool:
     """Background thread'den screenshot/foto gonder (fire-and-forget)."""
     if not _is_ready():
         logger.warning("[Notifier] Henuz hazir degil. Foto gonderilemedi: %s", photo_path)
-        return
+        return False
 
     p = Path(photo_path)
     if not p.exists() or not p.is_file():
         logger.warning("[Notifier] Foto bulunamadi: %s", photo_path)
-        return
+        return False
 
     with _lock:
         loop = _loop
@@ -165,8 +166,10 @@ def notify_photo(photo_path: str, caption: str = "") -> None:
         if loop is None:
             raise RuntimeError("Notifier loop hazir degil")
         asyncio.run_coroutine_threadsafe(_send_photo(p, caption), loop)
+        return True
     except Exception as exc:
         logger.error("[Notifier] Foto coroutine iletilemedi: %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +218,7 @@ def notify_with_buttons(
     text: str,
     buttons: List[List[Tuple[str, str]]],
     photo_path: Optional[str] = None,
-) -> None:
+) -> bool:
     """
     Background thread'den inline butonlu mesaj gonder.
 
@@ -226,7 +229,7 @@ def notify_with_buttons(
     """
     if not _is_ready():
         logger.warning("[Notifier] Henuz hazir degil. Butonlu mesaj gonderilemedi.")
-        return
+        return False
 
     pp = Path(photo_path) if photo_path else None
 
@@ -236,9 +239,12 @@ def notify_with_buttons(
     try:
         if loop is None:
             raise RuntimeError("Notifier loop hazir degil")
-        asyncio.run_coroutine_threadsafe(
+        future = asyncio.run_coroutine_threadsafe(
             _send_with_buttons(text, buttons, photo_path=pp),
             loop,
         )
+        future.add_done_callback(lambda f: f.exception())
+        return True
     except Exception as exc:
         logger.error("[Notifier] Butonlu mesaj coroutine iletilemedi: %s", exc)
+        return False

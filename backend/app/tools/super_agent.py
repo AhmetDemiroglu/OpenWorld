@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import cv2
+import httpx
 import numpy as np
 import pyautogui
 import sounddevice as sd
@@ -62,9 +63,10 @@ _TR_TRANSLATION = str.maketrans({
 })
 
 _BASE_APPROVAL_CONTEXT_TERMS = {
-    "permission", "permissions", "approve", "allow", "authorize", "access",
-    "trust", "secure", "safety", "agent", "extension",
-    "onay", "izin", "guven", "yetki", "erisim", "calistir", "surdur", "oturum",
+    "permission", "permissions", "authorize", "authorization", "access",
+    "trust", "secure", "safety", "agent", "extension", "approval",
+    "requires input", "step requires input", "run command", "session", "conversation",
+    "onay", "izin", "guven", "yetki", "erisim", "oturum", "komut",
 }
 
 _BASE_APPROVAL_BUTTON_TERMS = {
@@ -200,6 +202,16 @@ _DEBUG_MENU_COMMAND_TERMS_COMPACT = {
     "togglebreakpoint", "newbreakpoint", "enableallbreakpoints",
     "disableallbreakpoints", "removeallbreakpoints", "installadditionaldebuggers",
 }
+_AMBIGUOUS_APPROVAL_TERMS_COMPACT = {
+    "allow", "accept", "approve", "yes", "ok", "run", "continue", "proceed",
+    "evet", "tamam", "devam", "onay", "kabul",
+}
+_QUESTION_SIGNAL_TERMS = (
+    "which", "choose", "pick one", "pick", "select", "selection", "decide",
+    "would you like", "do you want", "should i", "which option", "confirm which",
+    "hangi", "sec", "secenek", "birini sec", "hangisini", "tercih", "karar ver",
+    "ne yapayim", "devam etmemi ister misin", "hangisini istersin",
+)
 
 _IDE_COMPLETION_TERMS = (
     "done", "completed", "finished", "all done", "all set", "task completed",
@@ -1347,6 +1359,11 @@ def _is_likely_menu_term(token: str) -> bool:
     return False
 
 
+def _is_ambiguous_approval_candidate(token: str) -> bool:
+    compact = _compact_normalized(token or "")
+    return compact in _AMBIGUOUS_APPROVAL_TERMS_COMPACT
+
+
 def _is_yes_like_candidate(text: str) -> bool:
     norm = _normalize_for_ocr_match(text or "")
     if not norm:
@@ -1358,6 +1375,36 @@ def _is_yes_like_candidate(text: str) -> bool:
     if norm.startswith("1 yes") or norm.startswith("1 evet"):
         return True
     return False
+
+
+def _in_modal_action_zone(candidate: Dict[str, Any], image_width: int, image_height: int) -> bool:
+    left = int(candidate.get("left", 0) or 0)
+    top = int(candidate.get("top", 0) or 0)
+    width = int(candidate.get("width", 0) or 0)
+    height = int(candidate.get("height", 0) or 0)
+    center_x = left + max(1, width) / 2
+    center_y = top + max(1, height) / 2
+    if image_height > 0 and center_y >= image_height * 0.55:
+        return True
+    if image_width > 0 and center_x >= image_width * 0.62:
+        return True
+    return False
+
+
+def _looks_like_question_text(ocr_blob: str) -> bool:
+    blob = _normalize_for_ocr_match(ocr_blob or "")
+    if not blob:
+        return False
+    if _looks_like_ide_completion_text(blob) or _looks_like_ide_busy_text(blob):
+        return False
+    hits = sum(1 for term in _QUESTION_SIGNAL_TERMS if _normalize_for_ocr_match(term) in blob)
+    has_choice_shape = any(
+        phrase in blob for phrase in (
+            "a or b", "1 or 2", "yes or no",
+            "a mi b mi", "evet mi hayir mi", "bu mu su mu",
+        )
+    )
+    return hits >= 2 or (hits >= 1 and has_choice_shape)
 
 
 def _in_top_menu_zone(candidate: Dict[str, Any], image_height: int) -> bool:
@@ -1474,27 +1521,56 @@ def _resolve_telegram_bot_token() -> str:
         return ""
 
 
-def _send_telegram_notification(text: str) -> Tuple[bool, str]:
+def _send_telegram_notification(
+    text: str,
+    *,
+    photo_path: str = "",
+    buttons: Optional[List[List[Tuple[str, str]]]] = None,
+    parse_mode: str = "HTML",
+) -> Tuple[bool, str]:
     token = _resolve_telegram_bot_token()
     chat_id = str(getattr(settings, "telegram_allowed_user_id", "") or "").strip()
     if not token or not chat_id:
         return False, "Telegram token veya allowed user id eksik."
-
-    data = urllib.parse.urlencode(
-        {
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": "true",
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            body = resp.read().decode("utf-8", errors="ignore")
+        reply_markup = ""
+        if buttons:
+            reply_markup = json.dumps(
+                {
+                    "inline_keyboard": [
+                        [{"text": label, "callback_data": callback_data} for label, callback_data in row]
+                        for row in buttons
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+        api_base = f"https://api.telegram.org/bot{token}"
+        with httpx.Client(timeout=httpx.Timeout(15.0, connect=10.0)) as client:
+            if photo_path:
+                photo = Path(photo_path)
+                if photo.exists() and photo.is_file():
+                    with open(photo, "rb") as fh:
+                        photo_resp = client.post(
+                            f"{api_base}/sendPhoto",
+                            data={"chat_id": chat_id},
+                            files={"photo": (photo.name, fh, "image/png")},
+                        )
+                        photo_resp.raise_for_status()
+
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "disable_web_page_preview": "true",
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+
+            resp = client.post(f"{api_base}/sendMessage", data=payload)
+            resp.raise_for_status()
+            body = resp.text
         return True, body[:240]
     except Exception as exc:
         return False, str(exc)
@@ -1863,6 +1939,7 @@ def tool_wait_and_accept_approval(
         last_blob = (raw_blob or blob)[:1800]
         last_input_required = _looks_like_input_required_text(last_blob)
         last_busy = _looks_like_ide_busy_text(last_blob)
+        image_width = int(getattr(screenshot, "width", 0) or 0)
         image_height = int(getattr(screenshot, "height", 0) or 0)
         has_context = any(term in blob for term in context_terms)
         has_strict_context = any(term in blob for term in strict_context_terms)
@@ -1981,6 +2058,13 @@ def tool_wait_and_accept_approval(
             if _in_top_menu_zone(c, image_height):
                 # Ust menu/toolbar bolgesindeki adimlara tiklamak pratikte yanlis pozitif urettigi icin
                 # bu bolgedeki tum adaylari disla.
+                continue
+            if (
+                _is_ambiguous_approval_candidate(norm_text)
+                and not has_strict_context
+                and not run_prompt_context_hit
+                and not _in_modal_action_zone(c, image_width, image_height)
+            ):
                 continue
             filtered_candidates.append(c)
         candidates = filtered_candidates
@@ -2297,18 +2381,23 @@ def _approval_watcher_worker(
         """Inline butonlu bildirim gonder. Basarisizsa fallback dene."""
         try:
             from ..notifier import notify_with_buttons
-            notify_with_buttons(text, buttons=buttons, photo_path=screenshot_path or None)
-            return True
+            if notify_with_buttons(text, buttons=buttons, photo_path=screenshot_path or None):
+                return True
         except Exception:
             pass
         # Fallback: butonlar olmadan duz mesaj
         try:
             from ..notifier import notify
-            notify(text, file_path=screenshot_path or None)
-            return True
+            if notify(text, file_path=screenshot_path or None):
+                return True
         except Exception:
             pass
-        sent, _ = _send_telegram_notification(text)
+        sent, _ = _send_telegram_notification(
+            text,
+            photo_path=screenshot_path or "",
+            buttons=buttons,
+            parse_mode="HTML",
+        )
         return sent
 
     while not stop_event.is_set():
@@ -2387,7 +2476,8 @@ def _approval_watcher_worker(
                 and not result.get("success")
                 and not busy_hit
                 and (
-                    llm_check_counter % 5 == 0  # her 5 dongude bir
+                    input_required_hit
+                    or llm_check_counter % 5 == 0  # her 5 dongude bir
                     or (not input_required_hit and idle_clear_hits >= 2)  # idle durumda daha sik
                     or (watcher_state == COMPLETED and not completion_prompt_sent_before)  # completion dogrulama
                 )
@@ -2561,9 +2651,15 @@ def _approval_watcher_worker(
                 or silent_completion or stale_completion
             )
 
-            # --- Question Detection (LLM only) ---
-            if llm_says_question and not question_notified and not completion_prompt_sent:
-                question_text = llm_analysis.reasoning[:200] if llm_analysis else ""
+            # --- Question Detection (LLM + OCR fallback) ---
+            heuristic_question = bool(
+                ocr_blob
+                and not result.get("success")
+                and not busy_hit
+                and _looks_like_question_text(ocr_blob)
+            )
+            if (llm_says_question or heuristic_question) and not question_notified and not completion_prompt_sent:
+                question_text = llm_analysis.reasoning[:200] if llm_analysis else ocr_blob[:200]
                 if question_text != last_question_text:
                     send_question_prompt = True
                     question_notified = True
@@ -2613,16 +2709,13 @@ def _approval_watcher_worker(
                 )
                 if notify_on_completion:
                     send_completion_prompt = True
-                    accepted_count = int(_APPROVAL_WATCHER_STATE.get("accepted", 0))
-                    checks_count = int(_APPROVAL_WATCHER_STATE.get("checks", 0))
                     summary = ""
                     if llm_analysis and llm_analysis.completion_summary:
                         summary = f"\n<b>Ozet:</b> {llm_analysis.completion_summary[:200]}"
                     notification_text = (
-                        f"<b>IDE gorevi tamamlandi</b>\n"
-                        f"Profil: {profile} | {accepted_count} onay islendi, {checks_count} kontrol\n"
-                        f"Neden: {reason_text}{summary}\n\n"
-                        "Onay izleyiciyi kapatayim mi?"
+                        "<b>IDE gorevi tamamlanmis olabilir.</b>\n"
+                        f"{reason_text}{summary}\n\n"
+                        "Onay izleyiciyi durdurayim mi?"
                     )
                 if auto_stop_on_completion:
                     auto_stop_now = True
@@ -2636,7 +2729,7 @@ def _approval_watcher_worker(
             last_notify_try_ts = now_ts
             screenshot_path = _capture_completion_screenshot()
             buttons = [
-                [("Durdur", "watcher_stop"), ("Devam etsin", "watcher_continue")],
+                [("Evet, durdur", "watcher_stop"), ("Hayir, devam et", "watcher_continue")],
             ]
             sent = _send_notification_with_buttons(notification_text, screenshot_path, buttons)
             with _APPROVAL_WATCHER_LOCK:
@@ -2658,15 +2751,14 @@ def _approval_watcher_worker(
                 last_notify_try_ts = now_ts
                 screenshot_path = _capture_completion_screenshot()
                 q_text = (
-                    f"<b>Ajan soru soruyor / secenek sunuyor</b>\n"
-                    f"Profil: {profile}\n"
-                    f"<b>Durum:</b> {llm_analysis.reasoning[:300]}\n"
+                    "<b>Ajan soru soruyor.</b>\n"
+                    f"{llm_analysis.reasoning[:300]}\n"
                 )
                 if llm_analysis.options:
                     q_text += "\n<b>Secenekler:</b>\n"
                     for i, opt in enumerate(llm_analysis.options[:6], 1):
                         q_text += f"  {i}. {opt}\n"
-                q_text += "\nEkran goruntusunu inceleyip yanit verebilirsin."
+                q_text += "\nEkran goruntusune bakip secim yapabilirsin."
                 # Secenek butonlari
                 q_buttons = []
                 if llm_analysis.options:
@@ -2675,7 +2767,7 @@ def _approval_watcher_worker(
                         label = opt[:20] if len(opt) <= 20 else opt[:18] + ".."
                         row.append((label, f"watcher_choice:{opt[:60]}"))
                     q_buttons.append(row)
-                q_buttons.append([("Ekran Gor.", "watcher_screenshot")])
+                q_buttons.append([("Ekrani goster", "watcher_screenshot")])
                 _send_notification_with_buttons(q_text, screenshot_path, q_buttons)
 
         if auto_stop_now:

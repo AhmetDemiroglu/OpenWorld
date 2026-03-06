@@ -88,6 +88,23 @@ def decrypt_text(value: str) -> str:
 GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
 
 
+def _repair_mojibake(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    suspicious = ("Ã", "Ä", "Å", "â", "\ufffd")
+    if not any(ch in value for ch in suspicious):
+        return value
+    for src_enc, dst_enc in (("latin-1", "utf-8"), ("cp1252", "utf-8"), ("cp1254", "utf-8")):
+        try:
+            repaired = value.encode(src_enc, errors="ignore").decode(dst_enc, errors="ignore")
+        except Exception:
+            continue
+        if repaired and repaired != value and any(ch in repaired for ch in "çğıöşüÇĞİÖŞÜ"):
+            return repaired
+    return value
+
+
 def _looks_like_google_client_id(value: str) -> bool:
     return value.endswith(".apps.googleusercontent.com") and "." in value
 
@@ -781,8 +798,9 @@ class LauncherApp:
 
     def _append_status(self, text: str) -> None:
         def _set() -> None:
-            self._last_status_text = text
-            self.status_var.set(f"{time.strftime('%H:%M:%S')} - {text}")
+            repaired = _repair_mojibake(text)
+            self._last_status_text = repaired
+            self.status_var.set(f"{time.strftime('%H:%M:%S')} - {repaired}")
 
         self.root.after(0, _set)
 
