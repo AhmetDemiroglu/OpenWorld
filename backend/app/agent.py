@@ -127,7 +127,7 @@ class AgentService:
         except asyncio.TimeoutError:
             return self._build_timeout_reply(session_id, user_message), 1, [], []
         except asyncio.CancelledError:
-            return "Onceki islem yeni isteginiz nedeniyle durduruldu.", 1, [], []
+            return "Önceki işlem yeni isteğiniz nedeniyle durduruldu.", 1, [], []
         finally:
             async with self._session_locks_guard:
                 existing = self._session_running_tasks.get(session_id)
@@ -173,18 +173,18 @@ class AgentService:
         if self._extract_approval_watcher_action(user_message) != "stop":
             return "", []
         if "stop_approval_watcher" not in self._known_tool_names:
-            return "Onay izleyici araci aktif degil.", []
+            return "Onay izleyici aracı aktif değil.", []
         try:
             result = execute_tool("stop_approval_watcher", {})
         except Exception as exc:
-            return f"Hata: onay izleyici durdurulamadi: {exc}", ["stop_approval_watcher"]
+            return f"Hata: onay izleyici durdurulamadı: {exc}", ["stop_approval_watcher"]
         if isinstance(result, dict) and result.get("error"):
             return f"Hata: {result.get('error')}", ["stop_approval_watcher"]
         if isinstance(result, dict):
             message = str(result.get("message", "")).strip()
             if message:
                 return message, ["stop_approval_watcher"]
-        return "Onay izleyici kapatildi.", ["stop_approval_watcher"]
+        return "Onay izleyici kapatıldı.", ["stop_approval_watcher"]
 
     @staticmethod
     def _is_global_stop_request(user_message: str) -> bool:
@@ -2894,6 +2894,18 @@ class AgentService:
             return key
         return "generic"
 
+    @staticmethod
+    def _watcher_profile_label(target: str) -> str:
+        key = AgentService._watcher_profile_for_target(target)
+        labels = {
+            "generic": "genel",
+            "claudecode": "Claude Code",
+            "codex": "Codex",
+            "kimicode": "Kimi Code",
+            "gemini": "Gemini",
+        }
+        return labels.get(key, "genel")
+
     def _set_pending_watcher_confirmation(self, session_id: str, profile: str = "generic") -> None:
         self._pending_watcher_confirmation[session_id] = {
             "created_at": time.time(),
@@ -2941,8 +2953,8 @@ class AgentService:
         decision = self._classify_watcher_confirmation_answer(user_message)
         if not decision:
             return (
-                "Onay izleyici, IDE gorevinin tamamlandigini algiladi. "
-                "Izleyiciyi kapatayim mi? (evet/hayir)",
+                "Onay izleyici, IDE görevinin tamamlandığını algıladı. "
+                "İzleyiciyi kapatayım mı? (evet/hayır)",
                 ["approval_watcher_status"],
                 True,
             )
@@ -2955,7 +2967,7 @@ class AgentService:
             execute_tool("ack_approval_completion_prompt", {"keep_running": True})
         except Exception:
             pass
-        return "Tamam. Onay izleyici acik birakildi.", ["approval_watcher_status", "ack_approval_completion_prompt"], True
+        return "Tamam. Onay izleyici açık bırakıldı.", ["approval_watcher_status", "ack_approval_completion_prompt"], True
 
     def _try_fast_approval_watcher_control(self, user_message: str) -> Tuple[str, List[str]]:
         action = self._extract_approval_watcher_action(user_message)
@@ -2967,10 +2979,11 @@ class AgentService:
     def _run_approval_watcher_action(self, action: str, profile: str = "generic") -> Tuple[str, List[str]]:
         action = (action or "").strip().lower() or "status"
         profile = self._watcher_profile_for_target(profile)
+        profile_label = self._watcher_profile_label(profile)
 
         required_tools = {"start_approval_watcher", "stop_approval_watcher", "approval_watcher_status"}
         if not required_tools.issubset(self._known_tool_names):
-            return "Onay izleyici araclari su an aktif degil.", []
+            return "Onay izleyici araçları şu an aktif değil.", []
 
         tool_map = {
             "start": "start_approval_watcher",
@@ -2984,34 +2997,34 @@ class AgentService:
                 params["profile"] = profile
             result = execute_tool(tool_name, params)
         except Exception as exc:
-            return f"Hata: onay izleyici islemi basarisiz: {exc}", [tool_name]
+            return f"Hata: onay izleyici işlemi başarısız: {exc}", [tool_name]
 
         if isinstance(result, dict) and result.get("error"):
             error = str(result.get("error", "")).strip()
             detail = str(result.get("detail", "")).strip()
             install_path = str(result.get("install_path", "")).strip()
             install_url = str(result.get("install_url", "")).strip()
-            lines = [f"Hata: {error or 'Onay izleyici baslatilamadi.'}"]
+            lines = [f"Hata: {error or 'Onay izleyici başlatılamadı.'}"]
             if detail:
                 lines.append(f"Detay: {detail}")
             if install_path:
                 lines.append(f"Kurulum yolu: {install_path}")
             if install_url:
-                lines.append(f"Indirme: {install_url}")
+                lines.append(f"İndirme: {install_url}")
             return "\n".join(lines), [tool_name]
 
         if action == "start":
-            profile_note = ""
+            profile_note = f" Profil: {profile_label}."
             if isinstance(result, dict):
                 active_profile = str(result.get("profile", profile)).strip() or profile
-                profile_note = f" Profil: {active_profile}."
+                profile_note = f" Profil: {self._watcher_profile_label(active_profile)}."
             return (
-                "Onay izleyici acildi. VS Code acik oldugu surece onay pencerelerini otomatik takip edip kabul etmeye calisacagim."
+                "Onay izleyici açıldı. VS Code açık olduğu sürece onay pencerelerini otomatik takip edip kabul etmeye çalışacağım."
                 + profile_note,
                 [tool_name],
             )
         if action == "stop":
-            return "Onay izleyici kapatildi.", [tool_name]
+            return "Onay izleyici kapatıldı.", [tool_name]
 
         running = bool(result.get("running")) if isinstance(result, dict) else False
         checks = int(result.get("checks", 0)) if isinstance(result, dict) else 0
@@ -3020,7 +3033,7 @@ class AgentService:
         completion_prompt_sent = bool(result.get("completion_prompt_sent")) if isinstance(result, dict) else False
         last_notification_at = str(result.get("last_notification_at", "")).strip() if isinstance(result, dict) else ""
         notification_error = str(result.get("notification_error", "")).strip() if isinstance(result, dict) else ""
-        status_text = "acik" if running else "kapali"
+        status_text = "açık" if running else "kapalı"
         parts = [f"Onay izleyici durumu: {status_text}.", f"Kontrol: {checks}", f"kabul edilen onay: {accepted}"]
         if last_event:
             parts.append(f"son olay: {last_event}")
@@ -3029,7 +3042,7 @@ class AgentService:
         if last_notification_at:
             parts.append(f"son bildirim: {last_notification_at}")
         if notification_error:
-            parts.append(f"bildirim hatasi: {notification_error}")
+            parts.append(f"bildirim hatası: {notification_error}")
         return " | ".join(parts), [tool_name]
 
     def _try_fast_vscode_agent_chat_write(self, session_id: str, user_message: str) -> Tuple[str, List[str]]:

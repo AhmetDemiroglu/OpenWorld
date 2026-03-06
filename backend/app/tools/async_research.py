@@ -190,11 +190,20 @@ def _clean_llm_output(text: str) -> str:
     """LLM ciktisindaki JSON bloklari, code fence'ler ve halusinasyonlari temizle."""
     if not text:
         return ""
+    prompt_leak_patterns = (
+        r"(?is)\n?\s*(?:user|assistant|system)?\s*\n?\s*you are a world-class ai system capable of performing complex reasoning tasks\.[\s\S]*$",
+        r"(?is)\n?\s*please carefully evaluate the following input:\s*[\s\S]*$",
+        r"(?is)\n?\s*\[input\]\s*[\s\S]*$",
+    )
+    for pattern in prompt_leak_patterns:
+        text = re.sub(pattern, "", text)
     # <think> bloklari ve role leak'leri
     text = re.sub(r"(?is)<think>[\s\S]*?</think>", " ", text)
     text = re.sub(r"(?im)^\s*</?think>\s*$", "", text)
     text = re.sub(r"(?im)^\s*(?:assistant|user|system)\s*$", "", text)
     text = re.sub(r"(?im)^\s*\*{0,2}kaynak tablosu:?\*{0,2}\s*$", "", text)
+    text = re.sub(r"(?im)^\s*(?:user question|context|context \d+):.*$", "", text)
+    text = re.sub(r"(?im)^\s*\"?bulgular:?\s*$", "", text)
     # Markdown tablo bloklari
     text = re.sub(r"(?im)^\s*\|.*\|\s*$", "", text)
     text = re.sub(r"(?im)^\s*\|?[:\- ]+\|[:\-| ]*$", "", text)
@@ -219,6 +228,16 @@ def _sanitize_report_line(line: str) -> str:
     if lowered in {"assistant", "user", "system", "<think>", "</think>"}:
         return ""
     if "kaynak tablosu" in lowered:
+        return ""
+    if lowered.startswith("user question:") or lowered.startswith("context:"):
+        return ""
+    if re.match(r"^context\s+\d+:", lowered):
+        return ""
+    if "you are a world-class ai system" in lowered:
+        return ""
+    if "please carefully evaluate the following input" in lowered:
+        return ""
+    if lowered == "[input]":
         return ""
     if raw.startswith("|") and raw.endswith("|"):
         return ""
@@ -405,11 +424,20 @@ def _looks_like_useful_synthesis(text: str, topic_keywords: list[str]) -> bool:
     sample = (text or "").strip()
     if len(sample) < 1200:
         return False
+    sample_lower = sample.lower()
+    prompt_leak_markers = (
+        "you are a world-class ai system",
+        "please carefully evaluate the following input",
+        "[input]",
+        "user question:",
+        "context 1:",
+    )
+    if any(marker in sample_lower for marker in prompt_leak_markers):
+        return False
     if sample.count("\n## ") < 3 and sample.count("## ") < 3:
         return False
     if not _looks_like_turkish_text(sample):
         return False
-    sample_lower = sample.lower()
     keyword_hits = 0
     for kw in topic_keywords[:8]:
         kw_norm = _normalize_ascii(kw).lower()

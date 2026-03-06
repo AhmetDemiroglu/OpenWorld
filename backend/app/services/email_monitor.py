@@ -680,8 +680,11 @@ def send_email_via_gmail(
     thread_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Send an email via Gmail API. Returns (success, detail)."""
+    recipient = _extract_email_address(to)
+    if not recipient or "@" not in recipient:
+        return False, f"Geçerli bir alıcı adresi çözümlenemedi: {to}"
     msg = MIMEText(body, "plain", "utf-8")
-    msg["to"] = to
+    msg["to"] = recipient
     msg["subject"] = subject
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     payload: Dict[str, Any] = {"raw": raw}
@@ -704,7 +707,7 @@ def send_email_via_gmail(
                     json=payload,
                 )
             resp.raise_for_status()
-            logger.info(f"Email sent to {to}: {subject}")
+            logger.info(f"Email sent to {recipient}: {subject}")
             return True, "ok"
     except httpx.HTTPStatusError as exc:
         body = exc.response.text[:400] if exc.response is not None else str(exc)

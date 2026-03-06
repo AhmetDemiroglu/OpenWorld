@@ -127,6 +127,14 @@ def _post_form(url: str, payload: dict[str, str]) -> dict:
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
 
+def _get_json(url: str, headers: dict[str, str] | None = None, timeout: int = 10) -> dict:
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8")
+    data = json.loads(body)
+    return data if isinstance(data, dict) else {}
+
+
 def _run_loopback_oauth(
     auth_url: str,
     expected_state: str,
@@ -807,16 +815,60 @@ class LauncherApp:
         return any(marker in combined for marker in markers)
 
     def _update_connection_badges(self) -> None:
-        gmail_connected = bool(self.gmail_token_var.get().strip() or self.gmail_refresh_var.get().strip())
-        outlook_connected = bool(self.outlook_token_var.get().strip() or self.outlook_refresh_var.get().strip())
+        gmail_label, gmail_color = self._gmail_connection_status()
+        outlook_label, outlook_color = self._outlook_connection_status()
 
-        self.gmail_conn_var.set("Durum: Bağlı" if gmail_connected else "Durum: Bağlı değil")
-        self.outlook_conn_var.set("Durum: Bağlı" if outlook_connected else "Durum: Bağlı değil")
+        self.gmail_conn_var.set(gmail_label)
+        self.outlook_conn_var.set(outlook_label)
 
         if hasattr(self, "gmail_conn_label"):
-            self.gmail_conn_label.configure(fg="#22c55e" if gmail_connected else "#f59e0b")
+            self.gmail_conn_label.configure(fg=gmail_color)
         if hasattr(self, "outlook_conn_label"):
-            self.outlook_conn_label.configure(fg="#22c55e" if outlook_connected else "#f59e0b")
+            self.outlook_conn_label.configure(fg=outlook_color)
+
+    def _gmail_connection_status(self) -> tuple[str, str]:
+        access_token = self.gmail_token_var.get().strip()
+        refresh_token = self.gmail_refresh_var.get().strip()
+        if not access_token and not refresh_token:
+            return "Durum: Bağlı değil", "#f59e0b"
+
+        token = access_token
+        if not token and refresh_token:
+            try:
+                token = self._refresh_gmail_access_token()
+                if token:
+                    self.gmail_token_var.set(token)
+            except Exception:
+                return "Durum: Bağlı, doğrulanamadı", "#f59e0b"
+
+        if not token:
+            return "Durum: Bağlı, doğrulanamadı", "#f59e0b"
+
+        try:
+            info = _get_json(
+                "https://oauth2.googleapis.com/tokeninfo?access_token="
+                + urllib.parse.quote(token, safe=""),
+                timeout=8,
+            )
+            scope_text = str(info.get("scope", "") or "")
+            scopes = set(scope_text.split())
+            has_read = "https://www.googleapis.com/auth/gmail.readonly" in scopes
+            has_send = "https://www.googleapis.com/auth/gmail.send" in scopes
+            if has_read and has_send:
+                return "Durum: Bağlı (okuma + gönderim)", "#22c55e"
+            if has_read and not has_send:
+                return "Durum: Bağlı (gönderim izni yok)", "#f59e0b"
+            if has_send:
+                return "Durum: Bağlı (gönderim)", "#22c55e"
+            return "Durum: Bağlı, scope eksik", "#f59e0b"
+        except Exception:
+            return "Durum: Bağlı, doğrulanamadı", "#f59e0b"
+
+    def _outlook_connection_status(self) -> tuple[str, str]:
+        connected = bool(self.outlook_token_var.get().strip() or self.outlook_refresh_var.get().strip())
+        if connected:
+            return "Durum: Bağlı", "#22c55e"
+        return "Durum: Bağlı değil", "#f59e0b"
 
     def _run_bg(self, fn) -> None:
         threading.Thread(target=fn, daemon=True).start()
@@ -1200,7 +1252,10 @@ class LauncherApp:
                     "client_id": client_id,
                     "redirect_uri": "__REDIRECT_URI__",
                     "response_type": "code",
-                    "scope": "https://www.googleapis.com/auth/gmail.readonly",
+                    "scope": (
+                        "https://www.googleapis.com/auth/gmail.readonly "
+                        "https://www.googleapis.com/auth/gmail.send"
+                    ),
                     "state": state,
                     "access_type": "offline",
                     "prompt": "consent",
@@ -1229,7 +1284,8 @@ class LauncherApp:
                     if refresh_token:
                         self.gmail_refresh_var.set(refresh_token)
                     self.save_env()
-                    self._append_status("Gmail OAuth tamamlandı ve tokenlar kaydedildi.")
+                    gmail_status, _ = self._gmail_connection_status()
+                    self._append_status(f"Gmail OAuth tamamlandı ve tokenlar kaydedildi. {gmail_status}")
 
                 self.root.after(0, _apply_tokens)
             except Exception as exc:  # noqa: BLE001
@@ -1249,7 +1305,11 @@ class LauncherApp:
             try:
                 code_verifier, code_challenge = _pkce_pair()
                 state = secrets.token_urlsafe(24)
-                scope = "offline_access https://graph.microsoft.com/Mail.Read"
+                scope = (
+                    "offline_access "
+                    "https://graph.microsoft.com/Mail.Read "
+                    "https://graph.microsoft.com/Mail.Send"
+                )
                 params = {
                     "client_id": client_id,
                     "redirect_uri": "__REDIRECT_URI__",
@@ -1323,7 +1383,11 @@ class LauncherApp:
             "client_id": client_id,
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "scope": "offline_access https://graph.microsoft.com/Mail.Read",
+            "scope": (
+                "offline_access "
+                "https://graph.microsoft.com/Mail.Read "
+                "https://graph.microsoft.com/Mail.Send"
+            ),
         }
         token_data = _post_form(f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token", payload)
         return token_data.get("access_token", "")

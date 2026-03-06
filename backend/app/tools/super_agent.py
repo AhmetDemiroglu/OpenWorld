@@ -2417,7 +2417,7 @@ def tool_start_approval_watcher(
         _APPROVAL_WATCHER_STATE["stop_event"] = stop_event
         _APPROVAL_WATCHER_STATE["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _APPROVAL_WATCHER_STATE["last_error"] = ""
-        _APPROVAL_WATCHER_STATE["last_event"] = "Baslatildi"
+        _APPROVAL_WATCHER_STATE["last_event"] = "Başlatıldı"
         _APPROVAL_WATCHER_STATE["window_pattern"] = window_pattern
         _APPROVAL_WATCHER_STATE["profile"] = profile_key
         _APPROVAL_WATCHER_STATE["interval"] = interval
@@ -2442,7 +2442,7 @@ def tool_start_approval_watcher(
     return {
         "success": True,
         "running": True,
-        "message": "Onay izleyici baslatildi.",
+        "message": "Onay izleyici başlatıldı.",
         "window_pattern": window_pattern,
         "profile": profile_key,
         "interval": interval,
@@ -2461,7 +2461,7 @@ def tool_stop_approval_watcher() -> Dict[str, Any]:
         running = bool(_APPROVAL_WATCHER_STATE.get("running"))
 
     if not running:
-        return {"success": True, "running": False, "message": "Onay izleyici zaten kapali."}
+        return {"success": True, "running": False, "message": "Onay izleyici zaten kapalı."}
 
     if isinstance(stop_event, threading.Event):
         stop_event.set()
@@ -2489,14 +2489,14 @@ def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, 
         running = bool(_APPROVAL_WATCHER_STATE.get("running"))
         _reset_completion_signal_unlocked()
         if keep_running and running:
-            _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi gecildi, izleyici acik."
+            _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi geçildi, izleyici açık."
         else:
             _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi temizlendi."
     return {
         "success": True,
         "running": running,
         "completion_prompt_sent": False,
-        "message": "Tamamlanma bildirimi sifirlandi.",
+        "message": "Tamamlanma bildirimi sıfırlandı.",
     }
 
 
