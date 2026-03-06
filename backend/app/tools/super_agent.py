@@ -73,7 +73,9 @@ _BASE_APPROVAL_CONTEXT_TERMS = {
 _BASE_APPROVAL_BUTTON_TERMS = {
     "approve", "allow", "accept", "authorize", "grant", "yes", "ok",
     "onayla", "onay", "izinver", "kabulet", "kabul", "devam", "evet",
-    "proceed", "expand",
+    "proceed",
+    # NOT: "expand" cikarildi — sadece Gemini/Codex gibi profillerde eklenir.
+    # Claude Code'da "Expand All" kod blogu acar, onay degil.
 }
 
 _BASE_APPROVAL_BUTTON_TERMS_MULTI = {
@@ -142,8 +144,8 @@ _APPROVAL_PROFILE_OVERRIDES: Dict[str, Dict[str, set[str]]] = {
     },
     "codex": {
         "context": {"codex", "requires input", "run command"},
-        "button_single": {"run"},
-        "button_multi": {"run alt j", "run anyway", "run command"},
+        "button_single": {"run", "expand"},
+        "button_multi": {"run alt j", "run anyway", "run command", "expand all"},
         "context_hints": {"codex", "run", "accept", "expand"},
     },
     "kimicode": {
@@ -292,7 +294,8 @@ _IDE_INPUT_REQUIRED_TERMS = (
     "yetki",
     "steps require approval",
     "step requires approval",
-    "expand all",
+    # NOT: "expand all" cikarildi — bu kod blogu acma UI elemani,
+    # input required gostergesi degil. Ozellikle Claude Code'da yanlis pozitif uretiyordu.
     "allow for this conversation",
 )
 
@@ -2471,7 +2474,7 @@ def _approval_watcher_worker(
                 last_busy_ts = now_ts
                 _APPROVAL_WATCHER_STATE["last_busy_at"] = now_label
                 if watcher_state != BUSY:
-                    _update_state(BUSY, "Ajan calisiyor...")
+                    _update_state(BUSY, "Ajan çalışıyor...")
 
             # --- LLM Analizi (throttled) ---
             llm_analysis = None
@@ -2519,13 +2522,16 @@ def _approval_watcher_worker(
                 _APPROVAL_WATCHER_STATE["llm_reasoning"] = llm_analysis.reasoning[:200]
 
             # --- Expand algilama: LLM veya keyword ---
-            if llm_says_expand and llm_analysis and llm_analysis.target_text:
-                # LLM expand butonu tespit etti — tikla
+            # NOT: claudecode profilinde "Expand All" kod blogu acar, onay degil.
+            # Tiklamak Claude Code'un ilerleme gorunumunu bozar.
+            expand_friendly_profiles = {"gemini", "codex", "copilot", "kimicode"}
+            if llm_says_expand and llm_analysis and llm_analysis.target_text and profile in expand_friendly_profiles:
+                # LLM expand butonu tespit etti — tikla (sadece uygun profillerde)
                 try:
                     _click_text_on_active_window(
                         llm_analysis.target_text, window_pattern, lang, min_confidence
                     )
-                    _update_state(APPROVAL_CLICKED, f"Expand tiklandi (LLM): {llm_analysis.target_text}")
+                    _update_state(APPROVAL_CLICKED, f"Expand tıklandı (LLM): {llm_analysis.target_text}")
                     _APPROVAL_WATCHER_STATE["accepted"] = int(_APPROVAL_WATCHER_STATE.get("accepted", 0)) + 1
                     last_accept_ts = time.time()
                     last_activity_ts = last_accept_ts
@@ -2721,7 +2727,7 @@ def _approval_watcher_worker(
                     notification_text = (
                         "<b>IDE gorevi tamamlanmis olabilir.</b>\n"
                         f"{reason_text}{summary}\n\n"
-                        "Onay izleyiciyi durdurayim mi?"
+                        "Onay izleyiciyi durdurayım mı?"
                     )
                 if auto_stop_on_completion:
                     auto_stop_now = True
@@ -2733,6 +2739,7 @@ def _approval_watcher_worker(
                 time.sleep(max(0.05, min(interval, 0.5)))
                 continue
             last_notify_try_ts = now_ts
+            _completion_notify_retries = getattr(tool_start_approval_watcher, "_notify_retries", 0)
             screenshot_path = _capture_completion_screenshot()
             buttons = [
                 [("Evet, durdur", "watcher_stop"), ("Hayir, devam et", "watcher_continue")],
@@ -2744,12 +2751,21 @@ def _approval_watcher_worker(
                     _APPROVAL_WATCHER_STATE["notification_error"] = ""
                     _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi ve ekran goruntusu gonderildi."
                     logger.info("Approval watcher completion notification sent | profile=%s", profile)
+                    tool_start_approval_watcher._notify_retries = 0
                 else:
+                    _completion_notify_retries += 1
+                    tool_start_approval_watcher._notify_retries = _completion_notify_retries
                     _APPROVAL_WATCHER_STATE["notification_error"] = "Bildirim gonderilemedi"
-                    _APPROVAL_WATCHER_STATE["completion_detected"] = True
-                    _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
-                    _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma algilandi ancak bildirim gonderilemedi (tekrar denenecek)."
-                    logger.warning("Approval watcher completion notification failed | profile=%s", profile)
+                    if _completion_notify_retries < 3:
+                        # Max 3 deneme, sonra prompt_sent=True birak ve tekrar deneme
+                        _APPROVAL_WATCHER_STATE["completion_detected"] = True
+                        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = False
+                        _APPROVAL_WATCHER_STATE["last_event"] = f"Bildirim gonderilemedi (deneme {_completion_notify_retries}/3)."
+                    else:
+                        # 3 denemeden sonra vazgec, prompt_sent=True birak
+                        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
+                        _APPROVAL_WATCHER_STATE["last_event"] = "Bildirim 3 kez gonderilemedi, tekrar denenmeyecek."
+                    logger.warning("Approval watcher completion notification failed (attempt %d) | profile=%s", _completion_notify_retries, profile)
 
         if send_question_prompt and llm_analysis:
             now_ts = time.time()
@@ -2901,10 +2917,23 @@ def tool_approval_watcher_status() -> Dict[str, Any]:
 
 
 def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, Any]:
-    """Tamamlanma bildirimi sorusunu temizle (watcher acik kalabilir)."""
+    """Tamamlanma bildirimi sorusunu temizle (watcher acik kalabilir).
+
+    NOT: completion_prompt_sent True olarak KALIR ki ayni ekran durumunda
+    tekrar bildirim gonderilmesin. Sadece yeni bir aktivite (onay tiklama,
+    busy durum) gorulurse sifirlanir (_reset_completion_signal_unlocked
+    result.success icinde zaten cagriliyor).
+    """
     with _APPROVAL_WATCHER_LOCK:
         running = bool(_APPROVAL_WATCHER_STATE.get("running"))
-        _reset_completion_signal_unlocked()
+        # completion_detected ve completion_hits sifirla ama
+        # completion_prompt_sent = True BIRAK → tekrar bildirim gonderilmesin
+        _APPROVAL_WATCHER_STATE["completion_detected"] = False
+        _APPROVAL_WATCHER_STATE["completion_hits"] = 0
+        _APPROVAL_WATCHER_STATE["last_completion_text"] = ""
+        _APPROVAL_WATCHER_STATE["completion_reason"] = ""
+        # completion_prompt_sent SIFIRLANMIYOR — bu sayede ayni durum
+        # tekrar algilandiginda bildirim GONDERILMEZ
         if keep_running and running:
             _APPROVAL_WATCHER_STATE["last_event"] = "Tamamlanma bildirimi geçildi, izleyici açık."
         else:
@@ -2912,8 +2941,8 @@ def tool_ack_approval_completion_prompt(keep_running: bool = True) -> Dict[str, 
     return {
         "success": True,
         "running": running,
-        "completion_prompt_sent": False,
-        "message": "Tamamlanma bildirimi sıfırlandı.",
+        "completion_prompt_sent": True,
+        "message": "Tamamlanma bildirimi onaylandı, izleyici devam ediyor.",
     }
 
 

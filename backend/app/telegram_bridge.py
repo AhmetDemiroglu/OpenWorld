@@ -216,8 +216,9 @@ def _get_timeout_for_request(text: str) -> httpx.Timeout:
         return _mk_timeout(float(max(120, int(getattr(settings, "telegram_timeout_automation_sec", 240)))), 8.0)
     
     # ARASTIRMA ISLEMLERI: Uzun surebilir (5 dakika)
-    research_patterns = ["arastir", "rapor", "detayli", "tum haber", "haber tara",
-                        "analiz", "research", "report", "pdf olustur", "word olustur", "haberleri tara"]
+    # Sadece acik arastirma niyeti — "rapor", "analiz" gibi genel kelimeler dahil degil
+    research_patterns = ["arastirma yap", "internette ara", "web'de ara", "haber tara",
+                        "haberleri tara", "kaynak bul", "makale bul"]
     if any(p in text_lower for p in research_patterns):
         return _mk_timeout(float(max(300, int(getattr(settings, "telegram_timeout_research_sec", 420)))), 10.0)
     
@@ -524,9 +525,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             from .tools.super_agent import tool_stop_approval_watcher
             result = tool_stop_approval_watcher()
-            await query.edit_message_text(
-                "Onay izleyici durduruldu." if result.get("success") else "Izleyici zaten kapali.",
-            )
+            msg = "Onay izleyici durduruldu." if result.get("success") else "İzleyici zaten kapalı."
+            await query.edit_message_text(msg)
         except Exception as exc:
             await query.edit_message_text(f"Hata: {exc}")
         return
@@ -571,16 +571,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if data == "more_yes":
         await query.edit_message_text("Tabii! Ne yapmami istersin...")
     elif data == "more_no":
-        await query.edit_message_text("Anlasildi, beklemedeyim. Ihtiyac olursa yaz.")
+        await query.edit_message_text("Anlaşıldı, beklemedeyim. İhtiyaç olursa yaz.")
 
 
 # ─── BLOK 6: /araştır ────────────────────────────────────────────────────────
 
 def _try_fast_research(text: str) -> Optional[str]:
-    """Eger metin agir bir arastirma istegi ise konuyu cikarip dondurur."""
+    """Eger metin ACIKCA bir internet arastirmasi istegi ise konuyu cikarip dondurur.
+
+    DIKKAT: Sadece kullanici acikca 'arastir', 'internette ara' gibi
+    ifadeler kullandiginda tetiklenir. 'rapor', 'analiz', 'detayli' gibi
+    genel kelimeler TETIKLEMEZ — bunlar LLM'e gider.
+    """
     text_lower = _normalize_tr(text)
-    research_keywords = {"arastirma yap", "arastir", "rapor", "detayli arastir", "detayli analiz"}
-    if any(k in text_lower for k in research_keywords) and len(text) > 30:
+    # Sadece acik arastirma niyeti belirten cumle kaliplari
+    explicit_research_phrases = [
+        "arastirma yap",
+        "internette ara",
+        "internet'te ara",
+        "web'de ara",
+        "webde ara",
+        "haber tara",
+        "haberleri tara",
+        "kaynak bul",
+        "makale bul",
+    ]
+    # Kelimenin basinda "arastir" ile baslayan cumle (ama "arastirma" icinde degil)
+    starts_with_research = text_lower.strip().startswith("arastir ") or text_lower.strip().startswith("arastir:")
+    if starts_with_research and len(text) > 15:
+        return text
+    if any(phrase in text_lower for phrase in explicit_research_phrases) and len(text) > 15:
         return text
     return None
 
@@ -1044,42 +1064,42 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         caption = update.message.caption or ""
         
         # Once bilgi mesaji gonder
-        status_msg = await update.message.reply_text("📸 Gorsel algilandi, icerik okunuyor...")
-        
+        status_msg = await update.message.reply_text("📸 Görsel algılandı, içerik okunuyor...")
+
         try:
             # Fotografi indir
             file = await context.bot.get_file(photo.file_id)
             image_bytes = await file.download_as_bytearray()
-            
+
             # OCR ile isle (max 10 saniye)
             user_message = await _process_image_with_ocr(bytes(image_bytes), caption)
-            
+
             # OCR sonucunu kontrol et
             if "okunabilir metin bulunamadi" in user_message.lower() or "metin yok" in user_message.lower():
                 # Gorselde metin yok - kullaniciyi bilgilendir
                 info_text = (
-                    "ℹ️ **Gorsel durumu:**\n"
-                    "Gorselde okunabilir **metin bulunamadi**.\n"
-                    "Bu bot gorsellerdeki yazilari OCR ile okuyabilir,\n"
-                    "ama nesneleri/karakterleri goremez.\n\n"
+                    "ℹ️ **Görsel durumu:**\n"
+                    "Görselde okunabilir **metin bulunamadı**.\n"
+                    "Bu bot görsellerdeki yazıları OCR ile okuyabilir,\n"
+                    "ama nesneleri/karakterleri göremez.\n\n"
                 )
                 if caption:
-                    info_text += f"Isteginiz isleniyor: {caption}"
+                    info_text += f"İsteğiniz işleniyor: {caption}"
                 else:
-                    info_text += "Gorseli metin olarak anlatmak isterseniz yazabilirsiniz."
-                
+                    info_text += "Görseli metin olarak anlatmak isterseniz yazabilirsiniz."
+
                 await status_msg.edit_text(info_text)
             else:
                 # Metin bulundu - devam et
-                await status_msg.edit_text("✅ Gorseldeki metinler OCR ile okundu, analiz ediliyor...")
-            
+                await status_msg.edit_text("✅ Görseldeki metinler OCR ile okundu, analiz ediliyor...")
+
         except Exception as e:
-            await status_msg.edit_text(f"⚠️ Gorsel islenirken sorun: {e}")
+            await status_msg.edit_text(f"⚠️ Görsel işlenirken sorun: {e}")
             # Yine de devam et - bos mesaj kontrolu yapilacak
             if caption:
-                user_message = f"[Kullanici bir gorsel gonderdi. Aciklama: {caption}]"
+                user_message = f"[Kullanıcı bir görsel gönderdi. Açıklama: {caption}]"
             else:
-                await update.message.reply_text("❌ Gorsel islenemedi. Lutfen metin olarak yazin.")
+                await update.message.reply_text("❌ Görsel işlenemedi. Lütfen metin olarak yazın.")
                 return
     
     # 3. DOKUMAN (Resim dosyasi olarak gonderilmis olabilir)
@@ -1087,7 +1107,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Resim dosyasi mi kontrol et
         mime_type = update.message.document.mime_type or ""
         if mime_type.startswith("image/"):
-            status_msg = await update.message.reply_text("📸 Gorsel (dokuman olarak gonderildi) algilandi, icerik okunuyor...")
+            status_msg = await update.message.reply_text("📸 Görsel (doküman olarak gönderildi) algılandı, içerik okunuyor...")
             
             try:
                 file = await context.bot.get_file(update.message.document.file_id)
@@ -1096,16 +1116,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 caption = update.message.caption or ""
                 user_message = await _process_image_with_ocr(bytes(image_bytes), caption)
                 
-                await status_msg.edit_text("✅ Gorsel icerigi okundu, analiz ediliyor...")
+                await status_msg.edit_text("✅ Görsel içeriği okundu, analiz ediliyor...")
             except Exception as e:
-                await status_msg.edit_text(f"⚠️ Gorsel islenirken sorun: {e}")
+                await status_msg.edit_text(f"⚠️ Görsel işlenirken sorun: {e}")
                 if caption:
-                    user_message = f"[Kullanici bir gorsel gonderdi. Aciklama: {caption}]"
+                    user_message = f"[Kullanıcı bir görsel gönderdi. Açıklama: {caption}]"
                 else:
-                    await update.message.reply_text("❌ Gorsel analiz edilemedi.")
+                    await update.message.reply_text("❌ Görsel analiz edilemedi.")
                     return
         else:
-            await update.message.reply_text("📎 Bu dokuman turunu henuz isleyemiyorum. Lutfen metin olarak yazin veya gorsel olarak gonderin.")
+            await update.message.reply_text("📎 Bu doküman türünü henüz işleyemiyorum. Lütfen metin olarak yazın veya görsel olarak gönderin.")
             return
     
     else:
@@ -1114,7 +1134,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     # Bos mesaj kontrolu
     if not user_message or not user_message.strip():
-        await update.message.reply_text("⚠️ Mesaj icerigi bos. Lutfen metin yazin veya gorsel gonderin.")
+        await update.message.reply_text("⚠️ Mesaj içeriği boş. Lütfen metin yazın veya görsel gönderin.")
         return
     
     # 4. HIZLI ARASTIRMA (Agent oncesi)
@@ -1151,14 +1171,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if update.message.text and not update.message.photo and not update.message.document:
         try:
             thinking_msg = await update.message.reply_text(
-                "⏳ Düşünüyorum... İsteğin işleniyor. Uzun isteklerde birkaç dakika sürebilir."
+                "⏳ Düşünüyorum... İsteğin işleniyor."
             )
 
             async def _thinking_heartbeat() -> None:
                 pulses = [
                     "⏳ Düşünüyorum... İsteğin işleniyor.",
-                    "⏳ Hâlâ çalışıyorum... model yanıtını hazırlıyor.",
-                    "⏳ İşlem sürüyor. Tamamlanınca sonucu paylaşacağım.",
+                    "⏳ Hâlâ çalışıyorum... yanıt hazırlanıyor.",
+                    "⏳ İşlem sürüyor, tamamlanınca sonucu paylaşacağım.",
                 ]
                 idx = 0
                 while True:
@@ -1196,19 +1216,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 signature, hint_text = notebook_msg
                 should_show_hint = _TIMEOUT_NOTEBOOK_HINT_CACHE.get(session_id) != signature
                 _TIMEOUT_NOTEBOOK_HINT_CACHE[session_id] = signature
-                timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
-                timeout_msg += "Sistem o an yogun olabilir. Ayni komutu tekrar deneyin."
+                timeout_msg = "⏳ **İşlem zaman aşımına uğradı.**\n\n"
+                timeout_msg += "Sistem o an yoğun olabilir. Aynı komutu tekrar deneyin."
                 if should_show_hint:
                     timeout_msg += hint_text
             else:
                 # Notebook yok - kaydedilemedi
-                timeout_msg = "⏳ **Islem zaman asimina ugradi.**\n\n"
-                timeout_msg += "Maalesef islem cok uzun surdu ve tamamlanamadi.\n"
-                timeout_msg += "Lutfen komutu tekrar deneyin veya daha kisa adimlara bolun."
+                timeout_msg = "⏳ **İşlem zaman aşımına uğradı.**\n\n"
+                timeout_msg += "Maalesef işlem çok uzun sürdü ve tamamlanamadı.\n"
+                timeout_msg += "Lütfen tekrar deneyin veya daha kısa adımlara bölün."
             
             reply = timeout_msg
         elif "ConnectError" in exc_type or "ConnectionRefused" in exc_type:
-            reply = "❌ Agent sunucusuna baglanilamiyor. Backend calismiyor olabilir."
+            reply = "❌ Agent sunucusuna bağlanılamıyor. Backend çalışmıyor olabilir."
         elif "RSS" in err_text or "parse" in err_text.lower() or "XML" in err_text:
             reply = f"📰 Haber kaynagi hatasi: {err_text[:200]}"
         else:

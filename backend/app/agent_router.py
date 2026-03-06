@@ -40,16 +40,15 @@ _RULES: list[tuple[str, list[str]]] = [
     (
         "research",
         [
-            # Türkçe
+            # Sadece acik internet arastirmasi niyeti belirten ifadeler
+            # "analiz et", "rapor yaz" gibi genel ifadeler buraya DAHIL DEGIL
+            # — bunlar LLM'e gidip yerel dosya/kod analizi veya rapor olusturma olabilir
             "araştır ", "/araştır", "araştırma yap",
             "haber tara", "haber ara", "son haberler",
-            "analiz et", "rapor hazırla", "rapor yaz",
-            "karşılaştır ", "compare ", "compare topics",
-            "web'de ara", "internette ara", "google",
+            "web'de ara", "internette ara",
             "makale bul", "kaynak bul",
-            "pdf rapor", "araştırma raporu",
-            "özetle ve rapor", "research ",
-            "arastir ", "detayli incele",
+            "araştırma raporu",
+            "arastir ",
         ],
     ),
     (
