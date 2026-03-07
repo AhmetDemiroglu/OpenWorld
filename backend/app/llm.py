@@ -13,11 +13,22 @@ class OllamaClient:
         self.base_url = settings.ollama_base_url.rstrip("/")
         self.tools_supported = True
 
-    async def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        *,
+        think: bool | None = None,
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": settings.ollama_model,
             "messages": messages,
             "stream": False,
+        }
+        payload["think"] = bool(settings.ollama_think if think is None else think)
+        payload["options"] = {
+            "temperature": float(getattr(settings, "ollama_temperature", 0.2)),
+            "num_predict": int(getattr(settings, "ollama_num_predict", 300)),
         }
         if self.tools_supported and tools:
             payload["tools"] = tools
@@ -38,8 +49,14 @@ class LLMClient:
     def __init__(self) -> None:
         self.impl = OllamaClient()
 
-    async def chat(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return await self.impl.chat(messages, tools)
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        *,
+        think: bool | None = None,
+    ) -> Dict[str, Any]:
+        return await self.impl.chat(messages, tools, think=think)
 
 
 def parse_tool_calls(raw_message: Dict[str, Any]) -> List[ToolCall]:

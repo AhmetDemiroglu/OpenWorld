@@ -458,6 +458,8 @@ class LauncherApp:
         self.telegram_proc: subprocess.Popen | None = None
         self._last_status_text: str = "Hazir"
         self._backend_ready_announced: bool = False
+        self._explicitly_stopped: bool = False
+        self._active_port: int = 8000
 
         self.status_var = tk.StringVar(value="Haz\u0131r")
         self.token_var = tk.StringVar()
@@ -805,14 +807,15 @@ class LauncherApp:
         self.root.after(0, _set)
 
     def _wait_for_backend_ready(self, timeout_sec: int = 45, poll_sec: float = 0.4) -> bool:
+        port = self._active_port
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
-            if self._is_port_open(8000):
+            if self._is_port_open(port):
                 return True
             if self.backend_proc and self.backend_proc.poll() is not None:
                 return False
             time.sleep(poll_sec)
-        return self._is_port_open(8000)
+        return self._is_port_open(port)
 
     def _status_needs_backend_ready_hint(self) -> bool:
         status_line = (self.status_var.get() or "").lower()
@@ -1500,6 +1503,8 @@ class LauncherApp:
         self._run_bg(_job)
 
     def start_all(self) -> None:
+        self._explicitly_stopped = False
+
         def _job() -> None:
             self.save_env()
             ok, reason = self._check_python_env_health()
@@ -1515,11 +1520,24 @@ class LauncherApp:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             runtime_env = self._build_runtime_env()
 
-            self._append_status("Backend ba\u015flat\u0131l\u0131yor...")
+            # Uygun port bul (8000-8005 arası dene)
+            chosen_port = 0
+            for try_port in range(8000, 8006):
+                if not self._is_port_open(try_port):
+                    chosen_port = try_port
+                    break
+            if chosen_port == 0:
+                self._append_status("HATA: 8000-8005 arası tüm portlar dolu!")
+                return
+            self._active_port = chosen_port
+            if chosen_port != 8000:
+                self._append_status(f"Port 8000 meşgul, {chosen_port} kullanılıyor.")
+
+            self._append_status("Backend başlatılıyor...")
             backend_out = open(LOG_DIR / "backend.out.log", "w", encoding="utf-8")
             backend_err = open(LOG_DIR / "backend.err.log", "w", encoding="utf-8")
             self.backend_proc = subprocess.Popen(
-                [str(VENV_PYTHON), "-m", "uvicorn", "app.main_v2:app", "--host", "127.0.0.1", "--port", "8000"],
+                [str(VENV_PYTHON), "-m", "uvicorn", "app.main_v2:app", "--host", "127.0.0.1", "--port", str(chosen_port)],
                 cwd=str(BACKEND_DIR),
                 env=runtime_env,
                 stdout=backend_out,
@@ -1544,7 +1562,7 @@ class LauncherApp:
             telegram_err.close()
             if self._wait_for_backend_ready(timeout_sec=120):
                 self._backend_ready_announced = True
-                self._append_status("Servisler ba\u015flat\u0131ld\u0131. UI: http://127.0.0.1:8000")
+                self._append_status(f"Servisler başlatıldı. UI: http://127.0.0.1:{chosen_port}")
             else:
                 self._backend_ready_announced = False
                 self._append_status("HATA: Backend ba\u015flat\u0131lamad\u0131!")
@@ -1575,7 +1593,7 @@ class LauncherApp:
                                 self._append_status("Backend hazirligi tamamlanmadi. Yukaridaki log satirlarini kontrol edin.")
                             elif rc is None:
                                 self._append_status(
-                                    "Backend sureci calisiyor ancak 127.0.0.1:8000 henuz acilmadi. "
+                                    f"Backend sureci calisiyor ancak 127.0.0.1:{self._active_port} henuz acilmadi. "
                                     "Birkac saniye sonra tekrar kontrol edin."
                                 )
                             else:
@@ -1594,14 +1612,23 @@ class LauncherApp:
         for proc in [self.backend_proc, self.telegram_proc]:
             if proc and proc.poll() is None:
                 proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    proc.kill()
         self._kill_existing_openworld_processes()
         self.backend_proc = None
         self.telegram_proc = None
         if not silent:
+            # Sadece kullanıcı Durdur'a bastığında flag'i set et
+            self._explicitly_stopped = True
+            self.root.title(
+                f"OpenWorld Launcher  │  Ollama: {'✅ Aktif' if self._is_port_open(11434) else '❌ Kapalı'}  │  Backend: ❌ Kapalı"
+            )
             self._append_status("Servisler durduruldu")
 
     def open_ui(self) -> None:
-        webbrowser.open("http://127.0.0.1:8000")
+        webbrowser.open(f"http://127.0.0.1:{self._active_port}")
         self._append_status("Aray\u00fcz a\u00e7\u0131ld\u0131")
 
     def _is_port_open(self, port: int) -> bool:
@@ -1610,7 +1637,9 @@ class LauncherApp:
             return s.connect_ex(("127.0.0.1", port)) == 0
 
     def _tick_status(self) -> None:
-        backend = self._is_port_open(8000)
+        port_open = self._is_port_open(self._active_port)
+        our_proc_alive = bool(self.backend_proc and self.backend_proc.poll() is None)
+        backend = port_open and our_proc_alive and not self._explicitly_stopped
         ollama = self._is_port_open(11434)
         self.root.title(
             f"OpenWorld Launcher  \u2502  Ollama: {'\u2705 Aktif' if ollama else '\u274c Kapal\u0131'}  \u2502  Backend: {'\u2705 Aktif' if backend else '\u274c Kapal\u0131'}"

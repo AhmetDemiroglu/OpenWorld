@@ -126,7 +126,7 @@ class SQLiteSessionStore:
             conn = _get_connection()
             try:
                 rows = conn.execute(
-                    "SELECT role, content, name, tool_call_id FROM sessions WHERE session_id =  ORDER BY id DESC LIMIT ?",
+                    "SELECT role, content, name, tool_call_id FROM sessions WHERE session_id = ? ORDER BY id DESC LIMIT ?",
                     (session_id, limit),
                 ).fetchall()
                 messages = []
@@ -243,7 +243,7 @@ def memory_store(
         try:
             # Benzer fact var mı kontrol et
             existing = conn.execute(
-                "SELECT id, fact, confidence FROM memory_facts WHERE fact LIKE  LIMIT 1",
+                "SELECT id, fact, confidence FROM memory_facts WHERE fact LIKE ? LIMIT 1",
                 (f"%{fact.strip()[:50]}%",),
             ).fetchone()
 

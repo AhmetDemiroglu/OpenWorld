@@ -114,9 +114,15 @@ Gorevlerin:
 
 Ekran durumlari:
 - "approval": Bir onay/izin ekrani gorunuyor (Allow, Run, Accept, Yes butonu var)
-- "completed": Ajan gorevi tamamlamis (ozet, done, tamamlandi, basariyla vb.)
+- "completed": Ajan gorevi TAMAMLAMIS. Asagidaki isaretlerden HERHANGI BIRI varsa completed:
+  * Ajan "Done", "Completed", "Finished", "Tamamladim", "Bitirdim", "Tamamlandi", "Bitti" gibi ifadeler kullanmis
+  * Ajan ozet/rapor yazarak islemi bitirmis ("Summary", "What was done", "Modified files", "Next steps")
+  * Ajan "I've completed", "All changes have been made", "Task is done", "Implementation is complete" yazmis
+  * Ajan "Is there anything else?", "Let me know if", "Hope this helps" gibi kapanIS cumlesi yazmis
+  * Ajan artik CALISIYOR DEGIL ve son mesajinda tamamlama ifadesi var
+  NOT: Ajan "thinking/generating/processing" GOSTERMIYORSA ve yukardaki ifadelerden biri varsa, KESINLIKLE "completed" de. Busy olmamasi + tamamlama ifadesi = completed.
 - "question": Ajan kullaniciya soru soruyor veya secenekler sunuyor (A mi B mi? secim yap vb.)
-- "busy": Ajan calisiyor/dusunuyor (thinking, generating, processing, loading, calisiyor vb.)
+- "busy": Ajan AKTIF OLARAK calisiyor/dusunuyor. SADECE "thinking", "generating", "processing", "loading", "analyzing" gibi CANLI gostergeler varsa busy de. Eger ajan yazmis bitirmis ve duruyorsa bu busy DEGIL.
 - "expand": Expand/Expand All butonu gorunuyor, tiklanmasi gerekiyor
 - "input_needed": Ajan kullanicidan metin girdisi bekliyor (input alani aktif)
 - "idle": Hicbir ozel durum yok, bos ekran
@@ -136,8 +142,9 @@ SADECE asagidaki JSON formatinda yanit ver, baska hicbir sey yazma:
 
 Kurallar:
 - confidence: 0.0 (emin degilim) ile 1.0 (kesinlikle) arasi
+- ONEMLI: Ajan gorevi tamamladiginda yuksek confidence ver (0.85+). "Done", "Tamamladim", "Bitti" gibi acik ifadeler varsa 0.95 ver.
 - options: sadece question durumunda, ekranda gordugun secenekleri listele
-- completion_summary: sadece completed durumunda, kisa ozet yaz
+- completion_summary: sadece completed durumunda, ajanin ne yaptiginin kisa ozetini yaz
 - target_text: tiklanmasi gereken butonun TAM metni (OCR'dan gordugun sekilde)
 - Turkce ve Ingilizce metinleri analiz edebilmelisin
 - "Run Without Debugging", "Start Debugging" gibi VS Code menu ogelerini ASLA onay butonu olarak gorme
@@ -155,7 +162,7 @@ _last_analysis: Optional[ScreenAnalysis] = None
 _last_ocr_hash: str = ""
 _last_call_ts: float = 0.0
 _MIN_CALL_INTERVAL: float = 3.0  # ayni durumdaysa en az 3sn bekle
-_CHANGE_CALL_INTERVAL: float = 1.0  # durum degistiyse 1sn yeter
+_CHANGE_CALL_INTERVAL: float = 0.5  # durum degistiyse hemen cagir
 _consecutive_same: int = 0
 
 
@@ -233,27 +240,43 @@ def _parse_llm_response(raw: str) -> ScreenAnalysis:
     if not raw:
         return analysis
 
-    # JSON bul (bazen LLM aciklama ekler)
-    json_match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
-    if not json_match:
-        # Nested JSON dene
-        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not json_match:
-        logger.warning("[ScreenAnalyzer] JSON bulunamadi: %s", raw[:200])
-        return analysis
+    data = None
 
-    try:
-        data = json.loads(json_match.group())
-    except json.JSONDecodeError:
-        # Bozuk JSON temizle ve tekrar dene
-        cleaned = json_match.group()
-        cleaned = re.sub(r",\s*}", "}", cleaned)
-        cleaned = re.sub(r",\s*]", "]", cleaned)
+    # 1) Dogrudan JSON parse dene (LLM sadece JSON dondurduyse)
+    stripped = raw.strip()
+    if stripped.startswith("{"):
         try:
-            data = json.loads(cleaned)
+            data = json.loads(stripped)
         except json.JSONDecodeError:
-            logger.warning("[ScreenAnalyzer] JSON parse hatasi: %s", raw[:200])
-            return analysis
+            pass
+
+    # 2) Greedy regex ile JSON bul (LLM aciklama eklediyse)
+    if data is None:
+        json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                cleaned = json_match.group()
+                cleaned = re.sub(r",\s*}", "}", cleaned)
+                cleaned = re.sub(r",\s*]", "]", cleaned)
+                try:
+                    data = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    pass
+
+    # 3) Non-greedy (ic ice olmayan) JSON dene
+    if data is None:
+        json_match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+
+    if data is None:
+        logger.warning("[ScreenAnalyzer] JSON parse basarisiz: %s", raw[:200])
+        return analysis
 
     # State
     state_str = str(data.get("state", "unknown")).lower().strip()
@@ -311,14 +334,14 @@ def analyze_screen(
 
             if is_similar:
                 _consecutive_same += 1
-                # Ekran degismemisse progressif backoff
-                min_interval = _MIN_CALL_INTERVAL * min(_consecutive_same, 5)
+                # Ekran degismemisse hafif backoff (max 6sn = 3*2)
+                min_interval = _MIN_CALL_INTERVAL * min(_consecutive_same, 2)
                 if elapsed < min_interval and _last_analysis is not None:
                     return _last_analysis
             else:
                 _consecutive_same = 0
                 if elapsed < _CHANGE_CALL_INTERVAL and _last_analysis is not None:
-                    return None  # cok hizli degisiyor, keyword logic devam etsin
+                    return _last_analysis  # ekran degisiyor ama henuz LLM cagrilamaz, son analizi don
 
     # LLM cagrisi (lock disinda - blocking IO)
     raw = _call_ollama_sync(ocr_text, profile=profile, timeout=timeout)

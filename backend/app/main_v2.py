@@ -209,17 +209,25 @@ async def chat(req: ChatRequest) -> ChatResponse:
     messages_total.inc(role="user", source=req.source)
     
     try:
-        # Sub-ajan routing: mesaja göre odaklanmış tool subset seç
-        _profile_name = _route_agent(req.message)
-        _profile = AGENT_PROFILES.get(_profile_name) if _profile_name else None
-        _tool_subset = _profile["tools"] if _profile else None
-        _prompt_suffix = _profile.get("system_prompt_suffix", "") if _profile else ""
-        if _profile_name:
-            logger.info(f"Agent routed to profile: {_profile_name}", extra={"session_id": session_id})
+        # Telegram sohbet modunda routing'i kapat; diger kaynaklarda mevcut routing devam etsin.
+        _profile_name = None
+        _tool_subset = None
+        _prompt_suffix = ""
+        if req.source != "telegram":
+            _profile_name = _route_agent(req.message)
+            _profile = AGENT_PROFILES.get(_profile_name) if _profile_name else None
+            _tool_subset = _profile["tools"] if _profile else None
+            _prompt_suffix = _profile.get("system_prompt_suffix", "") if _profile else ""
+            if _profile_name:
+                logger.info(f"Agent routed to profile: {_profile_name}", extra={"session_id": session_id})
 
         with timer(llm_request_duration, model=settings.ollama_model):
             reply, steps, used_tools, media_files = await agent.run(
-                session_id, req.message, tool_subset=_tool_subset, prompt_suffix=_prompt_suffix
+                session_id,
+                req.message,
+                tool_subset=_tool_subset,
+                prompt_suffix=_prompt_suffix,
+                source=req.source,
             )
         
         # Track LLM metrics (estimated)

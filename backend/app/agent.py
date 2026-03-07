@@ -60,6 +60,16 @@ class AgentService:
     _COMMAND_LINE_RE = re.compile(
         r"(?im)^\s*(?:command|tool|name)\s*[:=]\s*[\"']?([a-zA-Z0-9_.:-]+)[\"']?\s*$"
     )
+    _TELEGRAM_CHAT_MODE_NOTE = (
+        "[TELEGRAM SOHBET MODU]\n"
+        "Kullanici seninle dogal dilde sohbet ediyor.\n"
+        "- Sadece gercekten gerekiyorsa arac cagir.\n"
+        "- Siir, aciklama, ozet, sohbet, fikir ve genel yardim isteklerini dogrudan cevapla.\n"
+        "- Sadece anahtar kelime gordun diye arastirma, ekran goruntusu veya baska bir arac cagirip durma.\n"
+        "- Internet arastirmasi araclarini yalnizca kullanici acikca web, kaynak, haber veya internet arastirmasi istediginde kullan.\n"
+        "- VS Code, dosya, ekran, sistem veya otomasyon gibi gercek eylem isteklerinde uygun araci kendin sec.\n"
+        "- Hafiza baglami verilirse onu dikkate al ve kullanici tercihleriyle tutarli davran."
+    )
 
     def __init__(self, store: SessionStore) -> None:
         self.store = store
@@ -77,6 +87,7 @@ class AgentService:
         user_message: str,
         tool_subset: Optional[List[str]] = None,
         prompt_suffix: str = "",
+        source: str = "web",
     ) -> Tuple[str, int, List[str], List[str]]:
         current_task = asyncio.current_task()
         emergency = await self._try_handle_emergency_stop(session_id, user_message, current_task)
@@ -120,10 +131,18 @@ class AgentService:
             async with self._session_locks_guard:
                 if current_task is not None:
                     self._session_running_tasks[session_id] = current_task
-            return await asyncio.wait_for(
-                self._run_locked(session_id, user_message, tool_subset=tool_subset, prompt_suffix=prompt_suffix),
+            result = await asyncio.wait_for(
+                self._run_locked(
+                    session_id,
+                    user_message,
+                    tool_subset=tool_subset,
+                    prompt_suffix=prompt_suffix,
+                    source=source,
+                ),
                 timeout=self._request_timeout_seconds(user_message),
             )
+            self._persist_recallable_memory(source, user_message, result[0], result[2])
+            return result
         except asyncio.TimeoutError:
             return self._build_timeout_reply(session_id, user_message), 1, [], []
         except asyncio.CancelledError:
@@ -337,21 +356,12 @@ class AgentService:
         user_message: str,
         tool_subset: Optional[List[str]] = None,
         prompt_suffix: str = "",
+        source: str = "web",
     ) -> Tuple[str, int, List[str], List[str]]:
         messages = self.store.load(session_id)
         if not messages:
             messages.append(ChatMessage(role="system", content=build_system_prompt(suffix=prompt_suffix)))
-            # Inject long-term memory context on session initialization
-            try:
-                from .vector_memory import memory_get_context
-                mems = memory_get_context(limit=10)
-                if mems:
-                    mem_blocks = "\n".join(f"- {m}" for m in mems)
-                    mem_sys_msg = f"=== UZUN SURELI HAFIZAN ===\nAsagidaki bilgiler onceki konusmalarindan ogrendiklerin:\n{mem_blocks}\n=========================="
-                    messages.append(ChatMessage(role="system", content=mem_sys_msg))
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Failed to load memory context: {e}")
+        chat_mode = self._is_telegram_chat_mode(source)
 
         if contains_forbidden_financial_intent(user_message):
             refusal = (
@@ -380,65 +390,75 @@ class AgentService:
             self.store.save(session_id, messages)
             return completion_reply, 1, completion_tools, []
 
-        if self._is_no_action_check_request(user_message):
-            reply = (
-                "Kontrol modu acik: otomasyon araci calistirmadim.\n"
-                "Sadece durum kontrolu yapildi; timeout loop'u tetiklenmedi.\n"
-                "Gercek test icin eylem komutunu ayri gonderin (ornek: \"OpenWorld klasorunu VS Code ile ac\")."
-            )
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=reply))
-            self.store.save(session_id, messages)
-            return reply, 1, [], []
+        telegram_explicit_action = chat_mode and self._is_explicit_action_request(user_message)
+        if chat_mode and not telegram_explicit_action:
+            smalltalk_reply = self._build_smalltalk_reply(user_message)
+            if smalltalk_reply:
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=smalltalk_reply))
+                self.store.save(session_id, messages)
+                return smalltalk_reply, 1, [], []
 
-        if self._is_incomplete_task_query(user_message):
-            list_reply, list_tools = self._build_incomplete_task_reply()
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=list_reply))
-            self.store.save(session_id, messages)
-            return list_reply, 1, list_tools, []
+        if not chat_mode or telegram_explicit_action:
+            if self._is_no_action_check_request(user_message):
+                reply = (
+                    "Kontrol modu acik: otomasyon araci calistirmadim.\n"
+                    "Sadece durum kontrolu yapildi; timeout loop'u tetiklenmedi.\n"
+                    "Gercek test icin eylem komutunu ayri gonderin (ornek: \"OpenWorld klasorunu VS Code ile ac\")."
+                )
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=reply))
+                self.store.save(session_id, messages)
+                return reply, 1, [], []
 
-        if self._is_mail_provider_preference_query(user_message):
-            pref_reply, pref_tools = self._build_mail_provider_preference_reply(user_message)
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=pref_reply))
-            self.store.save(session_id, messages)
-            return pref_reply, 1, pref_tools, []
+            if self._is_incomplete_task_query(user_message):
+                list_reply, list_tools = self._build_incomplete_task_reply()
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=list_reply))
+                self.store.save(session_id, messages)
+                return list_reply, 1, list_tools, []
 
-        if self._is_email_overview_query(user_message):
-            mail_reply, mail_tools = self._build_email_overview_reply(user_message)
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=mail_reply))
-            self.store.save(session_id, messages)
-            return mail_reply, 1, mail_tools, []
+            if self._is_mail_provider_preference_query(user_message):
+                pref_reply, pref_tools = self._build_mail_provider_preference_reply(user_message)
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=pref_reply))
+                self.store.save(session_id, messages)
+                return pref_reply, 1, pref_tools, []
 
-        if self._is_email_specific_query(user_message):
-            mail_reply, mail_tools = self._build_email_specific_reply(user_message)
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=mail_reply))
-            self.store.save(session_id, messages)
-            return mail_reply, 1, mail_tools, []
+            if self._is_email_overview_query(user_message):
+                mail_reply, mail_tools = self._build_email_overview_reply(user_message)
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=mail_reply))
+                self.store.save(session_id, messages)
+                return mail_reply, 1, mail_tools, []
 
-        vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(session_id, user_message)
-        if vscode_chat_reply:
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=vscode_chat_reply))
-            self.store.save(session_id, messages)
-            return vscode_chat_reply, 1, vscode_chat_tools, []
+            if self._is_email_specific_query(user_message):
+                mail_reply, mail_tools = self._build_email_specific_reply(user_message)
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=mail_reply))
+                self.store.save(session_id, messages)
+                return mail_reply, 1, mail_tools, []
 
-        ide_approval_reply, ide_approval_tools = self._try_fast_ide_approval_unblock(user_message)
-        if ide_approval_reply:
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=ide_approval_reply))
-            self.store.save(session_id, messages)
-            return ide_approval_reply, 1, ide_approval_tools, []
+            vscode_chat_reply, vscode_chat_tools = self._try_fast_vscode_agent_chat_write(session_id, user_message)
+            if vscode_chat_reply:
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=vscode_chat_reply))
+                self.store.save(session_id, messages)
+                return vscode_chat_reply, 1, vscode_chat_tools, []
 
-        approval_watcher_reply, approval_watcher_tools = self._try_fast_approval_watcher_control(user_message)
-        if approval_watcher_reply:
-            messages.append(ChatMessage(role="user", content=user_message))
-            messages.append(ChatMessage(role="assistant", content=approval_watcher_reply))
-            self.store.save(session_id, messages)
-            return approval_watcher_reply, 1, approval_watcher_tools, []
+            ide_approval_reply, ide_approval_tools = self._try_fast_ide_approval_unblock(user_message)
+            if ide_approval_reply:
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=ide_approval_reply))
+                self.store.save(session_id, messages)
+                return ide_approval_reply, 1, ide_approval_tools, []
+
+            approval_watcher_reply, approval_watcher_tools = self._try_fast_approval_watcher_control(user_message)
+            if approval_watcher_reply:
+                messages.append(ChatMessage(role="user", content=user_message))
+                messages.append(ChatMessage(role="assistant", content=approval_watcher_reply))
+                self.store.save(session_id, messages)
+                return approval_watcher_reply, 1, approval_watcher_tools, []
 
         # NOTEBOOK DEVAM ETME KONTROLU
         notebook_resume = self._check_notebook_resume(user_message)
@@ -584,6 +604,8 @@ class AgentService:
         # yoksa semantic router tüm 100+ araç içinden filtreler.
         if tool_subset:
             relevant_tools = get_tools_by_names(tool_subset)
+        elif chat_mode:
+            relevant_tools = self._get_telegram_tools(user_message)
         else:
             relevant_tools = get_relevant_tools(user_message)
         allowed_tool_names = self._extract_allowed_tool_names(relevant_tools)
@@ -597,11 +619,12 @@ class AgentService:
         last_step_results: List[Tuple[str, Dict[str, Any]]] = []
         call_counts: Dict[str, int] = {}
         cached_results: Dict[str, Dict[str, Any]] = {}
+        runtime_memory_note = self._build_memory_context_note(user_message)
 
         # === HIZLI MOD: Dusunme gerektirmeyen basit araclar ===
         # Screenshot, webcam, ses kaydi vb. icin direkt calistir, LLM'e sorma
         fast_fallback = self._fallback_tool_call_from_user_message(user_message)
-        if fast_fallback and self._is_fast_tool(fast_fallback.name):
+        if fast_fallback and self._is_fast_tool(fast_fallback.name) and (not chat_mode or telegram_explicit_action):
             if not self._is_negative_tool_mention(user_message, fast_fallback.name):
                 import logging
                 logger = logging.getLogger(__name__)
@@ -657,8 +680,19 @@ class AgentService:
 
         while steps < settings.ollama_max_steps:
             steps += 1
-            payload_messages = [m.model_dump(exclude_none=True) for m in messages]
-            raw = await self.llm.chat(payload_messages, relevant_tools)
+            payload_messages = self._build_payload_messages(messages, source, memory_note=runtime_memory_note)
+            raw = await self._chat_with_reasoning(
+                payload_messages,
+                relevant_tools,
+                think=self._should_enable_reasoning(
+                    user_message=user_message,
+                    source=source,
+                    chat_mode=chat_mode,
+                    telegram_explicit_action=telegram_explicit_action,
+                    notebook_resume=notebook_resume,
+                    used_tools=used_tools,
+                ),
+            )
             raw_message: Dict[str, Any] = raw.get("message", {})
             assistant_text = raw_message.get("content", "") or ""
 
@@ -667,19 +701,19 @@ class AgentService:
             fallback_from_user_intent = False
 
             if not tool_calls:
-                parsed_text_tools = self._parse_text_tool_calls(assistant_text)
+                parsed_text_tools = self._parse_text_tool_calls(assistant_text, strict=chat_mode)
                 if parsed_text_tools:
                     tool_calls = parsed_text_tools
                     tool_calls_from_text = True
 
-            if not tool_calls and not used_tools and self._looks_like_unavailable_claim(assistant_text):
+            if not chat_mode and not tool_calls and not used_tools and self._looks_like_unavailable_claim(assistant_text):
                 fallback_call = self._fallback_tool_call_from_user_message(user_message)
                 if fallback_call is not None and fallback_call.name in allowed_tool_names:
                     tool_calls = [fallback_call]
                     tool_calls_from_text = True
                     fallback_from_user_intent = True
 
-            if not tool_calls and not used_tools and self._should_force_tool_execution(user_message):
+            if not chat_mode and not tool_calls and not used_tools and self._should_force_tool_execution(user_message):
                 fallback_call = self._fallback_tool_call_from_user_message(user_message)
                 if fallback_call is not None and fallback_call.name in allowed_tool_names:
                     tool_calls = [fallback_call]
@@ -688,6 +722,8 @@ class AgentService:
 
             preferred_call = self._fallback_tool_call_from_user_message(user_message)
             if (
+                not chat_mode
+                and
                 steps == 1
                 and preferred_call is not None
                 and preferred_call.name == "research_async"
@@ -900,7 +936,7 @@ class AgentService:
                 if abs_path not in media_files:
                     media_files.append(abs_path)
 
-    def _parse_text_tool_calls(self, content: str) -> List[ParsedTextToolCall]:
+    def _parse_text_tool_calls(self, content: str, strict: bool = False) -> List[ParsedTextToolCall]:
         text = (content or "").strip()
         if not text:
             return []
@@ -920,6 +956,14 @@ class AgentService:
         for raw_json in self._TOOL_CALL_RE.findall(text):
             add_result(self._try_parse_single_call(raw_json))
 
+        if strict:
+            fenced = re.fullmatch(r"```json\s*(\{[\s\S]*\})\s*```", text, flags=re.IGNORECASE)
+            if fenced:
+                add_result(self._try_parse_single_call(fenced.group(1)))
+            elif text.startswith("{") and text.endswith("}"):
+                add_result(self._try_parse_single_call(text))
+            return results
+
         for obj in self._extract_json_objects(text):
             add_result(self._try_parse_single_call(obj))
 
@@ -937,6 +981,338 @@ class AgentService:
             )
 
         return results
+
+    @staticmethod
+    def _is_telegram_chat_mode(source: str) -> bool:
+        return (source or "").strip().lower() == "telegram"
+
+    def _build_payload_messages(
+        self,
+        messages: List[ChatMessage],
+        source: str,
+        memory_note: str = "",
+    ) -> List[Dict[str, Any]]:
+        payload_messages = [m.model_dump(exclude_none=True) for m in messages]
+
+        runtime_notes: List[str] = []
+        if self._is_telegram_chat_mode(source):
+            runtime_notes.append(self._TELEGRAM_CHAT_MODE_NOTE)
+
+        if memory_note:
+            runtime_notes.append(memory_note)
+
+        for note in runtime_notes:
+            payload_messages.append({"role": "system", "content": note})
+        return payload_messages
+
+    def _get_telegram_tools(self, user_message: str) -> List[Dict[str, Any]]:
+        if self._is_plain_conversation_request(user_message):
+            return get_tools_by_names(["memory_store", "memory_recall"])
+
+        if self._is_explicit_action_request(user_message):
+            selected_names: List[str] = []
+            for name in (
+                "memory_store",
+                "memory_recall",
+                "vscode_command",
+                "open_in_vscode",
+                "start_approval_watcher",
+                "stop_approval_watcher",
+                "approval_watcher_status",
+                "wait_and_accept_approval",
+                "execute_command",
+                "read_file",
+                "write_file",
+            ):
+                if name in self._known_tool_names and name not in selected_names:
+                    selected_names.append(name)
+            return get_tools_by_names(selected_names)
+
+        relevant = get_relevant_tools(user_message)
+        selected_names = list(self._extract_allowed_tool_names(relevant))
+
+        # Telegram'da eylem istekleri icin temel otomasyon araclarini her zaman elde tut.
+        must_keep = [
+            "memory_store",
+            "memory_recall",
+            "vscode_command",
+            "open_in_vscode",
+            "start_approval_watcher",
+            "stop_approval_watcher",
+            "approval_watcher_status",
+            "wait_and_accept_approval",
+        ]
+        for name in must_keep:
+            if name in self._known_tool_names and name not in selected_names:
+                selected_names.append(name)
+
+        return get_tools_by_names(selected_names)
+
+    def _build_memory_context_note(self, user_message: str) -> str:
+        facts: List[str] = []
+        seen: set[str] = set()
+
+        def _add_fact(value: Any) -> None:
+            text = str(value or "").strip()
+            if not text:
+                return
+            normalized = self._normalize_text_for_match(text)
+            if not normalized or normalized in seen:
+                return
+            seen.add(normalized)
+            facts.append(self._truncate_text(text, 220))
+
+        try:
+            from .database import memory_get_context, memory_recall
+
+            recall_result = memory_recall(query=user_message, limit=6)
+            if isinstance(recall_result, dict):
+                for item in recall_result.get("facts", []) or []:
+                    if isinstance(item, dict):
+                        _add_fact(item.get("fact", ""))
+
+            if not facts or self._looks_like_memory_lookup_request(user_message):
+                for item in memory_get_context(limit=6):
+                    _add_fact(item)
+        except Exception:
+            return ""
+
+        if not facts:
+            return ""
+
+        lines = [
+            "[UZUN SURELI HAFIZA BAGLAMI]",
+            "Asagidaki bilgiler onceki konusmalardan gelen kullanici hafizasidir:",
+        ]
+        for fact in facts[:6]:
+            lines.append(f"- {fact}")
+        lines.append("Kullanici yeni bilgi verirse yeni bilgiye oncelik ver.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _looks_like_memory_lookup_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        markers = (
+            "hatirla",
+            "unutma",
+            "hafiza",
+            "tercihim",
+            "tercihlerim",
+            "daha once",
+            "beni nasil",
+            "bana nasil",
+            "benim hakkimda",
+        )
+        return any(marker in normalized for marker in markers)
+
+    @staticmethod
+    def _is_plain_conversation_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        if not normalized.strip():
+            return True
+
+        conversation_markers = (
+            "siir", "sohbet", "selam", "merhaba", "nasilsin", "ne haber",
+            "fikrin ne", "sence", "anlat", "acikla", "ozetle", "yardimci olur musun",
+            "benim adim", "bana bundan sonra", "hitap et", "hatirla",
+        )
+        if any(marker in normalized for marker in conversation_markers):
+            return True
+
+        action_markers = (
+            "ac", "open", "baslat", "calistir", "tikla", "gonder", "goster",
+            "ara", "arastir", "bul", "kontrol et", "kaydet", "olustur", "acikla ve kaydet",
+            "vs code", "vscode", "codex", "claude code", "kimicode",
+            "ekran", "screenshot", "kamera", "webcam", "mail", "gmail", "outlook",
+            "izleyici", "onay", "watcher", "dosya", "klasor", "folder", "pdf", "docx",
+        )
+        if any(marker in normalized for marker in action_markers):
+            return False
+        return len(normalized.split()) <= 12
+
+    @staticmethod
+    def _is_explicit_action_request(user_message: str) -> bool:
+        normalized = AgentService._normalize_text_for_match(user_message)
+        action_markers = (
+            "vs code", "vscode", "openworld klasorunu", "klasorunu ac", "open folder",
+            "onay izleyici", "approval watcher", "izleyiciyi ac", "izlemeyi ac",
+            "ekran goruntusu", "screenshot", "kamera", "webcam", "mail kontrol", "gmail",
+            "outlook", "tikla", "yaz ve", "tusuna bas", "dosya olustur", "pdf olustur",
+        )
+        return any(marker in normalized for marker in action_markers)
+
+    @staticmethod
+    def _build_smalltalk_reply(user_message: str) -> str:
+        normalized = AgentService._normalize_text_for_match(user_message).strip()
+        if not normalized:
+            return ""
+        words = [word for word in normalized.split() if word]
+        if len(words) > 8:
+            return ""
+
+        greeting_tokens = {
+            "selam", "merhaba", "slm", "selamlar", "gunaydin", "iyi aksamlar", "iyi geceler",
+        }
+        thanks_tokens = {"tesekkurler", "tesekkur ederim", "sag ol", "saol", "eyvallah"}
+        doing_patterns = (
+            "napiyorsun",
+            "ne yapiyorsun",
+            "neler yapiyorsun",
+            "su an ne yapiyorsun",
+            "simdi ne yapiyorsun",
+            "sen ne yapiyorsun",
+            "bugun ne yapiyorsun",
+            "ne yapiyorsun su an",
+        )
+        status_patterns = (
+            "nasilsin",
+            "nasil gidiyor",
+            "naber",
+            "ne haber",
+            "iyi misin",
+            "keyfin nasil",
+        )
+        mutual_status_patterns = (
+            "iyiyim sen nasilsin",
+            "ben iyiyim sen",
+            "iyiyim sen",
+        )
+
+        if normalized in greeting_tokens:
+            return "Selam. Nasıl yardımcı olabilirim?"
+        if normalized in thanks_tokens:
+            return "Rica ederim."
+        if normalized in {"iyiyim", "ben de iyiyim", "iyi"}:
+            return "Güzel. Ne yapmamı istiyorsun?"
+        if any(pattern in normalized for pattern in mutual_status_patterns):
+            return "Ben de iyiyim. Ne yapmamı istiyorsun?"
+        if any(pattern in normalized for pattern in status_patterns):
+            return "İyiyim. Ne yapmamı istiyorsun?"
+        if any(pattern in normalized for pattern in doing_patterns):
+            return "Buradayım ve hazırım. Ne yapmamı istiyorsun?"
+        return ""
+
+    def _should_enable_reasoning(
+        self,
+        user_message: str,
+        source: str,
+        chat_mode: bool,
+        telegram_explicit_action: bool,
+        notebook_resume: Optional[Tuple[str, Dict[str, Any]]],
+        used_tools: List[str],
+    ) -> bool:
+        normalized = self._normalize_text_for_match(user_message)
+        if not normalized:
+            return False
+
+        if "dusun" in normalized or "düşün" in user_message.lower():
+            return True
+
+        research_tools = {"research_async", "research_and_report", "research_note"}
+        if any(tool_name in research_tools for tool_name in used_tools):
+            return True
+
+        return False
+
+    async def _chat_with_reasoning(
+        self,
+        payload_messages: List[Dict[str, Any]],
+        relevant_tools: List[Dict[str, Any]],
+        *,
+        think: bool,
+    ) -> Dict[str, Any]:
+        try:
+            return await self.llm.chat(payload_messages, relevant_tools, think=think)
+        except TypeError as exc:
+            if "unexpected keyword argument 'think'" not in str(exc):
+                raise
+            return await self.llm.chat(payload_messages, relevant_tools)
+
+    def _persist_recallable_memory(
+        self,
+        source: str,
+        user_message: str,
+        assistant_reply: str,
+        used_tools: List[str],
+    ) -> None:
+        if "memory_store" in used_tools:
+            return
+
+        candidate = self._extract_memory_candidate(user_message, assistant_reply, source)
+        if not candidate:
+            return
+
+        try:
+            from .database import memory_store
+
+            memory_store(
+                fact=candidate["fact"],
+                source=candidate["source"],
+                category=candidate["category"],
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Automatic memory persist failed", exc_info=True)
+
+    def _extract_memory_candidate(
+        self,
+        user_message: str,
+        assistant_reply: str,
+        source: str,
+    ) -> Optional[Dict[str, str]]:
+        raw = " ".join((user_message or "").strip().split())
+        if len(raw) < 8 or len(raw) > 320:
+            return None
+
+        normalized = self._normalize_text_for_match(raw)
+        explicit_markers = (
+            "hatirla",
+            "unutma",
+            "aklinda tut",
+            "hafizana yaz",
+            "hafizada tut",
+            "bundan sonra",
+        )
+        preference_markers = (
+            "tercihim",
+            "tercihlerim",
+            "seviyorum",
+            "sevmiyorum",
+            "severim",
+            "sevmem",
+            "kullanirim",
+            "kullanmam",
+            "hitap et",
+            "diye seslen",
+            "cagir",
+        )
+        personal_markers = (
+            "benim adim",
+            "adim ",
+            "meslegim",
+            "yasiyorum",
+            "yasadigim",
+            "dogum gunum",
+            "dogdugum",
+        )
+
+        is_explicit = any(marker in normalized for marker in explicit_markers)
+        is_preference = any(marker in normalized for marker in preference_markers)
+        is_personal = any(marker in normalized for marker in personal_markers)
+
+        if not (is_explicit or is_preference or is_personal):
+            if not re.search(r"\bbana\b.{0,80}\b(hitap et|de|diye seslen|cagir)\b", normalized):
+                return None
+            is_preference = True
+
+        if "hatirlam" in self._normalize_text_for_match(assistant_reply):
+            is_explicit = True
+
+        category = "preference" if is_preference else "person" if is_personal else "general"
+        return {
+            "fact": raw,
+            "category": category,
+            "source": f"{(source or 'web').strip().lower() or 'web'}_auto_memory",
+        }
 
     def _try_parse_single_call(self, raw_data: Any) -> Optional[ParsedTextToolCall]:
         data: Any = raw_data

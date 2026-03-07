@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     ollama_max_steps: int = 25
     ollama_request_timeout_sec: float = 600.0
     ollama_connect_timeout_sec: float = 20.0
+    ollama_think: bool = False
+    ollama_temperature: float = 0.2
+    ollama_num_predict: int = 300
     tesseract_cmd: str = ""
 
     workspace_root: str = "../data"

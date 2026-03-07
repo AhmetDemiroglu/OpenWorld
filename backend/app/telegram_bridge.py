@@ -169,6 +169,85 @@ def _normalize_tr(text: str) -> str:
     return (text or "").lower().translate(tr_map)
 
 
+def _build_fast_chat_reply(text: str) -> str:
+    normalized = _normalize_tr(text).strip()
+    if not normalized:
+        return ""
+
+    words = [word for word in normalized.split() if word]
+    if len(words) > 8:
+        return ""
+
+    greeting_tokens = {
+        "selam", "merhaba", "slm", "selamlar", "gunaydin", "iyi aksamlar", "iyi geceler",
+    }
+    thanks_tokens = {"tesekkurler", "tesekkur ederim", "sag ol", "saol", "eyvallah"}
+    doing_patterns = (
+        "napiyorsun",
+        "ne yapiyorsun",
+        "neler yapiyorsun",
+        "su an ne yapiyorsun",
+        "simdi ne yapiyorsun",
+        "sen ne yapiyorsun",
+        "bugun ne yapiyorsun",
+        "ne yapiyorsun su an",
+    )
+    status_patterns = (
+        "nasilsin",
+        "nasil gidiyor",
+        "naber",
+        "ne haber",
+        "iyi misin",
+        "keyfin nasil",
+    )
+    mutual_status_patterns = (
+        "iyiyim sen nasilsin",
+        "ben iyiyim sen",
+        "iyiyim sen",
+    )
+
+    if normalized in greeting_tokens:
+        return "Selam. Nasıl yardımcı olabilirim?"
+    if normalized in thanks_tokens:
+        return "Rica ederim."
+    if normalized in {"iyiyim", "ben de iyiyim", "iyi"}:
+        return "Güzel. Ne yapmamı istiyorsun?"
+    if any(pattern in normalized for pattern in mutual_status_patterns):
+        return "Ben de iyiyim. Ne yapmamı istiyorsun?"
+    if any(pattern in normalized for pattern in status_patterns):
+        return "İyiyim. Ne yapmamı istiyorsun?"
+    if any(pattern in normalized for pattern in doing_patterns):
+        return "Buradayım ve hazırım. Ne yapmamı istiyorsun?"
+    return ""
+
+
+def _should_show_thinking_indicator(text: str, has_media: bool = False) -> bool:
+    if has_media:
+        return True
+    normalized = _normalize_tr(text).strip()
+    if not normalized:
+        return False
+    long_task_markers = (
+        "arastir",
+        "araştır",
+        "detayli",
+        "detaylı",
+        "kapsamli",
+        "kapsamlı",
+        "analiz",
+        "rapor",
+        "incele",
+        "devam et",
+        "not defteri",
+        "gorsel",
+        "görsel",
+        "ocr",
+        "ekran goruntusu",
+        "ekran görüntüsü",
+    )
+    return any(marker in normalized for marker in long_task_markers)
+
+
 def _get_timeout_for_request(text: str) -> httpx.Timeout:
     """İstek turune gore timeout belirle."""
     text_lower = _normalize_tr(text)
@@ -1136,50 +1215,34 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not user_message or not user_message.strip():
         await update.message.reply_text("⚠️ Mesaj içeriği boş. Lütfen metin yazın veya görsel gönderin.")
         return
-    
-    # 4. HIZLI ARASTIRMA (Agent oncesi)
-    if user_message and not update.message.photo and not update.message.document:
-        fast_research_topic = _try_fast_research(user_message)
-        if fast_research_topic:
-            await update.message.reply_text("📚 Bu kapsamlı bir araştırma isteği. Arka planda başlatıyorum...")
-            try:
-                from .tools.registry import execute_tool
-                result = execute_tool("research_async", {"topic": fast_research_topic})
-                if result.get("success"):
-                    await update.message.reply_text(
-                        f"✅ <b>Araştırma başladı!</b>\n"
-                        f"Not defteri: <code>{result.get('notebook', '')}</code>\n"
-                        "Bitince Telegram'a özet ve PDF rapor göndereceğim. "
-                        "Süre, konuya ve kaynak yoğunluğuna göre değişebilir.",
-                        parse_mode="HTML"
-                    )
-                else:
-                    await update.message.reply_text(f"❌ Araştırma başlatılamadı: {result.get('error', '...')}")
-            except Exception as exc:
-                await update.message.reply_text(f"❌ Araştırma hatası: {exc}")
-            return
 
-        fast_mail_reply = _build_fast_mail_query_reply(user_message)
-        if fast_mail_reply:
-            await update.message.reply_text(fast_mail_reply[:4000])
-            _audit(user_id, user_message[:100], status="ok")
-            return
+    fast_chat_reply = _build_fast_chat_reply(user_message)
+    if fast_chat_reply and update.message.text and not update.message.photo and not update.message.document:
+        await update.message.reply_text(fast_chat_reply)
+        _audit(user_id, user_message[:100], status="ok")
+        return
+    
+    # 4. SOHBET MODU
+    # Telegram'da komutsuz mesajlari dogrudan ajana gonder.
+    # Erken "smart" kisayollari burada devreye girmiyor; araci gerekirse LLM secsin.
 
     # Agent'i cagir
     thinking_msg = None
     thinking_task = None
-    if update.message.text and not update.message.photo and not update.message.document:
+    if update.message.text and _should_show_thinking_indicator(
+        user_message,
+        has_media=bool(update.message.photo or update.message.document),
+    ):
         try:
-            thinking_msg = await update.message.reply_text(
-                "⏳ Düşünüyorum... İsteğin işleniyor."
-            )
-
             async def _thinking_heartbeat() -> None:
+                nonlocal thinking_msg
                 pulses = [
                     "⏳ Düşünüyorum... İsteğin işleniyor.",
                     "⏳ Hâlâ çalışıyorum... yanıt hazırlanıyor.",
                     "⏳ İşlem sürüyor, tamamlanınca sonucu paylaşacağım.",
                 ]
+                await asyncio.sleep(3)
+                thinking_msg = await update.message.reply_text(pulses[0])
                 idx = 0
                 while True:
                     await asyncio.sleep(35)
@@ -1471,6 +1534,84 @@ async def done_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"❌ Hata: {exc}")
 
 
+# ─── BLOK 12: /komut — Uzak terminal ─────────────────────────────────────────
+
+_KOMUT_DANGEROUS_PATTERNS = re.compile(
+    r"(rm\s+-rf|del\s+/[sfq]|format\s+[a-z]:|shutdown|restart|reboot"
+    r"|mkfs|dd\s+if=|:\(\)\{|fork\s*bomb"
+    r"|taskkill.*\/im\s+(explorer|csrss|winlogon|svchost)"
+    r"|reg\s+delete|bcdedit|diskpart)",
+    re.IGNORECASE,
+)
+_KOMUT_TIMEOUT = 30
+_KOMUT_MAX_OUTPUT = 3800
+
+
+async def komut_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/komut <shell komutu> — Uzak terminal. Komutu çalıştırır, çıktıyı döndürür."""
+    if not _is_allowed(update):
+        return
+    _audit(str(update.effective_user.id), "/komut")
+    cmd = " ".join(context.args or []).strip()
+    if not cmd:
+        await update.message.reply_text(
+            "Kullanım: <code>/komut git status</code>\n"
+            "Örnek: <code>/komut netstat -ano | findstr 8000</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    # Tehlikeli komut kontrolü
+    if _KOMUT_DANGEROUS_PATTERNS.search(cmd):
+        await update.message.reply_text(
+            f"⚠️ Tehlikeli komut engellendi:\n<code>{cmd[:200]}</code>\n\n"
+            "Bu komutu çalıştırmak istiyorsan doğrudan bilgisayardan yap.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(f"⏳ Çalıştırılıyor...\n<code>{cmd[:200]}</code>", parse_mode="HTML")
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(Path.home() / "Desktop"),
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_KOMUT_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await update.message.reply_text(f"⏱️ Zaman aşımı ({_KOMUT_TIMEOUT}s). Komut sonlandırıldı.")
+            return
+
+        output = (stdout or b"").decode("utf-8", errors="replace").strip()
+        exit_code = proc.returncode
+        icon = "✅" if exit_code == 0 else "❌"
+
+        if not output:
+            await update.message.reply_text(f"{icon} Çıkış kodu: {exit_code}\n(çıktı yok)")
+            return
+
+        if len(output) <= _KOMUT_MAX_OUTPUT:
+            await update.message.reply_text(
+                f"{icon} Çıkış: {exit_code}\n<pre>{output[:_KOMUT_MAX_OUTPUT]}</pre>",
+                parse_mode="HTML",
+            )
+        else:
+            # Uzun çıktıyı dosya olarak gönder
+            buf = io.BytesIO(output.encode("utf-8"))
+            buf.name = "komut_cikti.txt"
+            await update.message.reply_document(
+                document=buf,
+                filename="komut_cikti.txt",
+                caption=f"{icon} Çıkış: {exit_code} | {len(output)} karakter",
+            )
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Hata: {exc}")
+
+
 async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/export [gün] — Todo + notları AI'ye gönderilebilir formatta aktar."""
     if not _is_allowed(update):
@@ -1533,6 +1674,8 @@ async def main() -> None:
         app.add_handler(CommandHandler("todos", todos_cmd))
         app.add_handler(CommandHandler("done", done_cmd))
         app.add_handler(CommandHandler("export", export_cmd))
+        # BLOK 12: Uzak terminal
+        app.add_handler(CommandHandler("komut", komut_cmd))
         # BLOK 10: Onay izleyici
         app.add_handler(CommandHandler("izle", izle_cmd))
         app.add_handler(CommandHandler("izleme_durdur", izleme_durdur_cmd))

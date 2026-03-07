@@ -82,7 +82,11 @@ async def tools_audit(run_probes: bool = True) -> dict:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest) -> ChatResponse:
     try:
-        reply, steps, used_tools, media_files = await agent.run(req.session_id, req.message)
+        reply, steps, used_tools, media_files = await agent.run(
+            req.session_id,
+            req.message,
+            source=req.source,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("chat endpoint failed: session_id=%s source=%s", req.session_id, getattr(req, "source", ""))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
