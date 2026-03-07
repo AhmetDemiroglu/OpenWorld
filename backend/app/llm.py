@@ -28,7 +28,8 @@ class OllamaClient:
         payload["think"] = bool(settings.ollama_think if think is None else think)
         payload["options"] = {
             "temperature": float(getattr(settings, "ollama_temperature", 0.2)),
-            "num_predict": int(getattr(settings, "ollama_num_predict", 300)),
+            "num_predict": int(getattr(settings, "ollama_num_predict", 2048)),
+            "num_ctx": int(getattr(settings, "ollama_num_ctx", 16384)),
         }
         if self.tools_supported and tools:
             payload["tools"] = tools

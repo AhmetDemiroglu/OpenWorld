@@ -3467,11 +3467,31 @@ class AgentService:
             if isinstance(result, dict):
                 active_profile = str(result.get("profile", profile)).strip() or profile
                 profile_note = f" Profil: {self._watcher_profile_label(active_profile)}."
-            return (
+            lines = [
                 "Onay izleyici açıldı. VS Code açık olduğu sürece onay pencerelerini otomatik takip edip kabul etmeye çalışacağım."
-                + profile_note,
-                [tool_name],
-            )
+                + profile_note
+            ]
+            activation = result.get("activation", {}) if isinstance(result, dict) else {}
+            status = result.get("status", {}) if isinstance(result, dict) else {}
+            if isinstance(activation, dict):
+                if activation.get("success"):
+                    title = str(activation.get("title", "")).strip()
+                    if title:
+                        lines.append(f"Odaklanan pencere: {title}")
+                else:
+                    activation_error = str(activation.get("error", "")).strip()
+                    if activation_error:
+                        lines.append(f"Pencere odağı uyarısı: {activation_error}")
+            if isinstance(status, dict):
+                lines.append(
+                    f"Durum: {status.get('watcher_state', 'watching')} | Kontrol: {status.get('checks', 0)} | Onay: {status.get('accepted', 0)}"
+                )
+                last_error = str(status.get("last_error", "")).strip()
+                if last_error:
+                    lines.append(f"Son hata: {last_error}")
+                if int(status.get("checks", 0) or 0) == 0:
+                    lines.append("Henüz tarama başlamadı. VS Code penceresini görünür tutup tekrar durum kontrolü yap.")
+            return "\n".join(lines), [tool_name]
         if action == "stop":
             return "Onay izleyici kapatıldı.", [tool_name]
 

@@ -29,6 +29,7 @@ from .secrets import decrypt_text
 _LOCK_PATH = settings.data_path / "telegram_bridge.lock"
 _LOCK_FD: int | None = None
 _TIMEOUT_NOTEBOOK_HINT_CACHE: dict[str, str] = {}
+_LATEST_REQUEST_TOKENS: dict[str, int] = {}
 
 # ─── Rate limiter (BLOK 8) ───────────────────────────────────────────────────
 _rate_window: dict[str, list] = defaultdict(list)
@@ -224,28 +225,7 @@ def _build_fast_chat_reply(text: str) -> str:
 def _should_show_thinking_indicator(text: str, has_media: bool = False) -> bool:
     if has_media:
         return True
-    normalized = _normalize_tr(text).strip()
-    if not normalized:
-        return False
-    long_task_markers = (
-        "arastir",
-        "araştır",
-        "detayli",
-        "detaylı",
-        "kapsamli",
-        "kapsamlı",
-        "analiz",
-        "rapor",
-        "incele",
-        "devam et",
-        "not defteri",
-        "gorsel",
-        "görsel",
-        "ocr",
-        "ekran goruntusu",
-        "ekran görüntüsü",
-    )
-    return any(marker in normalized for marker in long_task_markers)
+    return bool((text or "").strip())
 
 
 def _get_timeout_for_request(text: str) -> httpx.Timeout:
@@ -1130,6 +1110,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     session_id = f"telegram_{update.effective_user.id}"
+    request_token = int(time.time() * 1000)
+    previous_token = _LATEST_REQUEST_TOKENS.get(session_id, 0)
+    if request_token <= previous_token:
+        request_token = previous_token + 1
+    _LATEST_REQUEST_TOKENS[session_id] = request_token
     user_message = ""
     
     # 1. METIN MESAJI
@@ -1241,7 +1226,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     "⏳ Hâlâ çalışıyorum... yanıt hazırlanıyor.",
                     "⏳ İşlem sürüyor, tamamlanınca sonucu paylaşacağım.",
                 ]
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
                 thinking_msg = await update.message.reply_text(pulses[0])
                 idx = 0
                 while True:
@@ -1310,6 +1295,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 await thinking_msg.delete()
             except Exception:
                 pass
+
+    if _LATEST_REQUEST_TOKENS.get(session_id) != request_token:
+        _audit(user_id, user_message[:100] if user_message else "(media)", status="stale_drop")
+        return
 
     try:
         if (

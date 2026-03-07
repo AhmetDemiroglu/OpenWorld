@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     ollama_connect_timeout_sec: float = 20.0
     ollama_think: bool = False
     ollama_temperature: float = 0.2
-    ollama_num_predict: int = 300
+    ollama_num_predict: int = 2048
+    ollama_num_ctx: int = 16384
     tesseract_cmd: str = ""
 
     workspace_root: str = "../data"

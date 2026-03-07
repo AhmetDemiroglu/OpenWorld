@@ -2487,37 +2487,49 @@ def _approval_watcher_worker(
             _APPROVAL_WATCHER_STATE["llm_reasoning"] = llm.reasoning[:200]
 
         # ==================================================================
-        # 3. LLM KARARINA GORE HAREKET ET
         # ==================================================================
+        # 3. LLM KARARINA GORE HAREKET ET
+        # LLM kararsiz kalsa bile net completion sinyallerinde bildirime dus.
+        # ==================================================================
+        completion_by_ocr = _looks_like_ide_completion_text(ocr_blob) and not _looks_like_ide_busy_text(ocr_blob)
+        llm_says_completion = llm.state == ScreenState.COMPLETED and llm.confidence >= 0.6
+        should_notify_completion = llm_says_completion or (
+            completion_by_ocr
+            and llm.state not in (ScreenState.APPROVAL, ScreenState.INPUT_NEEDED, ScreenState.EXPAND, ScreenState.QUESTION)
+        )
 
         # --- COMPLETED ---
-        if llm.state == ScreenState.COMPLETED and llm.confidence >= 0.6:
+        if should_notify_completion:
             with _APPROVAL_WATCHER_LOCK:
                 already_sent = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
             if not already_sent:
-                _update_state(COMPLETED, llm.reasoning[:80])
+                reason_text = llm.reasoning[:80] if llm.reasoning else "Tamamlanma algilandi"
+                _update_state(COMPLETED, reason_text)
                 screenshot_path = _capture_completion_screenshot()
                 summary = ""
                 if llm.completion_summary:
-                    summary = f"\n<b>Özet:</b> {llm.completion_summary[:200]}"
+                    summary = f"\n<b>?zet:</b> {llm.completion_summary[:200]}"
+                elif completion_by_ocr:
+                    summary = "\n<b>?zet:</b> Ajan ekraninda tamamlanmis yanit gorunuyor."
+                body_text = llm.reasoning[:200] if llm.reasoning else "Ajan artik calismiyor; tamamlanmis yanit gorunuyor."
                 text = (
-                    f"<b>Görev tamamlandı.</b>\n"
-                    f"{llm.reasoning[:200]}{summary}\n\n"
-                    "Onay izleyiciyi durdurayım mı?"
+                    f"<b>G?rev tamamland?.</b>\n"
+                    f"{body_text}{summary}\n\n"
+                    "Onay izleyiciyi durduray?m m??"
                 )
-                buttons = [[("Evet, durdur", "watcher_stop"), ("Hayır, devam et", "watcher_continue")]]
+                buttons = [[("Evet, durdur", "watcher_stop"), ("Hay?r, devam et", "watcher_continue")]]
                 sent = _send_notification_with_buttons(text, screenshot_path, buttons)
                 with _APPROVAL_WATCHER_LOCK:
                     _APPROVAL_WATCHER_STATE["completion_detected"] = True
                     _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
                     _APPROVAL_WATCHER_STATE["last_completion_text"] = ocr_blob[:300]
-                    _APPROVAL_WATCHER_STATE["completion_reason"] = "llm"
+                    _APPROVAL_WATCHER_STATE["completion_reason"] = "llm" if llm_says_completion else "ocr"
                     if sent:
                         _APPROVAL_WATCHER_STATE["last_notification_at"] = now_label
-                        logger.info("Completion bildirimi gönderildi | profile=%s conf=%.2f", profile, llm.confidence)
+                        logger.info("Completion bildirimi gonderildi | profile=%s conf=%.2f source=%s", profile, llm.confidence, "llm" if llm_says_completion else "ocr")
                     else:
-                        _APPROVAL_WATCHER_STATE["notification_error"] = "Bildirim gönderilemedi"
-                        logger.warning("Completion bildirimi başarısız | profile=%s", profile)
+                        _APPROVAL_WATCHER_STATE["notification_error"] = "Bildirim gonderilemedi"
+                        logger.warning("Completion bildirimi basarisiz | profile=%s", profile)
                 with _APPROVAL_WATCHER_LOCK:
                     if bool(_APPROVAL_WATCHER_STATE.get("auto_stop_on_completion")):
                         stop_event.set()
@@ -2624,6 +2636,13 @@ def tool_start_approval_watcher(
         payload = _build_tesseract_error(detail=err[:260])
         return {"success": False, **payload}
 
+    activation_result: Dict[str, Any] = {}
+    if window_pattern:
+        try:
+            activation_result = tool_activate_window(window_pattern)
+        except Exception as exc:
+            activation_result = {"success": False, "error": str(exc)}
+
     with _APPROVAL_WATCHER_LOCK:
         thread = _APPROVAL_WATCHER_STATE.get("thread")
         if _APPROVAL_WATCHER_STATE.get("running") and isinstance(thread, threading.Thread) and thread.is_alive():
@@ -2632,6 +2651,7 @@ def tool_start_approval_watcher(
                 "success": True,
                 "running": True,
                 "message": "Onay izleyici zaten aktif.",
+                "activation": activation_result,
                 "status": status_snapshot,
             }
 
@@ -2670,6 +2690,10 @@ def tool_start_approval_watcher(
 
         worker.start()
 
+    time.sleep(min(max(interval, 0.6), 1.2))
+    with _APPROVAL_WATCHER_LOCK:
+        status_snapshot = _approval_watcher_status_snapshot_unlocked()
+
     return {
         "success": True,
         "running": True,
@@ -2679,6 +2703,8 @@ def tool_start_approval_watcher(
         "interval": interval,
         "notify_on_completion": notify_on_completion,
         "auto_stop_on_completion": auto_stop_on_completion,
+        "activation": activation_result,
+        "status": status_snapshot,
     }
 
 
