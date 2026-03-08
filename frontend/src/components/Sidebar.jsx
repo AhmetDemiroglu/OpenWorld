@@ -47,6 +47,11 @@ export function Sidebar({ activeTab, onTabChange, onQuickAction, sessionId, onSe
           onClick={() => onTabChange("files")}
           title="Dosyalar"
         >📂</button>
+        <button
+          className={`sidebar-tab ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => onTabChange("settings")}
+          title="Ayarlar"
+        >⚙</button>
       </div>
 
       <div className="sidebar-content">
@@ -93,6 +98,15 @@ export function Sidebar({ activeTab, onTabChange, onQuickAction, sessionId, onSe
             <h3 className="sidebar-title">Çalışma Alanı</h3>
             <p className="sidebar-empty">
               Dosya tarayıcı aktif. Chat'ten "listele" komutunu kullanın.
+            </p>
+          </div>
+        )}
+
+        {activeTab === "settings" && (
+          <div className="sidebar-panel">
+            <h3 className="sidebar-title">Ayarlar</h3>
+            <p className="sidebar-empty sidebar-settings-hint">
+              LLM saglayici ayarlari ana panelde goruntuleniyordur.
             </p>
           </div>
         )}

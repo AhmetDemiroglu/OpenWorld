@@ -8,6 +8,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-Modern%20Web%20Framework-green.svg)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-Frontend-61DAFB.svg)](https://react.dev)
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
+[![Groq](https://img.shields.io/badge/Groq-Cloud%20LLM-f55036.svg)](https://groq.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 *Yerel yapay zeka asistanınız - 4 katmanlı güvenlik ile*
@@ -142,7 +143,25 @@ node --version
 ollama --version
 ```
 
-### Adım 4: Tesseract OCR Kurulumu (Opsiyonel ama Önerilir)
+### Adım 4: Codex CLI Kurulumu (Opsiyonel)
+
+Codex CLI sağlayıcısını kullanmak istiyorsanız Node.js kurulu olmalı ve:
+
+```powershell
+npm install -g @openai/codex
+```
+
+Veya Launcher'dan: **[Codex CLI Kur]** butonu
+
+**Doğrulama:**
+
+```powershell
+codex --version
+```
+
+---
+
+### Adım 5: Tesseract OCR Kurulumu (Opsiyonel ama Önerilir)
 
 OCR (ekrandan metin okuma) için gerekli. Vision özelliği olmayan modellerde bu adım zorunludur.
 
@@ -197,16 +216,36 @@ Bu işlem şunları kurar:
 - Node.js bağımlılıkları
 - Frontend build
 
-### 8. Model İndir
+### 8. LLM Sağlayıcı Seç
 
-Terminal'de:
+OpenWorld 4 farklı LLM sağlayıcıyı destekler. Launcher > **LLM Sağlayıcı** bölümünden istediğinizi seçin:
+
+| Sağlayıcı | Tür | Gereksinim |
+|-----------|-----|------------|
+| **Ollama (Yerel)** | Yerel model | Ollama + model |
+| **Groq** | Bulut API | Groq API Key (ücretsiz tier mevcut) |
+| **Z.AI (Zhipu)** | Bulut API | Z.AI API Key |
+| **Codex CLI** | OpenAI subprocess | Node.js + `npm i -g @openai/codex` |
+
+**Ollama ile yerel model kurmak için:**
+
 ```powershell
 ollama pull qwen3.5:9b-q4_K_M
 ```
 
-Veya Launcher'dan: **[Model Çek]** butonu
+Veya Launcher'dan: **[Model Çek]** veya **[Qwen3.5]** butonu
 
-Not: Bu sürümde LLM motoru yalnızca `ollama` olarak çalışır.
+**Codex CLI kurmak için:**
+
+```powershell
+npm install -g @openai/codex
+```
+
+Veya Launcher'dan: **[Codex CLI Kur]** butonu
+
+**Bağlantı testi:** Her sağlayıcı için Launcher'da **[Bağlantı Test]** butonu mevcuttur.
+
+> Not: Groq ve Z.AI ücretsiz API key ile yüksek kaliteli büyük modeller (70B+) kullanmanızı sağlar. Codex CLI, kod odaklı görevler için uygundur; genel sohbet için Ollama, Groq veya Z.AI önerilir.
 
 ### 9. Başlat
 
@@ -962,11 +1001,15 @@ pipwin install pyaudio
 │                         │                                   │
 │     ┌───────────────────┼───────────────────┐              │
 │     ▼                   ▼                   ▼              │
-│  ┌───────┐        ┌───────────┐      ┌──────────┐        │
-│  │  LLM  │        │  Memory   │      │  Tools   │        │
-│  │Ollama │        │(SQLite +  │      │ (Domains:│        │
-│  │       │        │ ChromaDB) │      │ web, sys)│        │
-│  └───────┘        └───────────┘      └──────────┘        │
+│  ┌──────────────┐  ┌───────────┐      ┌──────────┐        │
+│  │  LLM Client  │  │  Memory   │      │  Tools   │        │
+│  │ ┌──────────┐ │  │(SQLite +  │      │ (100+    │        │
+│  │ │  Ollama  │ │  │ ChromaDB) │      │  araç)   │        │
+│  │ │  Groq    │ │  └───────────┘      └──────────┘        │
+│  │ │  Z.AI    │ │                                          │
+│  │ │Codex CLI │ │                                          │
+│  │ └──────────┘ │                                          │
+│  └──────────────┘                                          │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -978,7 +1021,7 @@ pipwin install pyaudio
 | Kısıtlama | Açıklama |
 |-----------|----------|
 | **Çok adımlı GUI otomasyonu** | "VS Code'u aç → KimiCode'a mesaj yaz" gibi zincirleme masaüstü otomasyonları modele bağlıdır. Yerel küçük modeller (Qwen 9B vb.) bu tür çok adımlı planlamada sınırlıdır; tek adımlık araç çağrıları (screenshot al, dosya oku) çok daha güvenilirdir. |
-| **LLM model kalitesi** | Araç seçimi ve parametre doğruluğu LLM modeline bağlıdır. Daha büyük modeller (70B+) karmaşık görevlerde daha başarılıdır; küçük modeller basit görevler için optimize edilmiştir. |
+| **LLM model kalitesi** | Araç seçimi ve parametre doğruluğu LLM modeline bağlıdır. Daha büyük modeller (70B+) karmaşık görevlerde daha başarılıdır. Groq veya Z.AI ücretsiz API'si ile büyük bulut modelleri kullanılabilir. |
 | **Timeout'lar** | Telegram üzerinden çok adımlı görevler 2-3 dakikayı aşabilir. Zaman aşımı durumunda `research_async` aracını kullanın — arka planda çalışır, bitince Telegram'a PDF rapor gönderir. |
 | **Gmail token yenileme** | Gmail OAuth token'ları periyodik olarak yenilenmeli. Token süresi dolarsa, yenileme otomatik yapılır ama ilk kurulumda manuel OAuth akışı gerekir. |
 | **VS Code AI Extension'lar** | KimiCode ve GitHub Copilot tam otomatik desteklenir. Claude Code için hem `claude_code_ask` (CLI, doğrudan) hem de `vscode_command` (VS Code içinden) kullanılabilir. Tüm VS Code etkileşimleri OCR tabanlı onay izleme ile desteklenir. |
@@ -1045,6 +1088,12 @@ python-docx, openpyxl
 
 # Sistem
 psutil, numpy
+
+# LLM (harici, pip gerekmez)
+# Ollama: https://ollama.com
+# Groq API: https://console.groq.com
+# Z.AI API: https://api.z.ai
+# Codex CLI: npm install -g @openai/codex
 ```
 
 ---

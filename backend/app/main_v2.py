@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +39,7 @@ from .core.metrics import (
 )
 from .core.exceptions import OpenWorldException, ToolExecutionError, LLMError
 from .scheduler import start_scheduler, stop_scheduler, bg_services
+from . import providers as _providers
 
 # Setup structured logging
 logger = setup_logging(
@@ -139,12 +141,14 @@ async def general_exception_handler(request: Request, exc: Exception):
 async def health() -> dict:
     """Health check endpoint with detailed status."""
     uptime = time.time() - STARTUP_TIME
-    
+    active = _providers.get_active_provider()
+
     return {
         "ok": True,
         "version": "0.1.0",
-        "llm_backend": "ollama",
-        "model": settings.ollama_model,
+        "llm_backend": active.get("type", "ollama"),
+        "model": active.get("model", settings.ollama_model),
+        "provider": active.get("name", "Ollama"),
         "workspace": str(settings.workspace_path),
         "shell_tool": settings.enable_shell_tool,
         "uptime_seconds": round(uptime, 2),
@@ -179,6 +183,103 @@ async def services_status() -> dict:
         "email_monitor": _email_monitor.status,
         "smart_assistant": _smart_assistant.status,
     }
+
+
+# ── Provider endpoints ──────────────────────────────────────────────
+
+@app.get("/providers")
+async def list_providers() -> dict:
+    return {"providers": _providers.get_all_providers()}
+
+
+@app.put("/providers/{provider_id}")
+async def update_provider(provider_id: str, request: Request) -> dict:
+    body = await request.json()
+    try:
+        updated = _providers.update_provider(provider_id, body)
+        # Invalidate LLM client cache so it picks up changes
+        agent.llm.invalidate_cache()
+        return {"ok": True, "provider": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.put("/providers/active")
+async def set_active_provider(request: Request) -> dict:
+    body = await request.json()
+    pid = body.get("provider_id")
+    if not pid:
+        raise HTTPException(status_code=400, detail="provider_id required")
+    try:
+        provider = _providers.set_active_provider(pid)
+        agent.llm.invalidate_cache()
+        logger.info(f"Active provider changed to: {provider['name']}")
+        return {"ok": True, "provider": provider}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/providers/{provider_id}/test")
+async def test_provider(provider_id: str) -> dict:
+    """Test connection to a provider."""
+    all_providers = _providers.get_all_providers()
+    target = None
+    for p in all_providers:
+        if p["id"] == provider_id:
+            target = p
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    try:
+        ptype = target.get("type", "ollama")
+        if ptype == "ollama":
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                resp = await client.get(f"{target['base_url'].rstrip('/')}/api/tags")
+                resp.raise_for_status()
+                models = [m["name"] for m in resp.json().get("models", [])]
+                return {"ok": True, "message": f"Baglandi. {len(models)} model mevcut.", "models": models}
+        elif ptype == "codex_cli":
+            import asyncio, subprocess, sys
+            def _check():
+                r = subprocess.run(
+                    ["codex", "--version"],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=5, shell=sys.platform == "win32",
+                )
+                return r.returncode == 0, r.stdout.strip()
+            loop = asyncio.get_running_loop()
+            ok, ver = await loop.run_in_executor(None, _check)
+            if ok:
+                return {"ok": True, "message": f"Codex CLI mevcut. Versiyon: {ver}"}
+            return {"ok": False, "message": "Codex CLI bulunamadi. 'npm i -g @openai/codex' calistirin."}
+        else:
+            if not target.get("api_key"):
+                return {"ok": False, "message": "API anahtari girilmemis."}
+            headers = {
+                "Authorization": f"Bearer {target['api_key']}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+                resp = await client.post(
+                    f"{target['base_url'].rstrip('/')}/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": target["model"],
+                        "messages": [{"role": "user", "content": "Merhaba, test mesaji."}],
+                        "max_tokens": 20,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                return {"ok": True, "message": f"Baglanti basarili. Yanit: {reply[:80]}"}
+    except httpx.ConnectError:
+        return {"ok": False, "message": "Baglanti kurulamadi. URL kontrol edin."}
+    except httpx.HTTPStatusError as e:
+        return {"ok": False, "message": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+    except Exception as e:
+        return {"ok": False, "message": f"Hata: {str(e)[:200]}"}
 
 
 @app.get("/tools/audit")

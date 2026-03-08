@@ -4,6 +4,7 @@ import { ChatMessage, MediaPreview } from "./components/ChatMessage";
 import { TypingIndicator } from "./components/TypingIndicator";
 import { OpenWorldLogo } from "./components/OpenWorldLogo";
 import { Sidebar } from "./components/Sidebar";
+import { ProviderSettings } from "./components/ProviderSettings";
 
 const API_BASE = "";
 
@@ -102,32 +103,38 @@ export function App() {
         )}
 
         <div className="chat-area">
-          <main className="chat" ref={chatRef}>
-            {messages.length === 0 && !loading && <WelcomeScreen onSend={send} />}
-            {messages.map((m, i) => (
-              <div key={i}>
-                <ChatMessage {...m} />
-                {m.media && <MediaPreview media={m.media} />}
-              </div>
-            ))}
-            {loading && <TypingIndicator />}
-          </main>
+          {sidebarTab === "settings" ? (
+            <ProviderSettings />
+          ) : (
+            <>
+              <main className="chat" ref={chatRef}>
+                {messages.length === 0 && !loading && <WelcomeScreen onSend={send} />}
+                {messages.map((m, i) => (
+                  <div key={i}>
+                    <ChatMessage {...m} />
+                    {m.media && <MediaPreview media={m.media} />}
+                  </div>
+                ))}
+                {loading && <TypingIndicator />}
+              </main>
 
-          <footer className="composer">
-            <textarea
-              ref={textareaRef}
-              rows={2}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Mesajınızı yazın..."
-            />
-            <button disabled={!canSend} onClick={() => send()} aria-label="Gonder">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-              </svg>
-            </button>
-          </footer>
+              <footer className="composer">
+                <textarea
+                  ref={textareaRef}
+                  rows={2}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Mesajınızı yazın..."
+                />
+                <button disabled={!canSend} onClick={() => send()} aria-label="Gonder">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                  </svg>
+                </button>
+              </footer>
+            </>
+          )}
         </div>
       </div>
     </div>

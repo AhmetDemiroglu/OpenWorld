@@ -483,6 +483,19 @@ class LauncherApp:
         self.web_block_private_var = tk.BooleanVar(value=False)  # Yerel ağ erişimine izin ver
         self.enable_shell_var = tk.BooleanVar(value=True)  # Shell tool varsayılan açık
 
+        # Provider listesi (_load_env'den once tanimlanmali)
+        self._provider_names = [
+            "Ollama (Yerel)",
+            "Groq",
+            "Z.AI (Zhipu)",
+            "Codex CLI (OpenAI)",
+        ]
+        self._provider_ids = ["ollama", "groq", "zai", "codex"]
+        self.provider_var = tk.StringVar(value="Ollama (Yerel)")
+        self.provider_api_key_var = tk.StringVar()
+        self.provider_base_url_var = tk.StringVar()
+        self._provider_status_var = tk.StringVar(value="")
+
         self._load_env()
         self._build_ui()
         self._tick_status()
@@ -643,30 +656,49 @@ class LauncherApp:
         _field(prof, 1, "\u0130lgi Alanlar\u0131", self.owner_profile_var)
 
         # === YAPAY ZEKA MODELI ===
-        llm = _collapsible(sf, "Yapay Zek\u00e2 Modeli", expanded=True)
-        tk.Label(
-            llm,
-            text="Motor",
-            fg=LABEL_FG,
-            bg=CARD_BG,
-            font=("Segoe UI", 9),
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w", **pad)
-        tk.Label(
-            llm,
-            text="ollama",
-            fg=TEXT_FG,
-            bg=CARD_BG,
-            font=("Segoe UI", 9, "bold"),
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w", **pad)
-        _field(llm, 1, "Model Ad\u0131", self.model_var)
+        llm = _collapsible(sf, "LLM Sa\u011flay\u0131c\u0131", expanded=True)
 
+        # Saglayici secimi (StringVar'lar __init__'te tanimlandi)
+        tk.Label(llm, text="Sa\u011flay\u0131c\u0131", fg=LABEL_FG, bg=CARD_BG,
+                 font=("Segoe UI", 9), anchor="w").grid(row=0, column=0, sticky="w", **pad)
+        provider_menu = tk.OptionMenu(llm, self.provider_var, *self._provider_names,
+                                      command=lambda _: self._on_provider_change())
+        provider_menu.config(bg="#1a2332", fg=TEXT_FG, font=("Segoe UI", 9),
+                             activebackground="#2563eb", activeforeground="white",
+                             highlightthickness=1, highlightbackground="#475569",
+                             relief="flat", bd=0)
+        provider_menu["menu"].config(bg="#1a2332", fg=TEXT_FG, font=("Segoe UI", 9))
+        provider_menu.grid(row=0, column=1, sticky="ew", **pad)
+
+        # Model
+        _field(llm, 1, "Model", self.model_var)
+
+        # API Key (bulut saglayicilar icin)
+        self._api_key_label = tk.Label(llm, text="API Key", fg=LABEL_FG, bg=CARD_BG,
+                                       font=("Segoe UI", 9), anchor="w")
+        self._api_key_entry = tk.Entry(llm, textvariable=self.provider_api_key_var,
+                                       show="*", **entry_opts)
+
+        # Base URL
+        self._base_url_label = tk.Label(llm, text="Base URL", fg=LABEL_FG, bg=CARD_BG,
+                                        font=("Segoe UI", 9), anchor="w")
+        self._base_url_entry = tk.Entry(llm, textvariable=self.provider_base_url_var, **entry_opts)
+        self._provider_status_label = tk.Label(llm, textvariable=self._provider_status_var,
+                                               fg="#93c5fd", bg=CARD_BG,
+                                               font=("Segoe UI", 8), anchor="w")
+
+        # Butonlar
         llm_btns = tk.Frame(llm, bg=CARD_BG)
-        llm_btns.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        llm_btns.grid(row=10, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._btn(llm_btns, "Ba\u011flant\u0131 Test", self._test_provider, bg="#0891b2").pack(side="left", padx=(0, 4))
+        self._btn(llm_btns, "Aktif Yap", self._activate_provider, bg="#22c55e").pack(side="left", padx=(0, 4))
         self._btn(llm_btns, "Model \u00c7ek", self.pull_ollama_model, bg="#2563eb").pack(side="left", padx=(0, 4))
         self._btn(llm_btns, "Qwen3.5", self.install_qwen35, bg="#2563eb").pack(side="left", padx=(0, 4))
-        self._btn(llm_btns, "Eski Sil", self.remove_old_model, bg="#7c3aed").pack(side="left")
+        self._btn(llm_btns, "Eski Sil", self.remove_old_model, bg="#7c3aed").pack(side="left", padx=(0, 4))
+        self._btn(llm_btns, "Codex CLI Kur", self._install_codex_cli, bg="#f59e0b").pack(side="left")
+
+        # Cloud alanlarini gizle (default Ollama)
+        self._on_provider_change()
 
         # === TELEGRAM ===
         tg = _collapsible(sf, "Telegram Botu", expanded=True)
@@ -1131,6 +1163,14 @@ class LauncherApp:
         self.outlook_client_id_var.set(env_map.get("OUTLOOK_CLIENT_ID", ""))
         self.outlook_tenant_var.set(env_map.get("OUTLOOK_TENANT_ID", "common"))
         self.model_var.set(env_map.get("OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"))
+        # Load active provider from providers.json
+        pdata = self._load_providers_json()
+        active_pid = pdata.get("active_provider_id", "ollama")
+        try:
+            idx = self._provider_ids.index(active_pid)
+            self.provider_var.set(self._provider_names[idx])
+        except (ValueError, IndexError):
+            self.provider_var.set(self._provider_names[0])
         self.tesseract_cmd_var.set(env_map.get("TESSERACT_CMD", DEFAULT_TESSERACT_CMD))
         self.web_domains_var.set(env_map.get("WEB_ALLOWED_DOMAINS", ""))
         self.web_block_private_var.set(env_map.get("WEB_BLOCK_PRIVATE_HOSTS", "true").strip().lower() == "true")
@@ -1204,6 +1244,8 @@ class LauncherApp:
                 out.append(f"{k}={v}")
 
         ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
+        # Save provider config as well
+        self._save_current_provider()
         self._update_connection_badges()
         tesseract_exe, tesseract_error = self._resolve_tesseract_cmd()
         if tesseract_exe is None:
@@ -1439,6 +1481,187 @@ class LauncherApp:
 
         self._run_bg(_job)
 
+    # ── Provider yardımcıları ──────────────────────────────────────
+
+    _PROVIDER_DEFAULTS = {
+        "ollama": {"base_url": "http://127.0.0.1:11434", "model": "qwen3.5:9b-q4_K_M"},
+        "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
+        "zai": {"base_url": "https://api.z.ai/api/coding/paas/v4", "model": "glm-4.7"},
+        "codex": {"base_url": "", "model": "codex-mini-latest"},
+    }
+
+    def _get_providers_file(self) -> Path:
+        return ROOT / "data" / "providers.json"
+
+    def _load_providers_json(self) -> dict:
+        pf = self._get_providers_file()
+        if pf.exists():
+            try:
+                return json.loads(pf.read_text("utf-8"))
+            except Exception:
+                pass
+        return {"active_provider_id": "ollama", "providers": []}
+
+    def _save_providers_json(self, data: dict) -> None:
+        pf = self._get_providers_file()
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        pf.write_text(json.dumps(data, indent=2, ensure_ascii=False), "utf-8")
+
+    def _get_selected_provider_id(self) -> str:
+        name = self.provider_var.get()
+        try:
+            idx = self._provider_names.index(name)
+            return self._provider_ids[idx]
+        except (ValueError, IndexError):
+            return "ollama"
+
+    def _on_provider_change(self) -> None:
+        pid = self._get_selected_provider_id()
+        is_cloud = pid not in ("ollama", "codex")
+        is_codex = pid == "codex"
+
+        # Load stored config for this provider
+        data = self._load_providers_json()
+        stored = {}
+        for p in data.get("providers", []):
+            if p["id"] == pid:
+                stored = p
+                break
+
+        defaults = self._PROVIDER_DEFAULTS.get(pid, {})
+        self.model_var.set(stored.get("model", defaults.get("model", "")))
+        self.provider_base_url_var.set(stored.get("base_url", defaults.get("base_url", "")))
+        self.provider_api_key_var.set(stored.get("api_key", ""))
+
+        # Show/hide fields based on provider type
+        if is_cloud:
+            # Cloud API: show API Key + Base URL
+            self._api_key_label.grid(row=4, column=0, sticky="w", padx=8, pady=3)
+            self._api_key_entry.grid(row=4, column=1, sticky="ew", padx=8, pady=3)
+            self._base_url_label.grid(row=6, column=0, sticky="w", padx=8, pady=3)
+            self._base_url_entry.grid(row=6, column=1, sticky="ew", padx=8, pady=3)
+        else:
+            # Ollama / Codex CLI: hide API Key + Base URL
+            self._api_key_label.grid_remove()
+            self._api_key_entry.grid_remove()
+            self._base_url_label.grid_remove()
+            self._base_url_entry.grid_remove()
+
+        # Status label
+        active_id = data.get("active_provider_id", "ollama")
+        if pid == active_id:
+            self._provider_status_var.set("Aktif saglayici")
+            self._provider_status_label.config(fg="#22c55e")
+        elif is_codex:
+            self._provider_status_var.set("Codex CLI gerekli: npm i -g @openai/codex")
+            self._provider_status_label.config(fg="#94a3b8")
+        elif is_cloud and not stored.get("api_key"):
+            self._provider_status_var.set("Yapilandirilmadi - API Key gerekli")
+            self._provider_status_label.config(fg="#94a3b8")
+        else:
+            self._provider_status_var.set("")
+        self._provider_status_label.grid(row=8, column=0, columnspan=2, sticky="w", padx=8, pady=2)
+
+    def _save_current_provider(self) -> None:
+        """Save the currently displayed provider config to providers.json."""
+        pid = self._get_selected_provider_id()
+        data = self._load_providers_json()
+        providers = data.get("providers", [])
+
+        updates = {
+            "model": self.model_var.get().strip(),
+            "base_url": self.provider_base_url_var.get().strip(),
+            "api_key": self.provider_api_key_var.get().strip(),
+        }
+
+        found = False
+        for p in providers:
+            if p["id"] == pid:
+                p.update(updates)
+                found = True
+                break
+
+        if not found:
+            name = self.provider_var.get()
+            ptype = {"ollama": "ollama", "codex": "codex_cli"}.get(pid, "openai_compatible")
+            providers.append({"id": pid, "name": name, "type": ptype, **updates})
+
+        data["providers"] = providers
+        self._save_providers_json(data)
+
+    def _test_provider(self) -> None:
+        pid = self._get_selected_provider_id()
+        # Save current values first
+        self._save_current_provider()
+
+        def _job():
+            self._append_status(f"Baglanti test ediliyor: {self.provider_var.get()}...")
+            try:
+                if pid == "ollama":
+                    base = self.provider_base_url_var.get().strip() or "http://127.0.0.1:11434"
+                    req = urllib.request.Request(f"{base.rstrip('/')}/api/tags")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        body = json.loads(resp.read().decode())
+                        models = [m["name"] for m in body.get("models", [])]
+                        self._append_status(f"Ollama baglantisi basarili. {len(models)} model mevcut.")
+                elif pid == "codex":
+                    r = subprocess.run(
+                        ["codex", "--version"],
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=5, shell=True,
+                    )
+                    if r.returncode == 0:
+                        self._append_status(f"Codex CLI mevcut. Versiyon: {r.stdout.strip()}")
+                    else:
+                        self._append_status("Codex CLI bulunamadi. 'npm i -g @openai/codex' calistirin.")
+                else:
+                    api_key = self.provider_api_key_var.get().strip()
+                    if not api_key:
+                        self._append_status("API anahtari girilmemis.")
+                        return
+                    # API key must be ASCII (latin-1 safe) — urllib encodes headers with latin-1
+                    try:
+                        api_key.encode("latin-1")
+                    except UnicodeEncodeError:
+                        self._append_status("API anahtari gecersiz karakter iceriyor. Kontrol edin.")
+                        return
+                    base = self.provider_base_url_var.get().strip()
+                    model = self.model_var.get().strip()
+                    url = f"{base.rstrip('/')}/chat/completions"
+                    payload = json.dumps({
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Hello, test message."}],
+                        "max_tokens": 20,
+                    }).encode("utf-8")
+                    req = urllib.request.Request(url, data=payload, method="POST")
+                    req.add_header("Content-Type", "application/json; charset=utf-8")
+                    req.add_header("Authorization", f"Bearer {api_key}")
+                    req.add_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        body = json.loads(resp.read().decode())
+                        reply = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        self._append_status(f"Baglanti basarili! Yanit: {reply[:100]}")
+            except urllib.error.HTTPError as e:
+                self._append_status(f"HTTP {e.code}: {e.read().decode()[:200]}")
+            except urllib.error.URLError as e:
+                self._append_status(f"Baglanti hatasi: {e.reason}")
+            except Exception as e:
+                self._append_status(f"Test hatasi: {e}")
+
+        self._run_bg(_job)
+
+    def _activate_provider(self) -> None:
+        pid = self._get_selected_provider_id()
+        # Save current config first
+        self._save_current_provider()
+        # Set as active
+        data = self._load_providers_json()
+        data["active_provider_id"] = pid
+        self._save_providers_json(data)
+        name = self.provider_var.get()
+        self._append_status(f"Aktif saglayici degistirildi: {name}")
+        self._on_provider_change()
+
     def pull_ollama_model(self) -> None:
         def _job() -> None:
             model = self.model_var.get().strip()
@@ -1464,6 +1687,44 @@ class LauncherApp:
                 self._append_status("✅ Model başarıyla indirildi.")
             else:
                 self._append_status("❌ Model indirilemedi.")
+
+        self._run_bg(_job)
+
+    def _install_codex_cli(self) -> None:
+        def _job() -> None:
+            self._append_status("Codex CLI kuruluyor: npm i -g @openai/codex")
+            self._append_status("Node.js kurulu olmalidir. Lutfen bekleyin...")
+            try:
+                proc = subprocess.Popen(
+                    ["npm", "install", "-g", "@openai/codex"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    shell=True,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        self._append_status(line)
+                proc.wait()
+                if proc.returncode == 0:
+                    # Verify installation
+                    r = subprocess.run(
+                        ["codex", "--version"],
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=10, shell=True,
+                    )
+                    if r.returncode == 0:
+                        self._append_status(f"Codex CLI basariyla kuruldu. Versiyon: {r.stdout.strip()}")
+                    else:
+                        self._append_status("Kurulum tamamlandi ancak 'codex' komutu bulunamadi. Terminali yeniden baslatip deneyin.")
+                else:
+                    self._append_status("Codex CLI kurulamadi. Node.js kurulu mu kontrol edin.")
+            except Exception as e:
+                self._append_status(f"Kurulum hatasi: {e}")
 
         self._run_bg(_job)
 
