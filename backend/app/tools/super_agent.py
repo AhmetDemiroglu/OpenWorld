@@ -2466,7 +2466,38 @@ def _approval_watcher_worker(
             _APPROVAL_WATCHER_STATE["checks"] = int(_APPROVAL_WATCHER_STATE.get("checks", 0)) + 1
 
         # ==================================================================
-        # 2. LLM ANALIZ — tek karar mercii
+        # 2. ERKEN OCR TAMAMLANMA KONTROLU (LLM filtresi oncesi)
+        # Strong/direct completion terimleri varsa LLM'e bakmadan bildir.
+        # ==================================================================
+        now_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if ocr_blob and not _looks_like_ide_busy_text(ocr_blob):
+            blob_norm = _normalize_for_ocr_match(ocr_blob)
+            _early_strong = sum(1 for t in _IDE_COMPLETION_STRONG_TERMS if _normalize_for_ocr_match(t) in blob_norm)
+            _early_direct = sum(1 for t in _IDE_COMPLETION_DIRECT_TERMS if _normalize_for_ocr_match(t) in blob_norm)
+            if _early_strong >= 1 or _early_direct >= 2:
+                with _APPROVAL_WATCHER_LOCK:
+                    already_sent = bool(_APPROVAL_WATCHER_STATE.get("completion_prompt_sent"))
+                if not already_sent:
+                    _update_state(COMPLETED, "OCR tamamlanma sinyali")
+                    screenshot_path = _capture_completion_screenshot()
+                    text = (
+                        "<b>Görev tamamlandı.</b>\n"
+                        "Ajan ekranında tamamlanmış yanıt görünüyor (OCR sinyali).\n\n"
+                        "Onay izleyiciyi durdurayım mı?"
+                    )
+                    buttons = [[("Evet, durdur", "watcher_stop"), ("Hayır, devam et", "watcher_continue")]]
+                    sent = _send_notification_with_buttons(text, screenshot_path, buttons)
+                    with _APPROVAL_WATCHER_LOCK:
+                        _APPROVAL_WATCHER_STATE["completion_detected"] = True
+                        _APPROVAL_WATCHER_STATE["completion_prompt_sent"] = True
+                        _APPROVAL_WATCHER_STATE["completion_reason"] = "ocr_early"
+                        if sent:
+                            _APPROVAL_WATCHER_STATE["last_notification_at"] = now_label
+                    time.sleep(interval)
+                    continue
+
+        # ==================================================================
+        # 3. LLM ANALIZ
         # ==================================================================
         llm = None
         if llm_available and ocr_blob:
@@ -2479,17 +2510,13 @@ def _approval_watcher_worker(
             time.sleep(interval)
             continue
 
-        now_label = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         with _APPROVAL_WATCHER_LOCK:
             _APPROVAL_WATCHER_STATE["llm_state"] = llm.state.value
             _APPROVAL_WATCHER_STATE["llm_confidence"] = round(llm.confidence, 2)
             _APPROVAL_WATCHER_STATE["llm_reasoning"] = llm.reasoning[:200]
 
         # ==================================================================
-        # ==================================================================
-        # 3. LLM KARARINA GORE HAREKET ET
-        # LLM kararsiz kalsa bile net completion sinyallerinde bildirime dus.
+        # 4. LLM KARARINA GORE HAREKET ET
         # ==================================================================
         completion_by_ocr = _looks_like_ide_completion_text(ocr_blob) and not _looks_like_ide_busy_text(ocr_blob)
         llm_says_completion = llm.state == ScreenState.COMPLETED and llm.confidence >= 0.6
@@ -2508,16 +2535,16 @@ def _approval_watcher_worker(
                 screenshot_path = _capture_completion_screenshot()
                 summary = ""
                 if llm.completion_summary:
-                    summary = f"\n<b>?zet:</b> {llm.completion_summary[:200]}"
+                    summary = f"\n<b>Özet:</b> {llm.completion_summary[:200]}"
                 elif completion_by_ocr:
-                    summary = "\n<b>?zet:</b> Ajan ekraninda tamamlanmis yanit gorunuyor."
-                body_text = llm.reasoning[:200] if llm.reasoning else "Ajan artik calismiyor; tamamlanmis yanit gorunuyor."
+                    summary = "\n<b>Özet:</b> Ajan ekranında tamamlanmış yanıt görünüyor."
+                body_text = llm.reasoning[:200] if llm.reasoning else "Ajan artık çalışmıyor; tamamlanmış yanıt görünüyor."
                 text = (
-                    f"<b>G?rev tamamland?.</b>\n"
+                    f"<b>Görev tamamlandı.</b>\n"
                     f"{body_text}{summary}\n\n"
-                    "Onay izleyiciyi durduray?m m??"
+                    "Onay izleyiciyi durdurayım mı?"
                 )
-                buttons = [[("Evet, durdur", "watcher_stop"), ("Hay?r, devam et", "watcher_continue")]]
+                buttons = [[("Evet, durdur", "watcher_stop"), ("Hayır, devam et", "watcher_continue")]]
                 sent = _send_notification_with_buttons(text, screenshot_path, buttons)
                 with _APPROVAL_WATCHER_LOCK:
                     _APPROVAL_WATCHER_STATE["completion_detected"] = True
